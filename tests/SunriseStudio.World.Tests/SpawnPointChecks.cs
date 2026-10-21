@@ -88,8 +88,13 @@ internal static class SpawnPointChecks
         reopened.ObjectEditCompiler = ObjectEditCompiler.Default;
         Check(reopened.ReadCompiled(Tag, catalog).SequenceEqual(output), "Saved additions did not round trip.");
         var manifest = JsonNode.Parse(File.ReadAllText(project.ManifestPath))!;
-        Check(manifest["version"]!.GetValue<int>() == 8 && project.Changes.Count == 0 && project.AddedAssets.Count == 0,
-            "Additions must store recipes in version 8, without payloads.");
+        Check(manifest["version"]!.GetValue<int>() == 8 && project.Changes.Count == 0 && project.AddedAssets.Count == 0
+            && manifest["features"]!.AsArray().Select(name => name!.GetValue<string>()).SequenceEqual([ProjectFeatures.AddedSpawnPoints]),
+            "Additions must store recipes in version 8 under their feature, without payloads.");
+        manifest["features"] = new JsonArray(ProjectFeatures.AddedSpawnPoints, "later-feature");
+        File.WriteAllText(project.ManifestPath, manifest.ToJsonString());
+        Reject(() => StudioProject.Open(project.DirectoryPath), "newer Sunrise Studio");
+        manifest["features"] = new JsonArray(ProjectFeatures.AddedSpawnPoints);
         manifest["version"] = 7;
         File.WriteAllText(project.ManifestPath, manifest.ToJsonString());
         Reject(() => StudioProject.Open(project.DirectoryPath), "version 8");
@@ -129,26 +134,22 @@ internal static class SpawnPointChecks
         Console.WriteLine($"PASS spawn-points checks={checks} original-rows=2 added-rows=2 preserved-bytes=96 bank-bytes=256 package-readback=exact");
     }
 
+    // SHA-256 of World Studio's spawn_authoring.create on the same four points, frozen from the parity run.
+    private const string PythonBankSha256 = "B19D78399C6AF09D3E66C665C84EF3D7061716C7F076F1E7D1AB79760BAF0B68";
+
+    /** The driver and World Studio live outside this repository; WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS name them. */
     private static void Parity(string root, byte[] output)
     {
-        string? source = Environment.GetEnvironmentVariable("WORLD_STUDIO_SOURCE");
-        if (string.IsNullOrWhiteSpace(source)) { Console.WriteLine("SKIP spawn Python parity: set WORLD_STUDIO_SOURCE to tools/world-studio."); return; }
-        string script = Path.Combine(root, "spawn_parity.py"), result = Path.Combine(root, "python-bank.bin");
-        File.WriteAllText(script, """
-            import sys
-            sys.dont_write_bytecode = True
-            sys.path.insert(0, sys.argv[1])
-            import spawn_authoring
-            points = [dict(name_hash=0x2EA8FB98, position=[1,0,0], rotation_xyzw=[0,0,0,1]),
-                      dict(name_hash=0x2EA8FB98, position=[2,0,0], rotation_xyzw=[0,0,0,1]),
-                      dict(name_hash=0x2EA8FB98, position=[3,4,5], rotation_xyzw=[0,0,0,1]),
-                      dict(name_hash=0x12345678, position=[-6,7,8], rotation_xyzw=[0,0,1,0])]
-            raw = spawn_authoring.create(points)
-            assert len(spawn_authoring.decode(raw)[1]) == 4
-            with open(sys.argv[2], 'wb') as output:
-                output.write(raw)
-            """);
-        var start = new ProcessStartInfo("python") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        Check(BinaryDelta.Hash(output).Equals(PythonBankSha256, StringComparison.OrdinalIgnoreCase), "The grown bank differs from World Studio's frozen bytes.");
+        string? source = Environment.GetEnvironmentVariable("WORLD_STUDIO_SOURCE"), drivers = Environment.GetEnvironmentVariable("SUNRISE_PARITY_DRIVERS");
+        if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(drivers))
+        {
+            Console.WriteLine("SKIP spawn-python-parity: set WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS.");
+            return;
+        }
+        string script = Path.Combine(drivers, "spawn_parity.py"), result = Path.Combine(root, "python-bank.bin");
+        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("PYTHON") ?? "python")
+        { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         foreach (string arg in new[] { "-I", "-B", script, source, result }) start.ArgumentList.Add(arg);
         using var process = Process.Start(start)!;
         var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
