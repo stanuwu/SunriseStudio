@@ -11,7 +11,7 @@ public sealed partial class StudioForm
     private const string CrossingLimits = StudioUi.MayNotWork + "\nWalk-across only: no doors, teleports, scripted travel or entry points."
         + "\nOne zone per bubble pair. Exits stay axis-aligned."
         + "\nRetail rebuilds both bubbles' cells as one zone and drops occlusion baked into them."
-        + "\nScenario and container masks are not updated.";
+        + "\nContainer masks are not updated.";
     private bool openCrossings;
     private IReadOnlyList<CrossingBubble> crossingBubbles = [];
     private uint crossingMap;

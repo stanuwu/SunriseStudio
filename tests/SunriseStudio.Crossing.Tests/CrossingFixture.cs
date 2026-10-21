@@ -5,12 +5,14 @@ using SunriseStudio.Scene;
 
 /**
  * A synthetic open map of three bubbles, A west, B east and C far west, each with a visibility owner. A has a
- * primary and an alternate layer; A and C are joined by an installed link with a zone on each side. Nothing
- * here is game data: every payload comes from Studio's own crossing writer.
+ * primary and an alternate layer; A and C are joined by an installed link with a zone on each side. Three
+ * scenarios name the map's bubbles: all three, A alone, and A with a bubble of another map. Nothing here is game
+ * data: every payload comes from Studio's own crossing writer.
  */
 internal static class CrossingFixture
 {
     internal const uint Base = 0x80A00000, Root = Base, Definition = Base + 1;
+    internal const uint Scenario = Base + 26, ScenarioA = Base + 27, ScenarioForeign = Base + 28, Slice = Base + 29, NameForeign = 0xD4D4D4D4;
     internal const uint NameA = 0xA1A1A1A1, NameB = 0xB2B2B2B2, NameC = 0xC3C3C3C3, NameLink = 0x4C414321, NameSecond = 0x53454332;
     internal const ulong KeyA = 0x1111000000000001, KeyB = 0x2222000000000002, KeyC = 0x3333000000000003,
         KeyLink = 0x4C41430000000004, KeySecond = 0x5345430000000005;
@@ -25,7 +27,7 @@ internal static class CrossingFixture
 
     internal static void Create(string folder)
     {
-        var entries = new AuthoredPackageEntry[26];
+        var entries = new AuthoredPackageEntry[30];
         void Entry(int index, uint type, byte[] data, string? name = null, uint info = 0x100A) => entries[index] = new(type, info, data, name);
         var root = new Bytes(0x20); root.U32(8, Definition);
         int rows = root.Array(0x10, 0x80807D53, 16, 3);
@@ -75,6 +77,10 @@ internal static class CrossingFixture
                     [.. zoned.Select(cell => new CrossingCompiler.CellEdit(cell, 0, CrossingCompiler.CellMode.Immediate))], self.Value);
             Entry((int)(cells - Base), VisibilityCells.ResourceClass, raw);
         }
+        Entry(26, 0x80809994, ScenarioBytes([(NameA, 2), (NameB, 1), (NameC, 1)], identity), "crossing:scenario");
+        Entry(27, 0x80809994, ScenarioBytes([(NameA, 1)], identity), "crossing:scenario-a");
+        Entry(28, 0x80809994, ScenarioBytes([(NameA, 1), (NameForeign, 1)], identity), "crossing:scenario-foreign");
+        Entry(29, 0x8080925B, new Bytes(0x30).ToArray(), "crossing:slice");
         Directory.CreateDirectory(Path.Combine(folder, "packages"));
         PackageWriter.WriteNew(Path.Combine(folder, "packages", "w64_crossing_0100_0.pkg"), 0x100, entries);
     }
@@ -117,6 +123,31 @@ internal static class CrossingFixture
             BinaryPrimitives.WriteUInt32LittleEndian(bubbles[slot].AsSpan(72), (uint)slot);
         }
         return CrossingCompiler.SerializeDefinition(keys, bubbles, lists, "crossing_fixture"u8.ToArray());
+    }
+
+    /**
+     * Scenario 0x80809994: bubbles at +0x50 (0x8080924D, 24 bytes), each with states at +8 (0x8080924F, 76 bytes) that
+     * repeat the bubble's global index at +28 and mask at +32. A bubble of another map borrows A's identity.
+     */
+    private static byte[] ScenarioBytes(IReadOnlyList<(uint Name, int States)> bubbles, MapIdentity identity)
+    {
+        var scenario = new Bytes(0x60);
+        int rows = scenario.Array(0x50, 0x8080924D, 24, bubbles.Count);
+        for (int i = 0; i < bubbles.Count; i++)
+        {
+            var (name, count) = bubbles[i];
+            var owner = identity.Bubble(name) ?? identity.Bubbles[0];
+            scenario.U32(rows + 24 * i, name);
+            int states = scenario.Array(rows + 24 * i + 8, 0x8080924F, 76, count);
+            for (int s = 0; s < count; s++)
+            {
+                int at = states + 76 * s;
+                scenario.U32(at, 1); scenario.U32(at + 4, name ^ (uint)(0x100 + s)); scenario.U32(at + 12, 1);
+                scenario.U32(at + 28, owner.SelfIndex); scenario.Put(at + 32, owner.Mask);
+                scenario.U32(at + 64, name); scenario.U32(at + 68, Slice);
+            }
+        }
+        return scenario.ToArray();
     }
 
     /** The shipped empty owner layout: cull rows at +0x20, root slot +0x50, payloads +8/+0xC, cells +0xA4/+0xA8. */

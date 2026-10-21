@@ -2,7 +2,9 @@
 
 Usage: python -I -B parity.py <World Studio folder> <case folder> <case count>
 Each case holds the installed originals, Studio's outputs (out-*.bin) and spec.json. The original World Studio
-modules recompute every output; the script fails on the first byte that differs.
+modules recompute every output; the script fails on the first byte that differs. Scenarios named in spec.json follow
+the definition through scenario_model.rebind_masks; studio_only outputs are Studio's alone (a scenario naming part of
+the map, which rebind_masks does not take).
 """
 import json
 import math
@@ -16,6 +18,7 @@ import generated_crossing
 import inherited_zones
 import map_definition
 import map_visibility
+import scenario_model
 from native_connections import CellEdit, Connection, write_connections
 from native_visibility import Payload
 
@@ -63,6 +66,8 @@ for index in range(count):
         before, after = original.bubbles[bubble['slot']], final.bubbles[bubble['slot']]
         if before.mask != after.mask:
             expected[bubble['tag']] = map_visibility.rebind_bubble(read(bubble['tag']), before, after)
+    for tag in spec.get('scenarios', []):
+        expected[tag] = scenario_model.rebind_masks(read(tag), original, final)
     names = sorted({c[k] for c in connections for k in ('source', 'destination')})
     for name in names:
         slot = by_name[name].root_slot
@@ -105,7 +110,8 @@ for index in range(count):
             expected[layer['cells']] = write_connections(raw, final, typed_rows, sorted(edits, key=lambda e: e.cell), self_key)
     original_bytes = {tag: read(tag) for tag in expected}
     expected = {tag: data for tag, data in expected.items() if data != original_bytes[tag]}
-    assert sorted(expected) == sorted(spec['outputs']), f'case {index}: Python wrote {sorted(expected)}, Studio {spec["outputs"]}'
+    studio = sorted(set(spec['outputs']) - set(spec.get('studio_only', [])))
+    assert sorted(expected) == studio, f'case {index}: Python wrote {sorted(expected)}, Studio {studio}'
     summary = {}
     for tag, data in sorted(expected.items()):
         ours = (case / f'out-{tag}.bin').read_bytes()

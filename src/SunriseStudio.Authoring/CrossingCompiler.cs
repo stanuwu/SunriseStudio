@@ -24,8 +24,9 @@ public sealed record CrossingCompilation(IReadOnlyDictionary<uint, byte[]> Asset
 }
 
 /**
- * Compiles authored bubble connections into the map definition, both bubble resources and every queryable
- * visibility layer of both bubbles. Every byte starts from the installed original, so a build is repeatable.
+ * Compiles authored bubble connections into the map definition, both bubble resources, the scenario states that
+ * repeat their masks and every queryable visibility layer of both bubbles. Every byte starts from the installed
+ * original, so a build is repeatable.
  */
 public static partial class CrossingCompiler
 {
@@ -146,6 +147,7 @@ public static partial class CrossingCompiler
         }
         var final = MapIdentity.Decode(definition);
         assets[definitionTag] = definition;
+        RebindScenarioMasks(catalog, original, final, touched.Keys, assets);
         var sides = new Dictionary<uint, Side>();
         foreach (uint name in touched.Keys.Order())
         {

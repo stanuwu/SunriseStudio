@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Numerics;
 using System.Text.Json;
@@ -41,7 +42,7 @@ try
     var retail = Join("a-b", CrossingProfile.Retail, InheritedZonePolicy.Deactivate);
     var compiled = CrossingCompiler.Compile(catalog, [retail]);
     var again = CrossingCompiler.Compile(catalog, [retail]);
-    Check(compiled.Assets.Count == 9 && compiled.Assets.All(pair => again.Assets[pair.Key].AsSpan().SequenceEqual(pair.Value)),
+    Check(compiled.Assets.Count == 11 && compiled.Assets.All(pair => again.Assets[pair.Key].AsSpan().SequenceEqual(pair.Value)),
         "Retail compilation is not repeatable or touched the wrong entries.");
     var identity = MapIdentity.Decode(compiled.Assets[Definition]);
     var report = compiled.Reports.Single();
@@ -52,6 +53,14 @@ try
     foreach (int slot in new[] { 0, 1 })
         Check(compiled.Assets[BubbleTag(slot)].AsSpan(28, 32).SequenceEqual(identity.Bubbles[slot].Mask),
             "A bubble resource mask does not follow its definition.");
+    // Scenario states repeat their bubble's mask: A's and B's follow in every scenario of the map; C and other maps stay.
+    byte[] fullScenario = compiled.Assets[Scenario], installedScenario = catalog.ReadOriginal(Scenario);
+    Check(StateMask(fullScenario, 0, 0).SequenceEqual(identity.Bubbles[0].Mask) && StateMask(fullScenario, 0, 1).SequenceEqual(identity.Bubbles[0].Mask)
+        && StateMask(fullScenario, 1, 0).SequenceEqual(identity.Bubbles[1].Mask)
+        && StateMask(fullScenario, 2, 0).SequenceEqual(StateMask(installedScenario, 2, 0))
+        && Enumerable.Range(0, fullScenario.Length).Count(i => fullScenario[i] != installedScenario[i]) <= 3 * 32
+        && StateMask(compiled.Assets[ScenarioA], 0, 0).SequenceEqual(identity.Bubbles[0].Mask) && !compiled.Assets.ContainsKey(ScenarioForeign),
+        "Scenario states do not follow their bubbles' masks.");
     (sbyte State, float Ramp, VisibilityZone? Zone) At(CrossingCompilation result, int layer, Vector3 point)
     {
         var (_, _, payloadTag, cellsTag) = Layers[layer];
@@ -81,7 +90,7 @@ try
         DestinationExit = new([-2, 0, 0.5f], [1, 1, 1])
     };
     var kept = CrossingCompiler.Compile(catalog, [simple]);
-    Check(!kept.Assets.ContainsKey(Layers[0].Payload) && kept.Assets.Count == 6, "The simple profile changed a payload.");
+    Check(!kept.Assets.ContainsKey(Layers[0].Payload) && kept.Assets.Count == 8, "The simple profile changed a payload.");
     foreach (int layer in new[] { 0, 1 })
     {
         var cells = VisibilityCells.Decode(kept.Assets[Layers[layer].Cells]);
@@ -127,7 +136,7 @@ try
     catalog.InvalidateReadCache();
     var reopened = StudioProject.Open(project.DirectoryPath);
     string manifest = File.ReadAllText(project.ManifestPath);
-    Check(reopened.BubbleConnections.Single() is { Id: "a-b", Profile: CrossingProfile.Retail } && project.Changes.Count == 9
+    Check(reopened.BubbleConnections.Single() is { Id: "a-b", Profile: CrossingProfile.Retail } && project.Changes.Count == 11
         && manifest.Contains("\"version\": 8") && !manifest.Contains("deltas/added"), "The connection or its deltas were not saved at version 8.");
     foreach (var (tag, bytes) in applied.Assets)
         Check(reopened.ReadAsset(tag, catalog).AsSpan().SequenceEqual(bytes), $"The saved delta of {tag:X8} does not rebuild the compiled bytes.");
@@ -174,6 +183,14 @@ finally
 
 static void Check(bool value, string message) { if (!value) throw new InvalidDataException(message); }
 
+/** The 32-byte mask of a scenario state: bubbles at +0x50, states at bubble +8, mask at state +32. */
+static byte[] StateMask(byte[] scenario, int bubble, int state)
+{
+    int Rows(int descriptor) => descriptor + 24 + (int)BinaryPrimitives.ReadInt64LittleEndian(scenario.AsSpan(descriptor + 8));
+    int row = Rows(0x50) + 24 * bubble, at = Rows(row + 8) + 76 * state;
+    return scenario[(at + 32)..(at + 64)];
+}
+
 /** Writes the fixture's inputs and Studio's outputs, then runs World Studio's Python compiler on the same inputs. */
 internal static class Parity
 {
@@ -194,7 +211,7 @@ internal static class Parity
             string path = Path.Combine(folder, $"case-{index}");
             Directory.CreateDirectory(path);
             var compiled = CrossingCompiler.Compile(catalog, cases[index]);
-            foreach (uint tag in new[] { Definition }.Concat(Enumerable.Range(0, 3).Select(BubbleTag))
+            foreach (uint tag in new[] { Definition, Scenario, ScenarioA, ScenarioForeign }.Concat(Enumerable.Range(0, 3).Select(BubbleTag))
                 .Concat(Layers.SelectMany(l => new[] { l.Payload, l.Cells })))
                 File.WriteAllBytes(Path.Combine(path, $"{tag:X8}.bin"), catalog.ReadOriginal(tag));
             foreach (var (tag, bytes) in compiled.Assets) File.WriteAllBytes(Path.Combine(path, $"out-{tag:X8}.bin"), bytes);
@@ -203,6 +220,8 @@ internal static class Parity
                 space = $"{Root:X8}",
                 definition = $"{Definition:X8}",
                 bubbles = Enumerable.Range(0, 3).Select(slot => new { name = $"{Names[slot]:X8}", slot, tag = $"{BubbleTag(slot):X8}" }),
+                scenarios = new[] { $"{Scenario:X8}" },
+                studio_only = new[] { $"{ScenarioA:X8}" },
                 layers = Layers.Select(l => new { l.Slot, l.Mode, payload = $"{l.Payload:X8}", cells = $"{l.Cells:X8}" }),
                 connections = cases[index].Select(c => new
                 {
