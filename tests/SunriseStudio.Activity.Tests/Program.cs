@@ -50,11 +50,17 @@ try
     foreach (var (key, bytes) in parity) File.WriteAllBytes(Path.Combine(root, key + ".actual.bin"), bytes);
     File.WriteAllBytes(Path.Combine(root, "definitions.input.bin"), definitions); File.WriteAllBytes(Path.Combine(root, "clients.input.bin"), clients);
     File.WriteAllBytes(Path.Combine(root, "scenario.input.bin"), scenario); File.WriteAllBytes(Path.Combine(root, "slice.input.bin"), ActivityFixture.Slice());
-    string? oracle = Environment.GetEnvironmentVariable("WORLD_STUDIO_ORACLE");
-    if (oracle is not null)
+    // The oracle and World Studio live outside this repository; WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS name them.
+    string? oracle = Environment.GetEnvironmentVariable("WORLD_STUDIO_SOURCE"), drivers = Environment.GetEnvironmentVariable("SUNRISE_PARITY_DRIVERS");
+    if (string.IsNullOrWhiteSpace(oracle) || string.IsNullOrWhiteSpace(drivers))
+    {
+        oracle = null;
+        Console.WriteLine("SKIP activity python-parity: set WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS; frozen hashes still run.");
+    }
+    else
     {
         var process = new ProcessStartInfo(Environment.GetEnvironmentVariable("PYTHON") ?? "python") { UseShellExecute = false };
-        foreach (string arg in new[] { "-I", Path.Combine(AppContext.BaseDirectory, "oracle.py"), oracle, root }) process.ArgumentList.Add(arg);
+        foreach (string arg in new[] { "-I", Path.Combine(drivers, "activity_oracle.py"), oracle, root }) process.ArgumentList.Add(arg);
         using var child = Process.Start(process)!; child.WaitForExit(); Check(child.ExitCode == 0, "Python parity oracle failed.");
         foreach (var (key, bytes) in parity) Check(bytes.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(root, key + ".expected.bin"))), key + " differs from Python.");
     }

@@ -6,6 +6,5 @@
   <ItemGroup>
     <ProjectReference Include="../../src/SunriseStudio.Editor/SunriseStudio.Editor.csproj" />
     <None Include="*.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="oracle.py" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

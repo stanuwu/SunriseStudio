@@ -30,10 +30,11 @@ internal static class InstalledChecks
         foreach (var (name, bytes) in new[] { ("definitions.input", definitions), ("clients.input", clients),
             ("definitions.actual", tables.Definitions), ("clients.actual", tables.Clients) }) File.WriteAllBytes(Path.Combine(output, name + ".bin"), bytes);
         File.WriteAllText(Path.Combine(output, "request.json"), JsonSerializer.Serialize(new { template = template.Hash, hash = plan.Row.Hash, name = recipe.InternalName }));
-        if (Environment.GetEnvironmentVariable("WORLD_STUDIO_ORACLE") is { } oracle)
+        if (Environment.GetEnvironmentVariable("WORLD_STUDIO_SOURCE") is { Length: > 0 } oracle
+            && Environment.GetEnvironmentVariable("SUNRISE_PARITY_DRIVERS") is { Length: > 0 } drivers)
         {
             var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("PYTHON") ?? "python") { UseShellExecute = false };
-            foreach (string arg in new[] { "-I", Path.Combine(AppContext.BaseDirectory, "oracle.py"), oracle, output, "--installed" }) start.ArgumentList.Add(arg);
+            foreach (string arg in new[] { "-I", Path.Combine(drivers, "activity_oracle.py"), oracle, output, "--installed" }) start.ArgumentList.Add(arg);
             using var process = Process.Start(start)!; process.WaitForExit();
             if (process.ExitCode != 0) throw new InvalidDataException("Installed Python table parity failed.");
         }
