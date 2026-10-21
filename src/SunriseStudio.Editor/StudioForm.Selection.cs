@@ -82,6 +82,7 @@ public sealed partial class StudioForm
                 or SceneMarker { PreviewPose: not null });
             DrawObservedPlacement(observed, holding); ImGui.SeparatorText("Authored placement");
         }
+        DrawSpawnPointActions(selectedObject as SceneMarker);
         DrawPlacementEditor();
         if (selectedObject is SceneMarker { Effect: not null } effectMarker && workspace.World?.Scene is { } effectScene)
             DrawEffectControls(effectScene, effectMarker);
@@ -140,7 +141,7 @@ public sealed partial class StudioForm
         {
             // The catalog shows compiled project bytes, so these start from the current edited state.
             editTarget = selectedObject;
-            sceneEditInfo = SceneEdits.Describe(catalog, selectedObject, inspectionWorld, workspace.IsProjectContent);
+            sceneEditInfo = SceneEdits.Describe(catalog, selectedObject, inspectionWorld, workspace.Project?.ObjectEdits);
             editPosition = sceneEditInfo.Position;
             editRotation = editRotationBase = QuaternionToDegrees(sceneEditInfo.Rotation);
             editScale = sceneEditInfo.Scale;
@@ -165,25 +166,9 @@ public sealed partial class StudioForm
             // A static of the project's own content is moved in its source file, not by an object edit.
             bool content = info.Target is { Layout: ObjectEditLayout.StaticInstance } row && workspace.IsProjectContent(row.SourceTag);
             if (ImGui.Button("Apply transform", new(-1, 0))) workspace.Run(() =>
-            {
-                if (content)
-                    workspace.MoveContentStatic(info.Target!.SourceTag, info.Target.Index, editPosition,
-                        editRotation == editRotationBase ? info.Rotation : DegreesToQuaternion(editRotation), editScale);
-                else
-                    workspace.ApplyObjectEdit(SceneEdits.CreateTransformEdit(catalog, selectedObject, editPosition,
-                        editRotation == editRotationBase ? null : DegreesToQuaternion(editRotation), editScale, inspectionWorld,
-                        objectInspection?.Object.Name));
-            });
-            if (!content && info.Target?.Layout == ObjectEditLayout.StaticInstance && workspace.Project is { } project)
-            {
-                if (ImGui.Button("Copy to this transform", new(-1, 0))) workspace.Run(() =>
-                    workspace.ApplyObjectEdit(SceneEdits.CreateCopyEdit(catalog, selectedObject, project.ObjectEdits, editPosition,
-                        DegreesToQuaternion(editRotation), editScale, inspectionWorld, objectInspection?.Object.Name)));
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Adds a copy at the values above; the object itself stays.");
-                if (ImGui.Button("Remove object", new(-1, 0))) workspace.Run(() =>
-                    workspace.ApplyObjectEdit(SceneEdits.CreateRemoveEdit(catalog, selectedObject, inspectionWorld,
-                        objectInspection?.Object.Name)));
-            }
+                workspace.ApplyObjectEdit(SceneEdits.CreateTransformEdit(catalog, selectedObject, editPosition,
+                    editRotation == editRotationBase ? null : DegreesToQuaternion(editRotation), editScale, inspectionWorld,
+                    objectInspection?.Object.Name, workspace.Project?.ObjectEdits)));
         }
         if (info.CanBounds)
         {
@@ -196,7 +181,7 @@ public sealed partial class StudioForm
         if (info.Target is { } target && workspace.Project?.FindObjectEdit(target.Key) is { } saved)
         {
             ImGui.TextColored(StudioTheme.Accent, $"Edited: {saved.Summary()}");
-            if (ImGui.Button("Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
+            if (ImGui.Button(saved.Target.Layout == ObjectEditLayout.AddedSpawnPoint ? "Remove added spawn point" : "Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
         }
         if (info.Target is { Layout: ObjectEditLayout.StaticInstance } removable
             && workspace.Project?.FindObjectEdit(new ObjectEdit(ObjectEditKind.RemoveInstance, removable).Key) is { } removal)
@@ -231,6 +216,8 @@ public sealed partial class StudioForm
                 item.InstanceSourceTag == target.SourceTag && item.InstanceSourceIndex == target.Index),
             ObjectEditLayout.Light => world.Objects.FirstOrDefault(row => row.Source is WorldLight light
                 && light.Owner.Table.TagHash == target.SourceTag && light.Row.TransformOffset == target.Offset)?.Source,
+            ObjectEditLayout.AddedSpawnPoint => scene.Markers.FirstOrDefault(marker => marker.SourceTag == target.SourceTag
+                && marker.SourceOffset == SpawnPointAuthoring.Offset(workspace.Catalog!, target, workspace.Project!.ObjectEdits)),
             ObjectEditLayout.CollisionInstance => null,
             ObjectEditLayout.DecoratorInstance => scene.Instances.FirstOrDefault(item =>
                 item.ObjectPlacement?.SourceTag == target.Identity && item.ObjectPlacement.SourceIndex == target.Index),

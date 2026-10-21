@@ -36,8 +36,8 @@ public enum ObjectEditLayout
      * Values are payload space: position, rotation, and one scale.
      */
     DecoratorInstance,
-    /** A whole 0x80808A54 map container; an added placement joins it. */
-    Container
+    /** Added arrival row; Offset/Length/hash fingerprint the whole installed bank, Index is a stable project ordinal. */
+    AddedSpawnPoint
 }
 
 /**
@@ -48,7 +48,7 @@ public sealed record ObjectEditTarget(uint SourceTag, ObjectEditLayout Layout, i
     int Index, ulong Identity, string OriginalSha256)
 {
     /** Edits merge by this key, so one object has one entry. */
-    [JsonIgnore] public string Key => $"{SourceTag:X8}/{Layout}/{Offset:X}";
+    [JsonIgnore] public string Key => $"{SourceTag:X8}/{Layout}/{(Layout == ObjectEditLayout.AddedSpawnPoint ? Index : Offset):X}";
 
     /** Checks what the manifest can check without the row layouts. */
     public void Validate()
@@ -72,13 +72,9 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] float[]? Maximum = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] uint? Model = null)
 {
-    /** Added objects key by Target.Identity too, so one row or container can gain several. */
-    [JsonIgnore] public string Key => Kind switch
-    {
-        ObjectEditKind.AddInstance or ObjectEditKind.AddPlacement => $"{Target.Key}/{Kind}/{Target.Identity:X16}",
-        ObjectEditKind.RemoveInstance => $"{Target.Key}/{Kind}",
-        _ => Target.Key,
-    };
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? SpawnRole { get; init; }
+
+    [JsonIgnore] public string Key => Target.Key;
 
     [JsonIgnore] public bool HasValues => Position is not null || Rotation is not null || Scale is not null
         || Minimum is not null || Maximum is not null;
@@ -129,8 +125,13 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
         if (Kind is ObjectEditKind.AddVolume or ObjectEditKind.AddEntity)
             throw new NotSupportedException($"{Kind} object edits are not supported yet.");
         Target.Validate();
-        if (Structural) { ValidateStructural(); return; }
-        if (Model is not null) throw new InvalidDataException("Only an added placement names a model.");
+        if (Target.Layout == ObjectEditLayout.AddedSpawnPoint && SpawnRole != "arrival")
+            throw new InvalidDataException($"Spawn role '{SpawnRole}' is not compiled. Only arrival is supported; respawn and checkpoint are refused.");
+        if (Target.Layout != ObjectEditLayout.AddedSpawnPoint && SpawnRole is not null)
+            throw new InvalidDataException("Spawn roles apply only to added arrival points.");
+        if (Target.Layout == ObjectEditLayout.AddedSpawnPoint && (Target.Offset != 0 || Target.Index < 0
+            || Target.Identity > uint.MaxValue || Position is null || Rotation is null || Scale is not null))
+            throw new InvalidDataException("Added arrival points need a bank fingerprint, index, name hash, position and rotation only.");
         bool bounds = Target.Layout == ObjectEditLayout.TriggerVolume;
         if (bounds != (Kind == ObjectEditKind.TriggerBounds))
             throw new InvalidDataException("Object edit kind does not match its layout.");

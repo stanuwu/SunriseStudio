@@ -30,7 +30,7 @@ public sealed record AddedAssetSnapshot(AddedProjectAsset Asset, byte[] Data);
 
 /**
  * Mod stays null and unwritten until set, so older Studio builds still open the file. Versions:
- * object edits 2, wide hashes 3, config bindings 4, names 5, groups 6, group collision parts 7.
+ * object edits 2, wide hashes 3, config bindings 4, names 5, groups 6, group collision parts 7, added arrivals 8.
  */
 public sealed record ProjectManifest(int Version, string Name,
     IReadOnlyList<ProjectAssetChange> Changes, IReadOnlyList<AddedProjectAsset> AddedAssets,
@@ -80,6 +80,8 @@ public sealed record ProjectObjectGroup(string Id, string Name, IReadOnlyList<Ob
         {
             if (member is null) throw new InvalidDataException("Invalid object edit target.");
             member.Validate();
+            if (member.Layout == ObjectEditLayout.AddedSpawnPoint)
+                throw new InvalidDataException("Added spawn points cannot join a group yet.");
             if (member.Layout is ObjectEditLayout.TriggerVolume or ObjectEditLayout.CollisionInstance)
                 throw new InvalidDataException("Trigger volumes and collision instances cannot join a group.");
         }

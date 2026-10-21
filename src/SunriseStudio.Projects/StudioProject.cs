@@ -11,9 +11,8 @@ public sealed partial class StudioProject
 {
     public const string ProjectFileName = "sunrise.project.json";
     // The newest manifest version this build reads and writes.
-    public const int ManifestVersion = 7;
-    // A whole ported region lists about 76,000 assets, about 50 MB of manifest.
-    private const int MaximumManifestBytes = 128 * 1024 * 1024;
+    public const int ManifestVersion = 8;
+    private const int MaximumManifestBytes = 16 * 1024 * 1024;
     private ProjectManifest manifest;
     public string DirectoryPath { get; }
     public string ManifestPath => Path.Combine(DirectoryPath, ProjectFileName);
@@ -65,6 +64,8 @@ public sealed partial class StudioProject
             || data.Version == 1 && data.ObjectEdits is not null || data.Version == 2 && data.ObjectEdits is null)
             throw new InvalidDataException("Unsupported project manifest.");
         foreach (var edit in data.ObjectEdits ?? []) edit.Validate();
+        if (data.Version < 8 && data.ObjectEdits?.Any(edit => edit.Target.Layout == ObjectEditLayout.AddedSpawnPoint) == true)
+            throw new InvalidDataException("Added arrival points require project manifest version 8.");
         if ((data.ObjectEdits ?? []).Select(edit => edit.Key).Distinct().Count() != (data.ObjectEdits?.Count ?? 0))
             throw new InvalidDataException("Project contains two edits of one object.");
         if (data.Changes.Select(x => x.TagHash).Distinct().Count() != data.Changes.Count
@@ -315,7 +316,8 @@ public sealed partial class StudioProject
         bool names = value.ObjectNames is { Count: > 0 };
         bool groups = value.ObjectGroups is { Count: > 0 };
         bool parts = groups && value.ObjectGroups!.Any(group => group.CollisionParts is not null);
-        int version = parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
+        bool spawns = value.ObjectEdits?.Any(edit => edit.Target.Layout == ObjectEditLayout.AddedSpawnPoint) == true;
+        int version = spawns ? 8 : parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
         if (value.Version == version && ReferenceEquals(assets, value.AddedAssets)
             && (objects || value.ObjectEdits is null) && (bindings || value.ConfigBindings is null)
             && (names || value.ObjectNames is null) && (groups || value.ObjectGroups is null)) return value;
