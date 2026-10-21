@@ -138,6 +138,16 @@ try
     string manifest = File.ReadAllText(project.ManifestPath);
     Check(reopened.BubbleConnections.Single() is { Id: "a-b", Profile: CrossingProfile.Retail } && project.Changes.Count == 11
         && manifest.Contains("\"version\": 8") && !manifest.Contains("deltas/added"), "The connection or its deltas were not saved at version 8.");
+    using (var saved = JsonDocument.Parse(manifest))
+        Check(saved.RootElement.GetProperty("features").EnumerateArray().Select(name => name.GetString()).SequenceEqual([ProjectFeatures.BubbleConnections]),
+            "The manifest does not name the bubble-connections feature.");
+    var later = System.Text.Json.Nodes.JsonNode.Parse(manifest)!;
+    later["features"] = new System.Text.Json.Nodes.JsonArray(ProjectFeatures.BubbleConnections, "later-feature");
+    string laterFolder = Path.Combine(temporary, "later-project");
+    Directory.CreateDirectory(laterFolder);
+    File.WriteAllText(Path.Combine(laterFolder, StudioProject.ProjectFileName), later.ToJsonString());
+    try { StudioProject.Open(laterFolder); throw new InvalidOperationException("A manifest naming an unknown feature opened."); }
+    catch (InvalidDataException error) { Check(error.Message == "This project needs a newer Sunrise Studio.", "An unknown feature was refused for another reason."); }
     foreach (var (tag, bytes) in applied.Assets)
         Check(reopened.ReadAsset(tag, catalog).AsSpan().SequenceEqual(bytes), $"The saved delta of {tag:X8} does not rebuild the compiled bytes.");
     var edited = new WorldLoader(catalog).LoadMap(Root);
