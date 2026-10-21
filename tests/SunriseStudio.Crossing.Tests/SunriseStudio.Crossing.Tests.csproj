@@ -5,6 +5,5 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/SunriseStudio.Authoring/SunriseStudio.Authoring.csproj" />
-    <None Include="parity.py" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -174,9 +174,11 @@ try
         && !File.ReadAllText(project.ManifestPath).Contains("bubbleConnections"), "Removing the connection left changes behind.");
     Console.WriteLine("PASS remove changes=0 manifest=clean");
 
-    string? oracle = Environment.GetEnvironmentVariable("SUNRISE_CROSSING_ORACLE");
-    if (oracle is null) Console.WriteLine("SKIP parity: set SUNRISE_CROSSING_ORACLE to the World Studio folder to compare with its Python.");
-    else Parity.Run(catalog, oracle, Path.Combine(temporary, "parity"), [retail],
+    // World Studio and the parity driver live outside this repository; WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS name them.
+    string? oracle = Environment.GetEnvironmentVariable("WORLD_STUDIO_SOURCE"), drivers = Environment.GetEnvironmentVariable("SUNRISE_PARITY_DRIVERS");
+    if (string.IsNullOrWhiteSpace(oracle) || string.IsNullOrWhiteSpace(drivers))
+        Console.WriteLine("SKIP parity: set WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS to compare with World Studio's Python.");
+    else Parity.Run(catalog, oracle, Path.Combine(drivers, "crossing_parity.py"), Path.Combine(temporary, "parity"), [retail],
         [simple], [simple with { Policy = InheritedZonePolicy.Deactivate }],
         [retail with { SourceExit = new([5, 1, 2], [1.5f, 6, 3]), DestinationExit = new([-6, -1, 4], [0.75f, 5, 4]) }]);
     return 0;
@@ -201,10 +203,13 @@ static byte[] StateMask(byte[] scenario, int bubble, int state)
     return scenario[(at + 32)..(at + 64)];
 }
 
-/** Writes the fixture's inputs and Studio's outputs, then runs World Studio's Python compiler on the same inputs. */
+/**
+ * Writes the fixture's inputs and Studio's outputs, then runs World Studio's Python compiler on the same inputs. Python
+ * rebinds a scenario against its whole map, so the A-only scenario is Studio's alone.
+ */
 internal static class Parity
 {
-    internal static void Run(PackageCatalog catalog, string oracle, string folder, params ProjectBubbleConnection[][] cases)
+    internal static void Run(PackageCatalog catalog, string oracle, string script, string folder, params ProjectBubbleConnection[][] cases)
     {
         Directory.CreateDirectory(folder);
         var random = new Random(20261021);
@@ -246,8 +251,7 @@ internal static class Parity
                 outputs = compiled.Assets.Keys.Order().Select(tag => $"{tag:X8}")
             }));
         }
-        string script = Path.Combine(AppContext.BaseDirectory, "parity.py");
-        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("SUNRISE_PYTHON") ?? "python") { RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("PYTHON") ?? "python") { RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (string argument in new[] { "-I", "-B", script, oracle, folder, cases.Length.ToString() }) start.ArgumentList.Add(argument);
         using var process = Process.Start(start)!;
         string output = process.StandardOutput.ReadToEnd(), error = process.StandardError.ReadToEnd();
