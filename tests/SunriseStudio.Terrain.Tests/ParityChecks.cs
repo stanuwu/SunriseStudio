@@ -10,11 +10,20 @@ using SunriseStudio.Scene.Collision;
  * buffers, tables, carriers and wrappers byte for byte; Havok packfiles by data section, fixups and
  * imports (Studio frames them as retail does, the Python with its own class table); heightmaps by RAW
  * bytes and decoded PNG samples (the zlib streams differ); brush heights to the Python's 5-digit rounding.
+ * The driver and World Studio live outside this repository; WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS name them.
  */
 internal static class ParityChecks
 {
-    internal static void Run(string worldStudio, string temporary)
+    internal static void Run(string temporary)
     {
+        string? worldStudio = Environment.GetEnvironmentVariable("WORLD_STUDIO_SOURCE");
+        string? drivers = Environment.GetEnvironmentVariable("SUNRISE_PARITY_DRIVERS");
+        if (string.IsNullOrWhiteSpace(worldStudio) || string.IsNullOrWhiteSpace(drivers))
+        {
+            Console.WriteLine("SKIP ground python-parity: set WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS.");
+            return;
+        }
+        string driver = Path.Combine(drivers, "terrain_parity.py");
         var flat = new GroundGrid(9, 7, 128, [100.5, -40.25, 12], new double[63]);
         var cases = new (string Name, GroundGrid Grid, GroundMaterial Material, int FirstIndex)[]
         {
@@ -44,7 +53,7 @@ internal static class ParityChecks
             };
             string specPath = Path.Combine(temporary, $"parity-{name}.json");
             File.WriteAllText(specPath, spec.ToJsonString());
-            var python = Oracle(worldStudio, specPath);
+            var python = Oracle(driver, worldStudio, specPath);
             bytes += Compare(name, grid, material, firstIndex, python, ref packfiles);
         }
         Console.WriteLine($"PASS ground python-parity cases={cases.Length} identical-bytes={bytes} packfiles={packfiles} heightmaps=raw+png brushes=4");
@@ -60,9 +69,9 @@ internal static class ParityChecks
         ["target"] = target
     };
 
-    private static JsonObject Oracle(string worldStudio, string specPath)
+    private static JsonObject Oracle(string driver, string worldStudio, string specPath)
     {
-        var start = new ProcessStartInfo("python", ["-I", Path.Combine(AppContext.BaseDirectory, "world_studio_oracle.py"), worldStudio, specPath])
+        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("PYTHON") ?? "python", ["-I", driver, worldStudio, specPath])
         { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Python did not start.");
         var output = process.StandardOutput.ReadToEndAsync();
