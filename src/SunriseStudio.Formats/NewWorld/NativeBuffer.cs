@@ -6,7 +6,7 @@ namespace SunriseStudio.Formats.NewWorld;
 public sealed class NativeBuffer
 {
     /** The word 20 bytes before every typed array's rows. */
-    public const uint ArrayMarker = 0x80809FBD;
+    public const uint ArrayMarker = NativeArrays.Marker;
     private byte[] bytes;
 
     public NativeBuffer(int size) { bytes = new byte[Math.Max(size, 64)]; Length = size; }
@@ -77,12 +77,10 @@ public sealed class NativeBuffer
     {
         if (rows.Any(row => row.Length != stride)) throw new InvalidDataException("Typed array row size differs.");
         if (rows.Count == 0) { PutI64(descriptor, 0); PutI64(descriptor + 8, 0); return []; }
-        Pad(16);
-        int prefix = AddZeros(32);
-        Put32(prefix + 12, ArrayMarker); Put64(prefix + 16, (ulong)rows.Count); Put32(prefix + 24, type);
-        int start = Length;
+        int start = NativeArrays.PaddedStart(Length);
+        AddZeros(start - Length);
         foreach (var row in rows) Add(row);
-        PutI64(descriptor, rows.Count); PutI64(descriptor + 8, start - descriptor - 24);
+        NativeArrays.Frame(bytes.AsSpan(0, Length), descriptor, type, rows.Count, start);
         return Enumerable.Range(0, rows.Count).Select(i => start + i * stride).ToArray();
     }
 
@@ -93,11 +91,10 @@ public sealed class NativeBuffer
     public int AppendNative(int descriptor, uint type, int count, ReadOnlySpan<byte> rows)
     {
         if (count == 0) { PutI64(descriptor, 0); PutI64(descriptor + 8, 0); return -1; }
-        int start = (Length + 20 + 15) & ~15;
+        int start = NativeArrays.NativeStart(Length);
         AddZeros(start - Length);
-        Put32(start - 20, ArrayMarker); Put64(start - 16, (ulong)count); Put32(start - 8, type); Put32(start - 4, 0);
         Add(rows);
-        PutI64(descriptor, count); PutI64(descriptor + 8, start - descriptor - 24);
+        NativeArrays.Frame(bytes.AsSpan(0, Length), descriptor, type, count, start);
         return start;
     }
 
@@ -113,11 +110,9 @@ public sealed class NativeBuffer
     public int AppendCompact(int descriptor, uint type, IReadOnlyList<byte[]> rows)
     {
         if (Length % 16 != 8) throw new InvalidDataException("Compact array header is not at 8 mod 16.");
-        int prefix = AddZeros(24);
-        Put32(prefix + 4, ArrayMarker); Put64(prefix + 8, (ulong)rows.Count); Put32(prefix + 16, type);
-        int start = Length;
+        int start = AddZeros(24) + 24;
         foreach (var row in rows) Add(row);
-        PutI64(descriptor, rows.Count); PutI64(descriptor + 8, start - descriptor - 24);
+        NativeArrays.Frame(bytes.AsSpan(0, Length), descriptor, type, rows.Count, start);
         SetSize();
         return start;
     }
