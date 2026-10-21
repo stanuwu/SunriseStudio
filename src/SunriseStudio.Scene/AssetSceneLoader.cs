@@ -524,6 +524,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                 && TagView.FitsThrough<SLightsPayload>(data, resource, nameof(SLightsPayload.LightCollection));
             var cubemap = resourceClass == UnknownCubemapPayload.Class;
             var atmosphere = resourceClass == UnknownAtmospherePayload.Class && TagView.Fits<UnknownAtmospherePayload>(data, resource);
+            var visibility = resourceClass == SPlacementVisibilityConstructor.Class && data.Has(resource, 0x14);
             if (atmosphere)
                 scene.Atmospheres.Add(new PlacedAtmosphere(bubble, tag, row,
                     data.AsSpan(resource, Unsafe.SizeOf<UnknownAtmospherePayload>()).ToArray()));
@@ -561,7 +562,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                      && Class(decorator) == DecoratorTags.PayloadClass && TryDecorators(decorator, bubble, transform)) { }
             else
             {
-                if (!occlusion && !lights && !cubemap && !atmosphere && !timeOfDay)
+                if (!occlusion && !lights && !cubemap && !atmosphere && !timeOfDay && !visibility)
                     unrenderedPlacements[resourceClass] = unrenderedPlacements.GetValueOrDefault(resourceClass) + 1;
                 var marker = new SceneMarker
                 {
@@ -577,7 +578,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                     Semantic = occlusion ? "ambient occlusion resource"
                         : lights ? "chunked lights resource" : atmosphere ? "atmosphere resource"
                         : timeOfDay ? "time-of-day resource" : cubemap ? "cubemap resource"
-                        : "authored placement",
+                        : visibility ? "visibility resource" : "authored placement",
                     TagHash = classTag,
                     BubbleHash = bubble,
                     Layer = SceneLayer.Objects,
@@ -592,6 +593,16 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                         marker, resource, transform);
                 if (cubemap)
                     ReadPlacedCubemap(tag, resource, transform, marker);
+                if (visibility)
+                {
+                    try { ReadPlacedVisibility(data.U32(resource + 0x10), tag, row, bubble); }
+                    catch (Exception error) when (error is InvalidDataException or ArgumentException or OverflowException
+                        or IndexOutOfRangeException or KeyNotFoundException)
+                    {
+                        scene.DecodeErrorCount++;
+                        scene.Diagnostics.Add($"Cannot decode visibility of {Name(tag)}: {error.Message}");
+                    }
+                }
                 QueuePlacedClassModels(marker, transform);
                 ReadClassVolumes(classTag, bubble, label);
             }

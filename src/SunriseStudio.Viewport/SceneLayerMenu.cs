@@ -13,7 +13,7 @@ public static class SceneLayerMenu
         (SceneLayer.Geometry, false, true), (SceneLayer.Terrain, false, true), (SceneLayer.Objects, true, true),
         (SceneLayer.Skybox, false, true), (SceneLayer.Distant, false, true), (SceneLayer.Volumes, true, true),
         (SceneLayer.Effects, true, true), (SceneLayer.Spawns, true, false), (SceneLayer.Squads, true, false),
-        (SceneLayer.Lights, true, false), (SceneLayer.Transitions, true, false), (SceneLayer.Collision, true, true),
+        (SceneLayer.Lights, true, false), (SceneLayer.Transitions, true, true), (SceneLayer.Collision, true, true),
         (SceneLayer.NavMesh, true, true)
     ];
 
@@ -59,6 +59,18 @@ public static class SceneLayerMenu
             int agent = collision.NavMeshAgent;
             if (ImGui.Combo("Nav mesh radius", ref agent, radii)) collision.NavMeshAgent = agent;
         }
+        if (collision is not null && (present is null || present.Contains(SceneLayer.Transitions))) DrawTransitionOptions(collision);
+    }
+
+    /** Which cells the Transitions content draws. */
+    private static void DrawTransitionOptions(AssetViewport viewport)
+    {
+        ImGui.Separator();
+        bool rest = viewport.ShowRestCells, alternate = viewport.ShowAlternateCells;
+        if (ImGui.Checkbox("Rest cells", ref rest)) viewport.ShowRestCells = rest;
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Draw state 5 cells too: red triggers, amber middle, green landing, blue rest");
+        if (ImGui.Checkbox("Alternate cells", ref alternate)) viewport.ShowAlternateCells = alternate;
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Draw the alternate visibility layer where a bubble has one");
     }
 
     /** Edge and solid switches, and what the collision layer holds or why it is empty. */
