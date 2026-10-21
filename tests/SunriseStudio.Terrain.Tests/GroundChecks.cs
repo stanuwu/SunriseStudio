@@ -222,8 +222,10 @@ internal static class GroundChecks
             File.Copy(path, Path.Combine(built, "packages", Path.GetFileName(path)), true);
         using (var fromBuild = PackageCatalog.Open(built)) Decode(fromBuild, prepared, grid);
         var reopened = StudioProject.Open(project.DirectoryPath);
-        Check(System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(project.ManifestPath)).RootElement.GetProperty("version").GetInt32() == 8,
-            "A ground did not bump the manifest to version 8.");
+        using (var manifest = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(project.ManifestPath)))
+            Check(manifest.RootElement.GetProperty("version").GetInt32() == 8 && manifest.RootElement.GetProperty("features")
+                .EnumerateArray().Select(name => name.GetString()).SequenceEqual([ProjectFeatures.Grounds]),
+                "A ground did not bump the manifest to version 8 with the grounds feature.");
         var grounds = GroundAssets.Grounds(reopened.AddedAssets, a => reopened.ReadAddedAsset(a.Id, catalog));
         var ground = grounds.Single();
         Check(ground.Definition == prepared.Definition with { Position = ground.Definition.Position, Site = ground.Definition.Site }
@@ -232,6 +234,12 @@ internal static class GroundChecks
         string saved = File.ReadAllText(project.ManifestPath);
         var older = System.Text.Json.Nodes.JsonNode.Parse(saved)!; older["version"] = 7;
         File.WriteAllText(project.ManifestPath, older.ToJsonString());
+        Throws<InvalidDataException>(() => StudioProject.Open(project.DirectoryPath));
+        var later = System.Text.Json.Nodes.JsonNode.Parse(saved)!; later["features"] = new System.Text.Json.Nodes.JsonArray(ProjectFeatures.Grounds, "later-feature");
+        File.WriteAllText(project.ManifestPath, later.ToJsonString());
+        Throws<InvalidDataException>(() => StudioProject.Open(project.DirectoryPath));
+        var unnamed = System.Text.Json.Nodes.JsonNode.Parse(saved)!; unnamed.AsObject().Remove("features");
+        File.WriteAllText(project.ManifestPath, unnamed.ToJsonString());
         Throws<InvalidDataException>(() => StudioProject.Open(project.DirectoryPath));
         var renamed = System.Text.Json.Nodes.JsonNode.Parse(saved)!; renamed["addedAssets"]![0]!["ground"] = "Not A Ground";
         File.WriteAllText(project.ManifestPath, renamed.ToJsonString());
