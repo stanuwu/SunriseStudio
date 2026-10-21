@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using SunriseStudio.Formats;
 
 namespace SunriseStudio.Authoring;
 
@@ -184,9 +185,9 @@ internal sealed class ActivityBytes
     {
         if (rows.Length == 0) { I64(field, 0); I64(field + 8, 0); return []; }
         int count = rows.Length / stride;
-        int first = tight ? (Length + 35) & ~15 : ((Length + 15) & ~15) + 32;
-        Add(new byte[first - Length]); U32(first - 20, 0x80809FBD); I64(first - 16, count); U32(first - 8, cls);
-        Add(rows); I64(field, count); I64(field + 8, first - field - 24);
+        int first = tight ? NativeArrays.NativeStart(Length) : NativeArrays.PaddedStart(Length);
+        Add(new byte[first - Length]); Add(rows);
+        NativeArrays.Frame(stream.GetBuffer().AsSpan(0, Length), field, cls, count, first);
         return Enumerable.Range(0, count).Select(i => first + i * stride).ToArray();
     }
     internal byte[] Finish() { I64(0, Length); ActivityRegistrationTables.Require(Length <= 4 * 1024 * 1024, "Activity resource exceeds capacity."); return stream.ToArray(); }
