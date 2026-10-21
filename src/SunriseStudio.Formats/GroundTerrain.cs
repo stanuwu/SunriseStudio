@@ -279,13 +279,13 @@ public static class GroundTerrain
         BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0xA0), (uint)alternate.Count);
         BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0xA4), (uint)((vertices.Count + 3) & ~3));
         BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0xA8), uint.MaxValue);
-        raw = NativeArray.Append(raw, 0x58, GroupClass, groups, out int groupStart);
-        raw = NativeArray.Append(raw, 0x80, PartClass, parts, out int partStart);
+        raw = NativeArrays.AppendNative(raw, 0x58, GroupClass, groups, out int groupStart);
+        raw = NativeArrays.AppendNative(raw, 0x80, PartClass, parts, out int partStart);
         if (groupStart != 0xD0) throw new InvalidDataException("Terrain groups must start at 0xD0.");
         int[] dyemaps = Enumerable.Range(0, groups.Count).Select(i => groupStart + 0x60 * i + 0x50).ToArray();
         if (material.Dyemap == GroundMaterial.NoDyemap)
             foreach (int at in dyemaps) BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(at), uint.MaxValue);
-        var bounds = NativeArray.Append(new byte[0x18], 8, BoundsRowClass, boundRows, out _);
+        var bounds = NativeArrays.AppendNative(new byte[0x18], 8, BoundsRowClass, boundRows, out _);
         var block = vertices.Select(v => occlusion[v]).ToArray();
         var padded = new byte[(block.Length + 3) & ~3];
         block.CopyTo(padded, 0);
@@ -307,7 +307,7 @@ public static class GroundTerrain
         BinaryPrimitives.WriteUInt64LittleEndian(raw, (ulong)raw.Length);
         BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(8), (ulong)count);
         BinaryPrimitives.WriteInt64LittleEndian(raw.AsSpan(16), 16);
-        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(28), NativeArray.Marker);
+        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(28), NativeArrays.Marker);
         BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(32), (ulong)count);
         BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(40), RowClass);
         var rows = new (int, int)[count];
@@ -419,34 +419,4 @@ public static class GroundTerrain
 
     private static long Mod(long value, long modulus) => ((value % modulus) + modulus) % modulus;
     private static long FloorDiv(long value, long divisor) => (long)Math.Floor(value / (double)divisor);
-}
-
-/** Typed arrays in native placement: rows at align16(end + 20) after {marker, u64 count, u32 class, u32 0}. */
-public static class NativeArray
-{
-    public const uint Marker = 0x80809FBD;
-
-    /** Copies source with rows appended; an empty list leaves a zero descriptor. */
-    public static byte[] Append(byte[] source, int descriptor, uint type, IReadOnlyList<byte[]> rows, out int start)
-    {
-        if (rows.Count == 0)
-        {
-            var empty = source.ToArray();
-            empty.AsSpan(descriptor, 16).Clear();
-            start = -1;
-            return empty;
-        }
-        start = (source.Length + 20 + 15) & ~15;
-        var output = new byte[start + rows.Sum(row => row.Length)];
-        source.CopyTo(output, 0);
-        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(start - 20), Marker);
-        BinaryPrimitives.WriteUInt64LittleEndian(output.AsSpan(start - 16), (ulong)rows.Count);
-        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(start - 8), type);
-        int at = start;
-        foreach (var row in rows) { row.CopyTo(output, at); at += row.Length; }
-        BinaryPrimitives.WriteUInt64LittleEndian(output.AsSpan(descriptor), (ulong)rows.Count);
-        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(descriptor + 8), start - descriptor - 24);
-        BinaryPrimitives.WriteUInt64LittleEndian(output, (ulong)output.Length);
-        return output;
-    }
 }

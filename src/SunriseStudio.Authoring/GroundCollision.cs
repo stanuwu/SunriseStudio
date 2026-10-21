@@ -70,7 +70,7 @@ public static class GroundCollision
         var raw = new byte[96];
         BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0x0C), LocalFixups(payload));
         BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0x10), 1);
-        raw = NativeArray.Append(raw, 0x20, SurfaceHandleClass, [new byte[4]], out surface);
+        raw = NativeArrays.AppendNative(raw, 0x20, SurfaceHandleClass, [new byte[4]], out surface);
         return raw;
     }
 
@@ -81,8 +81,8 @@ public static class GroundCollision
     public static (byte[] Bytes, int Surface, int[] Carriers) Wrapper(int carriers)
     {
         if (carriers is < 1 or > 4096) throw new InvalidDataException("A ground wrapper holds 1 to 4096 carriers.");
-        var raw = NativeArray.Append(new byte[96], 8, SurfaceHandleClass, [new byte[4]], out int surface);
-        raw = NativeArray.Append(raw, 0x18, CarrierArrayClass, Enumerable.Range(0, carriers).Select(_ => new byte[4]).ToArray(), out int first);
+        var raw = NativeArrays.AppendNative(new byte[96], 8, SurfaceHandleClass, [new byte[4]], out int surface);
+        raw = NativeArrays.AppendNative(raw, 0x18, CarrierArrayClass, Enumerable.Range(0, carriers).Select(_ => new byte[4]).ToArray(), out int first);
         return (raw, surface, Enumerable.Range(0, carriers).Select(i => first + 4 * i).ToArray());
     }
 
@@ -148,7 +148,7 @@ public static class GroundCollision
         BinaryPrimitives.WriteUInt64LittleEndian(raw, (ulong)raw.Length);
         BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(8), 1);
         BinaryPrimitives.WriteInt64LittleEndian(raw.AsSpan(16), 16);
-        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(28), NativeArray.Marker);
+        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(28), NativeArrays.Marker);
         BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(32), 1);
         BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(40), GroundTerrain.RowClass);
         int row = 48;

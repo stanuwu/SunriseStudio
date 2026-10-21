@@ -116,7 +116,7 @@ public static class GroundPlacement
             appended.Write(block);
         }
         // Bank 0 rows (class 0x8080726A) at registry +16; the old rows stay behind as unreferenced bytes.
-        var edited = NativeArray.Append(original, 16, GroundTerrain.RegistryRowClass, newRows, out _);
+        var edited = NativeArrays.AppendNative(original, 16, GroundTerrain.RegistryRowClass, newRows, out _);
         BinaryPrimitives.WriteUInt32LittleEndian(headerBytes, checked((uint)appended.Length));
         return new() { [registry] = edited, [header] = headerBytes, [dataTag] = appended.ToArray() };
     }
