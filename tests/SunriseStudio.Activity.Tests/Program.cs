@@ -98,9 +98,16 @@ try
     workflow.Create(workspace); Wait();
     var project = workspace.Project!; var catalog = workspace.Catalog!;
     Check(project.AddedActivities.Count == 1 && project.Changes.Count == 2, "Registration did not atomically publish its two deltas and recipe.");
-    Check(JsonDocument.Parse(File.ReadAllBytes(project.ManifestPath)).RootElement.GetProperty("version").GetInt32() == 8, "Manifest version did not advance.");
+    using (var manifest = JsonDocument.Parse(File.ReadAllBytes(project.ManifestPath)))
+        Check(manifest.RootElement.GetProperty("version").GetInt32() == 8 && manifest.RootElement.GetProperty("features").EnumerateArray()
+            .Select(name => name.GetString()).SequenceEqual([ProjectFeatures.AddedActivities]), "Manifest version did not advance with its feature.");
     var recipe = project.AddedActivities[0];
     byte[] savedManifest = File.ReadAllBytes(project.ManifestPath);
+    var later = System.Text.Json.Nodes.JsonNode.Parse(savedManifest)!;
+    later["features"] = new System.Text.Json.Nodes.JsonArray(ProjectFeatures.AddedActivities, "later-feature");
+    string laterPath = Path.Combine(root, "later-project", StudioProject.ProjectFileName);
+    Directory.CreateDirectory(Path.GetDirectoryName(laterPath)!); File.WriteAllText(laterPath, later.ToJsonString());
+    Reject(() => StudioProject.Open(laterPath), "A manifest naming an unknown feature opened.");
     Reject(() => project.ApplyTransaction([], _ => new(new Dictionary<uint, byte[]>()) { AddedActivities = [recipe with { InternalName = "invalid name" }] }, catalog),
         "Invalid registration transaction succeeded.");
     Check(File.ReadAllBytes(project.ManifestPath).AsSpan().SequenceEqual(savedManifest), "Failed registration changed the manifest.");
