@@ -75,6 +75,8 @@ internal static class CreationSafetyChecks
         var door = CreationTypes.Door.Factory!(workspace);
         Check(door.Fields.Any(field => field.Label == "Slot" && field.Visible) && door.Fields.Any(field => field.Label == "Opens with")
             && door.Problems(workspace).Count > 0, "An empty door workflow had no problem or lacks its slot field.");
+        Check(CreationTypes.Blocked.All(type => type.Name != "Map") && CreationTypes.For(CreationTypes.MapKey, CreationMode.New).Available,
+            "New map is still blocked.");
         Console.WriteLine("creation_safety static_template=installed material_io=contained retry=pass search_error=nonselectable"
             + " row_swap=refiltered record_key=pass destination=available activity=available director=available");
     }

@@ -47,7 +47,7 @@ public sealed partial class StudioProject
                 || snapshot.Asset.Sha256 != BinaryDelta.Hash(snapshot.Data))
                 throw new InvalidDataException("The saved added-asset state changed.");
             var restored = StageAddition(new(snapshot.Asset.Name, snapshot.Data, snapshot.Asset.Native,
-                snapshot.Asset.BaseTagHash), id, assets, catalog);
+                snapshot.Asset.BaseTagHash) { Group = snapshot.Asset.Group }, id, assets, catalog);
             if (restored.Asset.OriginalSha256 != snapshot.Asset.OriginalSha256
                 || restored.Asset.OriginalSize != snapshot.Asset.OriginalSize)
                 throw new InvalidDataException("The saved added asset belongs to a different original.");
@@ -111,6 +111,7 @@ public sealed partial class StudioProject
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(addition.Name);
         ArgumentNullException.ThrowIfNull(addition.Data);
+        ValidateGroup(addition.Group);
         if (string.IsNullOrWhiteSpace(id) || id.Contains('/') || id.Contains('\\') || id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             throw new InvalidDataException("Invalid added asset identity.");
         var metadata = PrepareNativeMetadata(addition.Native, assets);
@@ -133,7 +134,7 @@ public sealed partial class StudioProject
             relative = $"deltas/added-{id}-{BinaryDelta.Hash(stored)}.json";
         }
         return (new(id, name, relative, hash, addition.Data.Length, metadata,
-            addition.BaseTagHash, baseHash, baseLength), stored);
+            addition.BaseTagHash, baseHash, baseLength) { Group = addition.Group }, stored);
     }
 
     /** Failed publication removes only newly staged files and leaves the saved manifest unchanged. */

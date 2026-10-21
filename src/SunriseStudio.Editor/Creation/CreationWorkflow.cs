@@ -8,9 +8,10 @@ namespace SunriseStudio.Editor.Creation;
 /**
  * What the editor opens after a workflow publishes its change.
  * @param Background True when the change finishes on a worker and can still fail there.
+ * @param MapGroup The added-asset group of a new map; its root opens in the viewport.
  */
 public sealed record CreationFollowUp(string? AddedAssetId = null, uint? Tag = null, string? Page = null,
-    string Status = "", bool Background = false);
+    string Status = "", bool Background = false, string? MapGroup = null);
 
 /** A guided creation: a field list, a live problem list and one publishing step. */
 public abstract class CreationWorkflow

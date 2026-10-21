@@ -65,6 +65,7 @@ public static partial class CreationTypes
         AddVendorTypes();
         AddContentTypes();
         AddEntityTypes();
+        AddMapTypes();
         Add(OtherKey, CreationMode.New, new("Asset", "", "Use Add asset for raw files."));
         Add(OtherKey, CreationMode.Clone, new(Duplicate, "A copy of this asset in a new package. May not work in game.", ""));
     }
@@ -120,4 +121,5 @@ public static partial class CreationTypes
     static partial void AddVendorTypes();
     static partial void AddContentTypes();
     static partial void AddEntityTypes();
+    static partial void AddMapTypes();
 }

@@ -17,10 +17,19 @@ public sealed record ProjectAssetChange(uint TagHash, string PackageName, string
 
 public sealed record AddedProjectAsset(string Id, string Name, string Path, string Sha256,
     long Size, NativeAssetMetadata? Native, uint? BaseTagHash = null,
-    string? OriginalSha256 = null, int? OriginalSize = null);
+    string? OriginalSha256 = null, int? OriginalSize = null)
+{
+    /** The added-asset group, such as a new map, this asset was created in; null when it has none. */
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Group { get; init; }
+}
 
 public sealed record ProjectAssetAddition(string Name, byte[] Data,
-    NativeAssetMetadata? Native = null, uint? BaseTagHash = null);
+    NativeAssetMetadata? Native = null, uint? BaseTagHash = null)
+{
+    /** The added-asset group the new asset joins; null when it has none. */
+    public string? Group { get; init; }
+}
 
 public sealed record ProjectAssetEdits(IReadOnlyDictionary<uint, byte[]> Assets,
     IReadOnlyDictionary<string, byte[]>? AddedAssets = null);
@@ -30,7 +39,8 @@ public sealed record AddedAssetSnapshot(AddedProjectAsset Asset, byte[] Data);
 
 /**
  * Mod stays null and unwritten until set, so older Studio builds still open the file. Versions:
- * object edits 2, wide hashes 3, config bindings 4, names 5, groups 6, group collision parts 7.
+ * object edits 2, wide hashes 3, config bindings 4, names 5, groups 6, group collision parts 7,
+ * added-asset groups 8.
  */
 public sealed record ProjectManifest(int Version, string Name,
     IReadOnlyList<ProjectAssetChange> Changes, IReadOnlyList<AddedProjectAsset> AddedAssets,

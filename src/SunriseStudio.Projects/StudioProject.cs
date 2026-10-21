@@ -14,6 +14,8 @@ public sealed partial class StudioProject
     public const int ManifestVersion = 7;
     // A whole ported region lists about 76,000 assets, about 50 MB of manifest.
     private const int MaximumManifestBytes = 128 * 1024 * 1024;
+    public const int ManifestVersion = 8;
+    private const int MaximumManifestBytes = 16 * 1024 * 1024;
     private ProjectManifest manifest;
     public string DirectoryPath { get; }
     public string ManifestPath => Path.Combine(DirectoryPath, ProjectFileName);
@@ -95,6 +97,9 @@ public sealed partial class StudioProject
         if (data.AddedAssets.Where(x => x.Native is not null)
             .GroupBy(x => (x.Native!.PackageId, x.Native.EntryIndex)).Any(x => x.Count() > 1))
             throw new InvalidDataException("Project contains duplicate native entry indices.");
+        foreach (var asset in data.AddedAssets) ValidateGroup(asset.Group);
+        if (data.Version < 8 && data.AddedAssets.Any(asset => asset.Group is not null))
+            throw new InvalidDataException("Added-asset groups require project manifest version 8.");
         bool aliases = data.AddedAssets.Any(asset => asset.Native?.WideHashes is { Count: > 0 });
         if (aliases && data.Version < 3)
             throw new InvalidDataException("Authored wide hashes require project manifest version 3.");
@@ -315,7 +320,8 @@ public sealed partial class StudioProject
         bool names = value.ObjectNames is { Count: > 0 };
         bool groups = value.ObjectGroups is { Count: > 0 };
         bool parts = groups && value.ObjectGroups!.Any(group => group.CollisionParts is not null);
-        int version = parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
+        bool assetGroups = assets.Any(asset => asset.Group is not null);
+        int version = assetGroups ? 8 : parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
         if (value.Version == version && ReferenceEquals(assets, value.AddedAssets)
             && (objects || value.ObjectEdits is null) && (bindings || value.ConfigBindings is null)
             && (names || value.ObjectNames is null) && (groups || value.ObjectGroups is null)) return value;
@@ -340,6 +346,14 @@ public sealed partial class StudioProject
     {
         if (hash is null || hash.Length != 64 || !hash.All(Uri.IsHexDigit))
             throw new InvalidDataException("Invalid project checksum.");
+    }
+
+    /** A group id is one trimmed line of up to 64 characters without path separators. */
+    internal static void ValidateGroup(string? group)
+    {
+        if (group is not null && (group.Length is 0 or > 64 || group != group.Trim() || group.Any(char.IsControl)
+            || group.IndexOfAny(['/', '\\']) >= 0))
+            throw new InvalidDataException("Added-asset group id is invalid.");
     }
 
     /** Saved entries may keep an id above the new-package limit so old projects open; the build refuses it. */

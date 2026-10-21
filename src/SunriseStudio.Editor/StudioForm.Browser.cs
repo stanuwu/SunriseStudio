@@ -234,6 +234,8 @@ public sealed partial class StudioForm
         CreationMenuItem("Activity", CreationTypes.Activity, () => StartCreation(CreationTypes.Activity));
         CreationMenuItem("Director entry", CreationTypes.Director, () => StartCreation(CreationTypes.Director));
         CreationMenuItem("Door from model", CreationTypes.Door, () => StartCreation(CreationTypes.Door));
+        var map = CreationTypes.For(CreationTypes.MapKey, CreationMode.New);
+        CreationMenuItem("Map", map, () => StartCreation(map));
         ImGui.Separator();
         foreach (var type in CreationTypes.Blocked) CreationMenuItem(type.Name, type, () => { });
         ImGui.EndPopup();
