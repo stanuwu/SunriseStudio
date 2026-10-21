@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using SunriseStudio.Formats;
 using SunriseStudio.Scene;
 
 namespace SunriseStudio.Authoring;
@@ -25,11 +26,7 @@ public static partial class CrossingCompiler
         BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(16), selfKey);
         raw.AsSpan(0x78, 16).Fill(0xFF);
         // Four bytes of padding and the typed header put the cells at +0xA0, as the shipped single-cell profile has them.
-        BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(24), (ulong)points.Count);
-        BinaryPrimitives.WriteInt64LittleEndian(raw.AsSpan(32), 160 - 24 - 24);
-        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(140), NativeRows.ArrayMarker);
-        BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(144), (ulong)points.Count);
-        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(152), VisibilityCells.CellClass);
+        NativeArrays.Frame(raw, 24, VisibilityCells.CellClass, points.Count, NativeArrays.NativeStart(VisibilityCells.HeaderSize));
         for (int i = 0; i < points.Count; i++)
         {
             int at = 160 + i * VisibilityCells.CellSize;
@@ -173,7 +170,7 @@ public static partial class CrossingCompiler
      */
     internal static byte[] PlaceZones(byte[] raw, IReadOnlyList<byte[]> rows)
     {
-        static int Align(int end) => (end + 35) & ~15;
+        static int Align(int end) => NativeArrays.NativeStart(end);
         var arrays = new SortedDictionary<int, int>();
         foreach (int descriptor in new[] { 24, 40, 56, 72, 88, 104 })
         {
@@ -198,13 +195,7 @@ public static partial class CrossingCompiler
         int[] later = [.. arrays.Keys.Where(descriptor => descriptor > 40)];
         byte[] tail = later.Length > 0 ? raw[(arrays[later[0]] - 20)..] : [];
         byte[] output = raw[..cellsEnd];
-        if (rows.Count > 0)
-            output = NativeRows.Append(output, 40, VisibilityCells.ZoneClass, VisibilityCells.ZoneSize, [.. rows.SelectMany(row => row)], out _);
-        else
-        {
-            BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(40), 0);
-            BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(48), 0);
-        }
+        output = NativeArrays.AppendNative(output, 40, VisibilityCells.ZoneClass, rows, out _);
         if (later.Length > 0)
         {
             int start = Align(output.Length), delta = start - arrays[later[0]];

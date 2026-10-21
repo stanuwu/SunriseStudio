@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using SunriseStudio.Formats;
 using SunriseStudio.Scene;
 
 namespace SunriseStudio.Authoring;
@@ -36,18 +37,11 @@ public static partial class CrossingCompiler
         return result;
     }
 
-    /** NativeRows.Append for one or more rows; an empty array is a zero descriptor, as installed. */
+    /** NativeArrays.AppendNative over records of one size; an empty array is a zero descriptor, as installed. */
     private static byte[] TypedArray(byte[] source, int field, uint type, int stride, IReadOnlyList<byte[]> rows, out int first)
     {
-        if (rows.Count == 0)
-        {
-            BinaryPrimitives.WriteInt64LittleEndian(source.AsSpan(field), 0);
-            BinaryPrimitives.WriteInt64LittleEndian(source.AsSpan(field + 8), 0);
-            first = -1;
-            return source;
-        }
         if (rows.Any(row => row.Length != stride)) throw new InvalidDataException("A map record has the wrong size.");
-        return NativeRows.Append(source, field, type, stride, [.. rows.SelectMany(row => row)], out first);
+        return NativeArrays.AppendNative(source, field, type, rows, out first);
     }
 
     /** The definition's own records serialized again; null when the bytes hold anything the records do not. */
