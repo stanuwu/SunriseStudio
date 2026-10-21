@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using SunriseStudio.Authoring;
 using SunriseStudio.Formats.NewWorld;
@@ -7,7 +9,10 @@ using static Expect;
 
 /**
  * Byte parity with the World Studio compiler: the oracle script compiles the same recipe under python -I, and every
- * entry's key, tag, class, type info and bytes must be equal, with the same companions and root closure.
+ * entry's key, tag, class, type info and bytes must be equal, with the same companions and root closure. Havok
+ * packfiles compare by __data__ bytes, fixups, object classes and imports: Studio frames them as installed files
+ * are, World Studio with a bare class name. The oracle and World Studio live outside this repository;
+ * SUNRISE_PARITY_DRIVERS and WORLD_STUDIO_SOURCE name them.
  */
 internal static class ParityChecks
 {
@@ -17,10 +22,17 @@ internal static class ParityChecks
         (NewWorldRecipe.Create("studio_row_world", "Row of Three", 3, 12.5, "flat-clay"), 17)
     ];
 
-    internal static void Run(string oracle, string studio, string output, string? game, string? keys)
+    internal static void Run(string output, string? game, string? keys)
     {
+        string? studio = Environment.GetEnvironmentVariable("WORLD_STUDIO_SOURCE"), drivers = Environment.GetEnvironmentVariable("SUNRISE_PARITY_DRIVERS");
+        if (string.IsNullOrWhiteSpace(studio) || string.IsNullOrWhiteSpace(drivers))
+        {
+            Console.WriteLine("SKIP new-world-parity: set WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS.");
+            return;
+        }
+        string oracle = Path.Combine(drivers, "new_world_oracle.py");
         Directory.CreateDirectory(output);
-        int entries = 0;
+        int entries = 0, packfiles = 0;
         long bytes = 0;
         NewWorldInstalled? pinned = null;
         foreach (var (recipe, first) in Cases)
@@ -60,6 +72,11 @@ internal static class ParityChecks
                 if (row.GetProperty("key").GetString() != entry.Key || Hex(row, "tag") != entry.Tag
                     || Hex(row, "reference") != entry.Reference || Hex(row, "type_info") != entry.TypeInfo)
                     mismatches.Add($"{entry.Key}: identity differs from {row.GetProperty("key").GetString()}");
+                else if (entry.TypeInfo >> 9 == 26)
+                {
+                    if (!Parts(data).Same(Parts(entry.Data))) mismatches.Add($"{entry.Key}: packfile data, fixups, classes or imports differ");
+                    packfiles++;
+                }
                 else if (!data.AsSpan().SequenceEqual(entry.Data))
                 {
                     int at = data.AsSpan().CommonPrefixLength(entry.Data);
@@ -84,8 +101,42 @@ internal static class ParityChecks
             Console.WriteLine($"PASS new-world-parity {recipe.Name} bubbles={recipe.Bubbles.Count} entries={expected.Length} "
                 + $"bytes={build.Allocation.Entries.Sum(e => e.Data.Length)} identical=all companions={companions.Count}");
         }
-        Console.WriteLine($"PASS new-world-parity cases={Cases.Count} entries={entries} bytes={bytes} python=-I");
+        Console.WriteLine($"PASS new-world-parity cases={Cases.Count} entries={entries} bytes={bytes} packfiles={packfiles} python=-I");
         if (game is not null && pinned is not null) GameChecks.Compare(game, keys, pinned);
+    }
+
+    /** A packfile's __data__ section, fixups by kind, object classes by offset and imports by field. */
+    private sealed record PackfileParts(byte[] Data, HashSet<(int, int)> Local, HashSet<(int, int, int)> Global,
+        Dictionary<int, string> Objects, Dictionary<int, string> Imports)
+    {
+        internal bool Same(PackfileParts other) => Data.AsSpan().SequenceEqual(other.Data) && Local.SetEquals(other.Local)
+            && Global.SetEquals(other.Global) && Objects.Count == other.Objects.Count
+            && Objects.All(pair => other.Objects.GetValueOrDefault(pair.Key) == pair.Value)
+            && Imports.Count == other.Imports.Count && Imports.All(pair => other.Imports.GetValueOrDefault(pair.Key) == pair.Value);
+    }
+
+    /** Reads the version-9 section table: class names in section 0, data in section 2; -1 fields are padding. */
+    private static PackfileParts Parts(byte[] file)
+    {
+        int I32(int at) => BinaryPrimitives.ReadInt32LittleEndian(file.AsSpan(at));
+        string Name(int at) => Encoding.ASCII.GetString(file, at, Array.IndexOf(file, (byte)0, at) - at);
+        int names = I32(0x40 + 0x14), section = 0x40 + 2 * 0x30, start = I32(section + 0x14);
+        Check(Encoding.ASCII.GetString(file, section, 8) == "__data__", "A packfile's third section is not __data__.");
+        int[] offsets = [.. Enumerable.Range(0, 6).Select(i => start + I32(section + 0x18 + 4 * i))];
+        var local = new HashSet<(int, int)>();
+        for (int at = offsets[0]; at + 8 <= offsets[1]; at += 8) if (I32(at) != -1) local.Add((I32(at), I32(at + 4)));
+        var global = new HashSet<(int, int, int)>();
+        for (int at = offsets[1]; at + 12 <= offsets[2]; at += 12) if (I32(at) != -1) global.Add((I32(at), I32(at + 4), I32(at + 8)));
+        var objects = new Dictionary<int, string>();
+        for (int at = offsets[2]; at + 12 <= offsets[3]; at += 12) if (I32(at) != -1) objects.Add(I32(at), Name(names + I32(at + 8)));
+        var imports = new Dictionary<int, string>();
+        for (int at = offsets[4]; at + 4 <= offsets[5] && I32(at) != -1;)
+        {
+            string name = Name(at + 4);
+            imports.Add(I32(at), name);
+            at = (at + 4 + name.Length + 1 + 3) & ~3;
+        }
+        return new(file[start..offsets[0]], local, global, objects, imports);
     }
 
     private static uint Hex(JsonElement row, string name) =>
@@ -104,7 +155,8 @@ internal static class ParityChecks
 
     private static void Python(string oracle, string studio, string input, string output)
     {
-        var start = new ProcessStartInfo("python") { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
+        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("PYTHON") ?? "python")
+        { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
         foreach (string arg in new[] { "-I", "-B", oracle, studio, input, output }) start.ArgumentList.Add(arg);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Python did not start.");
         string error = process.StandardError.ReadToEnd();

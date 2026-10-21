@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Numerics;
 using SunriseStudio.Authoring;
 using SunriseStudio.Formats.NewWorld;
@@ -17,36 +16,12 @@ internal static class ReaderChecks
             Overlay(catalog, build, () => Decode(catalog, build, recipe, "overlay"));
     }
 
-    /**
-     * The packfile with its one bare class name rewritten as the native {signature, 0x09, name} record, which
-     * HavokPackfile requires. The game loads the bare name the World Studio cooker writes; no other byte moves.
-     */
-    internal static byte[] NativeClassName(byte[] packfile)
-    {
-        var raw = packfile.ToArray();
-        int names = BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(0x40 + 20)), length = BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(0x40 + 24));
-        int end = Array.IndexOf(raw, (byte)0, names);
-        byte[] name = raw[names..end];
-        Check(end - names + 6 <= length, "The class name does not fit its native record.");
-        raw.AsSpan(names, length).Fill(0xFF);
-        raw.AsSpan(names, 5).Clear();
-        raw[names + 4] = 9;
-        name.CopyTo(raw, names + 5);
-        raw[names + 5 + name.Length] = 0;
-        int data = BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(0x40 + 2 * 0x30 + 20));
-        int virtualStart = data + BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(0x40 + 2 * 0x30 + 20 + 12));
-        int exports = data + BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(0x40 + 2 * 0x30 + 20 + 16));
-        for (int at = virtualStart; at + 12 <= exports; at += 12)
-            if (BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(at)) != -1) BinaryPrimitives.WriteInt32LittleEndian(raw.AsSpan(at + 8), 5);
-        return raw;
-    }
-
     /** Runs the action with the build's entries in the catalog, as the editor overlay shows a project. */
     internal static void Overlay(PackageCatalog catalog, NewWorldBuild build, Action action)
     {
         var names = build.Additions.Where(asset => asset.Native?.Name is not null)
             .ToDictionary(asset => GeneratedGraph.TagOf(asset.Native!.PackageId, asset.Native.EntryIndex!.Value), asset => asset.Native!.Name);
-        var data = build.Allocation.Entries.ToDictionary(entry => entry.Tag, entry => entry.TypeInfo >> 9 == 26 ? NativeClassName(entry.Data) : entry.Data);
+        var data = build.Allocation.Entries.ToDictionary(entry => entry.Tag, entry => entry.Data);
         catalog.SetOverlayEntries(build.Allocation.Entries.Select(entry => new PackageOverlayEntry(
             new PackageEntry(entry.Tag, entry.Reference, (int)(entry.TypeInfo >> 9 & 127), (int)(entry.TypeInfo >> 6 & 7),
                 entry.Data.Length, $"w64_sunrise_{CompileChecks.Package:x4}_0", CompileChecks.Package, entry.EntryIndex)
@@ -57,9 +32,7 @@ internal static class ReaderChecks
     }
 
     /** Decodes the map, its scenario, collision, manifests, strings and shaders; returns the tags a reader read. */
-    /** @param collision False when the catalog holds the bare class names, which HavokPackfile refuses. */
-    internal static HashSet<uint> Decode(PackageCatalog catalog, NewWorldBuild build, NewWorldRecipe recipe, string source,
-        bool collision = true)
+    internal static HashSet<uint> Decode(PackageCatalog catalog, NewWorldBuild build, NewWorldRecipe recipe, string source)
     {
         var entries = build.Allocation.Entries.ToDictionary(entry => entry.Key);
         uint Tag(string key) => entries[key].Tag;
@@ -101,7 +74,7 @@ internal static class ReaderChecks
         Check(world.AllStates.Count == slots.Count && world.AllStates.All(state => state.PackageEnabled)
             && world.AllStates.Select(state => state.NameHash).SequenceEqual(slots.Select(b => MapIdentityWriter.NameHash("ws_state_" + b.Id))),
             $"{source}: the scenario does not hold one enabled state per bubble.");
-        if (collision) Collision(catalog, scene, slots, Tag, read, source);
+        Collision(catalog, scene, slots, Tag, read, source);
         // Root manifests: each lists its root and the root's closure.
         foreach (var (root, companion) in build.Allocation.Companions)
         {
@@ -170,6 +143,9 @@ internal static class ReaderChecks
             var bubble = slots[slot];
             var shape = new CollisionSceneLoader(catalog).Load(new SceneDocument { TagHash = Tag($"b{slot}_cl_ground_0") });
             var corners = NewWorldComposer.Ground(bubble).Vertices;
+            Check(HavokPackfile.Parse(catalog.Read(Tag($"b{slot}_cl_ground_0"))).RootClass == CompressedMesh.ClassName
+                && HavokPackfile.Parse(catalog.Read(Tag($"b{slot}_cl_collection"))).RootClass == StaticCompoundShape.ClassName,
+                $"{source}: bubble {bubble.Id} collision packfiles do not parse with their classes.");
             Check(shape.Pieces.Count == 1 && shape.Pieces[0].Shape.TriangleCount == 2 && shape.Pieces[0].Shape.Vertices.All(v =>
                 v.X >= corners[0][0] - 0.01 && v.X <= corners[3][0] + 0.01 && v.Y >= corners[0][1] - 0.01 && v.Y <= corners[3][1] + 0.01
                 && Math.Abs(v.Z - corners[0][2]) < 0.01), $"{source}: bubble {bubble.Id} collision does not decode to its ground.");

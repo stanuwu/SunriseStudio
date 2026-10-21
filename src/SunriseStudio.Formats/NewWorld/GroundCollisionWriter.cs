@@ -3,13 +3,21 @@ using System.Text;
 
 namespace SunriseStudio.Formats.NewWorld;
 
+/**
+ * One packfile object before framing: its class, the __data__ bytes with zero pointers, the local fixups that
+ * fill them and the named imports. Authoring frames it in the retail packfile layout.
+ */
+public sealed record HavokContents(string RootClass, byte[] Data, IReadOnlyList<(int Source, int Target)> Local,
+    IReadOnlyList<(int Field, string Name)> Imports);
+
 /** A cooked triangle shape and the fields the compound reads from it. */
-public sealed record CookedShape(byte[] Packfile, double[][] Domain, int KeyBits);
+public sealed record CookedShape(HavokContents Contents, double[][] Domain, int KeyBits);
 
 /**
  * Fresh Havok collision for generated grounds: a version-9 hkpBvCompressedMeshShape per ground, one
  * hkpStaticCompoundShape over them and the 80808A15 wrapper that binds surfaces and i&lt;N&gt; imports
- * (World Studio landscape/collision_cooker, generated_compound, collision_wrapper).
+ * (World Studio landscape/collision_cooker, generated_compound, collision_wrapper). The data sections equal
+ * World Studio's; the framing is the caller's.
  */
 public static class GroundCollisionWriter
 {
@@ -18,7 +26,6 @@ public static class GroundCollisionWriter
     // 1/(2^21-1), 1/(2^21-1), 1/(2^22-1) as the float32 values stored in the executable.
     private static readonly double[] SharedScale =
         [BitConverter.Int32BitsToSingle(0x35000004), BitConverter.Int32BitsToSingle(0x35000004), BitConverter.Int32BitsToSingle(0x34800002)];
-    private static readonly byte[] Layout = [0x09, 0, 0, 0, 0x08, 0x01, 0, 0x01];
     // Collision filter, user data and user string palettes, tree nodes, sections, primitives, shared vertex
     // indices, packed vertices, shared vertices and primitive data runs, as offsets from the +0x28 subobject.
     private static readonly (string Name, int Offset)[] Slots =
@@ -209,8 +216,8 @@ public static class GroundCollisionWriter
 
     private static int BitLength(long value) => value == 0 ? 0 : 64 - System.Numerics.BitOperations.LeadingZeroCount((ulong)value);
 
-    /** A standalone pointer-free version-9 packfile with local fixups for the shape's arrays. */
-    private static byte[] Serialize(double[][] domain, List<ulong> words, List<Part> parts, byte[] top,
+    /** The shape's pointer-free data section with local fixups for its arrays. */
+    private static HavokContents Serialize(double[][] domain, List<ulong> words, List<Part> parts, byte[] top,
         Dictionary<int, int> leaves, int keyCount, int maximumKey)
     {
         var data = new NativeBuffer(Base + 0xE8);
@@ -272,45 +279,14 @@ public static class GroundCollisionWriter
         data.PutF32s(Base + 0x68, (float)domain[1][0], (float)domain[1][1], (float)domain[1][2], 1);
         data.PutI32(Base + 0x78, keyCount); data.PutI32(Base + 0x7C, BitLength(maximumKey + 1)); data.Put32(Base + 0x80, (uint)maximumKey);
         data.Pad(16, 0x7F);
-        var local = new NativeBuffer(0);
-        foreach (var (at, target) in fixups) local.Add(NativeRow.U32s((uint)at, (uint)target));
-        local.Pad(16, 0xFF);
-        return Packfile("hkpBvCompressedMeshShape", data.ToArray(), local.ToArray(), []);
-    }
-
-    /** Header, class name table, data, local fixups, one virtual fixup at 0 and optional imports. */
-    private static byte[] Packfile(string className, byte[] data, byte[] local, byte[] imports)
-    {
-        byte[] virtualFixup = [.. NativeRow.U32s(0, 0, 0), 0xFF, 0xFF, 0xFF, 0xFF];
-        var names = new NativeBuffer(0);
-        names.Add(Encoding.ASCII.GetBytes(className + "\0"));
-        names.Pad(16, 0xFF);
-        int start = 64 + 48 * 3, end = data.Length + local.Length + virtualFixup.Length;
-        var header = new NativeBuffer(0);
-        header.Add(NativeRow.U32s(0x57E0E057, 0x10C0C010, 0)); header.Add(Layout); header.Add(NativeRow.U32s(3, 2, 0, 0, 0));
-        header.Add([.. Encoding.ASCII.GetBytes("hk_2012.2.0-r1\0"), 0xFF]); header.Add(new byte[8]);
-        var tables = new (string Name, int Begin, int[] Offsets)[]
-        {
-            ("__classnames__", start, Enumerable.Repeat(names.Length, 6).ToArray()),
-            ("__types__", start + names.Length, new int[6]),
-            ("__data__", start + names.Length, [data.Length, data.Length + local.Length, data.Length + local.Length, end, end, end + imports.Length])
-        };
-        foreach (var (name, begin, offsets) in tables)
-        {
-            var label = new byte[20];
-            Encoding.ASCII.GetBytes(name).CopyTo(label, 0);
-            label[19] = 0xFF;
-            header.Add(label);
-            header.Add(NativeRow.U32s([(uint)begin, .. offsets.Select(o => (uint)o)]));
-        }
-        return [.. header.ToArray(), .. names.ToArray(), .. data, .. local, .. virtualFixup, .. imports];
+        return new("hkpBvCompressedMeshShape", data.ToArray(), fixups.Select(pair => (pair.Key, pair.Value)).ToArray(), []);
     }
 
     /**
      * A static compound over the shapes: identity composite instances whose i&lt;N&gt; imports bind each child, the
      * retail child filter word 037FFCC7 with mask 0 and the six-byte bounds tree.
      */
-    public static byte[] Compound(IReadOnlyList<CookedShape> shapes)
+    public static HavokContents Compound(IReadOnlyList<CookedShape> shapes)
     {
         if (shapes.Count is < 1 or > 4096) throw new InvalidDataException("A compound holds 1 to 4096 shapes.");
         int bits = shapes.Max(shape => shape.KeyBits);
@@ -330,7 +306,7 @@ public static class GroundCollisionWriter
         data.Put32(0x78, (uint)(nodes.Length / 6)); data.Put32(0x7C, (uint)(nodes.Length / 6) | 0x80000000);
         data.PutF32s(0x80, (float)bounds[0][0], (float)bounds[0][1], (float)bounds[0][2]);
         data.PutF32s(0x90, (float)bounds[1][0], (float)bounds[1][1], (float)bounds[1][2]);
-        var imports = new NativeBuffer(0);
+        var imports = new List<(int Field, string Name)>();
         for (int index = 0; index < count; index++)
         {
             int at = 160 + index * 80;
@@ -339,15 +315,12 @@ public static class GroundCollisionWriter
             data.PutF32s(at + 32, 1, 1, 1, 0.5f);
             data.Put32(at + 56, 0x037FFCC7); data.Put32(at + 60, 0);
             data.Put32(at + 64, 0x10000u | (uint)index);
-            imports.Add(NativeRow.U32s((uint)(at + 48)));
-            imports.Add(Encoding.ASCII.GetBytes($"i{index}\0"));
-            imports.Pad(4, 0xFF);
+            imports.Add((at + 48, $"i{index}"));
         }
         int nodeAt = data.Length;
         data.Add(nodes);
         data.Pad(16);
-        imports.Pad(16, 0xFF);
-        return Packfile("hkpStaticCompoundShape", data.ToArray(), NativeRow.U32s(0x38, 160, 0x70, (uint)nodeAt), imports.ToArray());
+        return new("hkpStaticCompoundShape", data.ToArray(), [(0x38, 160), (0x70, nodeAt)], imports);
     }
 
     /** The six-byte compound tree: the root keeps the whole bounds, children quantize inside their parent. */

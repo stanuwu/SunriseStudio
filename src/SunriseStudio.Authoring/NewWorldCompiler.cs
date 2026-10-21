@@ -88,7 +88,7 @@ public static class NewWorldCompiler
     /** The same compile over supplied installed inputs. */
     public static NewWorldBuild Compile(NewWorldRecipe recipe, NewWorldInstalled installed, ushort package, int firstEntry)
     {
-        var world = NewWorldComposer.Compose(recipe, installed);
+        var world = NewWorldComposer.Compose(recipe, installed, NewWorldCollision.Frame);
         var allocation = world.Graph.Allocate(package, firstEntry, world.Roots);
         if (firstEntry + allocation.Entries.Count > PackageMaximumEntries)
             throw new InvalidDataException($"The map needs {allocation.Entries.Count} entries; package {package:X4} has room for "

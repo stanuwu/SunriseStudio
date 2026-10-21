@@ -16,7 +16,7 @@ public sealed record NewWorldGraph(GeneratedGraph Graph, IReadOnlyList<string> R
  * name, empty service, 23-slot geometry with a static ground and arrivals, physics with collision and the
  * navigation placeholder), the inert point-query owner, then the root and a scenario with one state per bubble
  * (World Studio generated_custom_world.compile_candidate, terrain profile 'static', no navigation mesh, crossings
- * inert).
+ * inert). Frame turns each collision object into its packfile.
  */
 public static class NewWorldComposer
 {
@@ -24,7 +24,7 @@ public static class NewWorldComposer
     public const uint CollisionArchetype = 0x80C70CE9, Surface = 0x80C70D6A;
     private const uint Sentinel = 0x811C9DC5;
 
-    public static NewWorldGraph Compose(NewWorldRecipe recipe, NewWorldInstalled installed)
+    public static NewWorldGraph Compose(NewWorldRecipe recipe, NewWorldInstalled installed, Func<HavokContents, byte[]> frame)
     {
         recipe.Validate();
         var bubbles = recipe.Slots;
@@ -38,7 +38,7 @@ public static class NewWorldComposer
         byte[] vertex = GroundShaderCompiler.Compile("VSMain", true), depth = GroundShaderCompiler.Compile("DepthMain", true),
             pixel = GroundShaderCompiler.Compile("PSMain", false);
         for (int slot = 0; slot < bubbles.Count; slot++)
-            AddBubble(graph, recipe, bubbles[slot], slot, identities[slot], installed, vertex, depth, pixel);
+            AddBubble(graph, recipe, bubbles[slot], slot, identities[slot], installed, vertex, depth, pixel, frame);
         MapIdentityWriter.AddRoot(graph, NewWorldGraph.WorldKey, Enumerable.Range(0, bubbles.Count).Select(i => $"b{i}_bubble").ToArray(),
             "definition", "lookup");
         string activity = AddActivity(graph, recipe, bubbles, identities, installed.Players);
@@ -46,7 +46,7 @@ public static class NewWorldComposer
     }
 
     private static void AddBubble(GeneratedGraph graph, NewWorldRecipe recipe, NewWorldBubble bubble, int slot,
-        NewBubbleIdentity identity, NewWorldInstalled installed, byte[] vertex, byte[] depth, byte[] pixel)
+        NewBubbleIdentity identity, NewWorldInstalled installed, byte[] vertex, byte[] depth, byte[] pixel, Func<HavokContents, byte[]> frame)
     {
         string prefix = $"b{slot}";
         var (vertices, triangles) = Ground(bubble);
@@ -70,8 +70,8 @@ public static class NewWorldComposer
         string render = MapComponentWriter.Add(graph, prefix + "_render", MapComponentKind.RenderRegistry, renderArchetype, prefix + "_registry");
         // Collision: the cooked ground, its compound and the wrapper naming the installed surface.
         var shape = GroundCollisionWriter.Cook(vertices, triangles);
-        graph.Add(prefix + "_cl_ground_0", shape.Packfile, uint.MaxValue, 26, 7);
-        graph.Add(prefix + "_cl_collection", GroundCollisionWriter.Compound([shape]), uint.MaxValue, 26, 7);
+        graph.Add(prefix + "_cl_ground_0", frame(shape.Contents), uint.MaxValue, 26, 7);
+        graph.Add(prefix + "_cl_collection", frame(GroundCollisionWriter.Compound([shape])), uint.MaxValue, 26, 7);
         var (wrapperBytes, surfaceSlots, shapeSlots) = GroundCollisionWriter.Wrapper(1, [[0]], 0);
         string wrapper = graph.Add(prefix + "_cl_wrapper", wrapperBytes, GroundCollisionWriter.WrapperClass);
         graph.External(wrapper, surfaceSlots[0], Surface, installed.SurfaceClosure);

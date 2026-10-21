@@ -61,7 +61,7 @@ internal static class ProjectChecks
             }
             Check(built.GetName(build.MapTag) == recipe.MapName, "The built root is not named map:NAME:root.");
             manifests = built.Entries.Count(entry => entry.PackageId == CompileChecks.Package && entry.Reference == PackageManifest.ClassId);
-            var read = ReaderChecks.Decode(built, build, recipe, "package", collision: false);
+            var read = ReaderChecks.Decode(built, build, recipe, "package");
             Check(read.Count > build.Allocation.Entries.Count / 2, "The built package did not decode.");
         }
         // A new package alone has no installed patch whose dependency record could list it; the receipt says so.

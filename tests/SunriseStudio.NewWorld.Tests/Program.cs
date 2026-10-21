@@ -1,6 +1,6 @@
 using SunriseStudio.Packages;
 
-// Checks the new-map compiler on a synthetic installation. --oracle <oracle.py> --world-studio <dir> adds byte
+// Checks the new-map compiler on a synthetic installation. WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS add byte
 // parity with the World Studio compiler run under python -I; --game-root adds the installed inputs, and --key-source
 // names the executable that holds the package keys when the installation's own does not.
 string temporary = Path.Combine(Path.GetTempPath(), "sunrise-new-world-tests-" + Guid.NewGuid().ToString("N"));
@@ -8,9 +8,8 @@ try
 {
     string installation = Path.Combine(temporary, "fixture");
     NewWorldFixture.Create(installation);
-    string? game = Arg(args, "--game-root"), keys = Arg(args, "--key-source"), oracle = Arg(args, "--oracle"), studio = Arg(args, "--world-studio");
-    if (oracle is not null && studio is not null) ParityChecks.Run(oracle, studio, Path.Combine(temporary, "parity"), game, keys);
-    else Console.WriteLine("SKIP new-world-parity needs --oracle and --world-studio");
+    string? game = Arg(args, "--game-root"), keys = Arg(args, "--key-source");
+    ParityChecks.Run(Path.Combine(temporary, "parity"), game, keys);
     using (var catalog = PackageCatalog.Open(installation))
     {
         var builds = CompileChecks.Run(catalog);
