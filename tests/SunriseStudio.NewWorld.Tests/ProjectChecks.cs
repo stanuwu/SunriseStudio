@@ -19,8 +19,16 @@ internal static class ProjectChecks
             "The project did not keep the group or the planned entry indices.");
         Check(created.Count(asset => asset.BaseTagHash is not null) == 7 * recipe.Bubbles.Count + 3, "Derived copies lost their originals.");
         using (var manifest = JsonDocument.Parse(File.ReadAllBytes(project.ManifestPath)))
-            Check(manifest.RootElement.GetProperty("version").GetInt32() == StudioProject.ManifestVersion && StudioProject.ManifestVersion == 8,
-                "A grouped project is not written as manifest version 8.");
+            Check(manifest.RootElement.GetProperty("version").GetInt32() == StudioProject.ManifestVersion && StudioProject.ManifestVersion == 8
+                && manifest.RootElement.GetProperty("features").EnumerateArray().Select(name => name.GetString()).SequenceEqual([ProjectFeatures.AssetGroups]),
+                "A grouped project is not written as manifest version 8 with the asset-groups feature.");
+        string saved = File.ReadAllText(project.ManifestPath);
+        var later = System.Text.Json.Nodes.JsonNode.Parse(saved)!;
+        later["features"] = new System.Text.Json.Nodes.JsonArray(ProjectFeatures.AssetGroups, "later-feature");
+        File.WriteAllText(project.ManifestPath, later.ToJsonString());
+        Check(Refusal(() => StudioProject.Open(project.ManifestPath)) == "This project needs a newer Sunrise Studio.",
+            "A manifest naming an unknown feature opened.");
+        File.WriteAllText(project.ManifestPath, saved);
         var reopened = StudioProject.Open(project.ManifestPath);
         Check(reopened.AddedAssets.Select(asset => (asset.Id, asset.Group)).SequenceEqual(created.Select(asset => (asset.Id, asset.Group))),
             "Groups did not survive a reopen.");
@@ -69,5 +77,12 @@ internal static class ProjectChecks
             + $"packages={string.Join(",", result.PackageFiles.Select(Path.GetFileName))} entries={build.Allocation.Entries.Count} "
             + $"read-back=equal root-manifests={manifests} notes={result.Notes.Count}");
         foreach (string note in result.Notes) Console.WriteLine("  note " + note);
+    }
+
+    private static string Refusal(Action action)
+    {
+        try { action(); }
+        catch (InvalidDataException error) { return error.Message; }
+        return "";
     }
 }
