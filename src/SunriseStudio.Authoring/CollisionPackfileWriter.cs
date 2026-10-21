@@ -223,7 +223,7 @@ public sealed class HavokPackfileBuilder
 public static class CollisionPackfileWriter
 {
     // Class name tables of installed per-mesh packfiles: Havok's reflection classes, then the root.
-    private static readonly (uint, string)[] ReflectionClasses =
+    internal static readonly (uint, string)[] ReflectionClasses =
         [(0x33D42383, "hkClass"), (0xB0EFA719, "hkClassMember"), (0x8A3609CF, "hkClassEnum"), (0xCE6F8A6C, "hkClassEnumItem")];
     private const uint CompressedMeshSignature = 0x7A192C95, ConvexVerticesSignature = 0xFFAFC3AA;
     private const int PerMeshUserTag = 1;

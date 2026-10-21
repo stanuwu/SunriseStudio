@@ -52,6 +52,7 @@ public sealed class StudioPageRegistry
     {
         Register(new PreviewPage());
         Register(new ScenePage());
+        Register(new TerrainPage());
         Register(new MaterialsPage());
         Register(new ShadersPage());
         Register(new RelatedAssetsPage());
