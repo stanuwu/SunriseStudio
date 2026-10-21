@@ -1,9 +1,8 @@
 using SunriseStudio.Packages;
 using static Checks;
 
-// Optional: --parity <python> <world-studio folder> <driver script> <output folder> compares with World Studio.
+// WORLD_STUDIO_SOURCE (tools/world-studio) and SUNRISE_PARITY_DRIVERS (the lab's parity drivers) add World Studio parity.
 string folder = Path.Combine(Path.GetTempPath(), "sunrise-placement-tests-" + Guid.NewGuid().ToString("N"));
-int parity = Array.IndexOf(args, "--parity");
 try
 {
     string installation = Path.Combine(folder, "installation");
@@ -11,7 +10,7 @@ try
     using var catalog = PackageCatalog.Open(installation, cacheOptions: new() { Enabled = false });
     var installed = catalog.Entries.ToDictionary(entry => entry.TagHash, entry => catalog.ReadOriginal(entry.TagHash));
     var compiled = PlacementChecks.Run(catalog, folder);
-    if (parity >= 0) ParityChecks.Run(catalog, compiled, args[parity + 1], args[parity + 2], args[parity + 3], args[parity + 4]);
+    ParityChecks.Run(catalog, compiled, Path.Combine(folder, "parity"));
     Check(installed.All(pair => catalog.ReadOriginal(pair.Key).AsSpan().SequenceEqual(pair.Value)),
         "An installed fixture entry changed.");
     Console.WriteLine($"PASS placement-source-bytes entries={installed.Count} unchanged=all");

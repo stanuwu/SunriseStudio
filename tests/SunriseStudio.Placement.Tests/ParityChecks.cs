@@ -7,12 +7,20 @@ using static StaticPlacementFixture;
 
 /**
  * Runs World Studio's compilers on the same placements and compares the bytes. The driver and World Studio
- * live outside this repository, so the check runs only when they are named on the command line.
+ * live outside this repository, so the check runs only when WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS name them.
  */
 internal static class ParityChecks
 {
-    internal static void Run(PackageCatalog catalog, PlacedFixture placed, string python, string worldStudio, string driver, string output)
+    internal static void Run(PackageCatalog catalog, PlacedFixture placed, string output)
     {
+        string? worldStudio = Environment.GetEnvironmentVariable("WORLD_STUDIO_SOURCE");
+        string? drivers = Environment.GetEnvironmentVariable("SUNRISE_PARITY_DRIVERS");
+        if (string.IsNullOrWhiteSpace(worldStudio) || string.IsNullOrWhiteSpace(drivers))
+        {
+            Console.WriteLine("SKIP placement-parity: set WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS.");
+            return;
+        }
+        string python = Environment.GetEnvironmentVariable("PYTHON") ?? "python", driver = Path.Combine(drivers, "place_static_parity.py");
         Directory.CreateDirectory(output);
         var generated = placed.Compiled.GeneratedAssets.ToDictionary(asset => asset.Native.Reference);
         var table = generated[0x8080966D];
