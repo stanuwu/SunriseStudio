@@ -124,11 +124,12 @@ try
     Reject(() => NavigationDecoder.Decode(broken, generated.Mesh, generated.Graph), "Wrong root size must be refused");
     Reject(() => NavigationGenerator.Generate([new([new(new(float.NaN, 0, 0), Vector3.One, Vector3.Zero)])]), "NaN source must be refused");
     FixtureChecks.Run(scratch, generated, Check);
-    string? oracle = Argument("--oracle") ?? Environment.GetEnvironmentVariable("SUNRISE_NAVIGATION_ORACLE");
-    if (oracle is not null)
+    // World Studio and the parity driver live outside this repository; WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS name them.
+    string? oracle = Environment.GetEnvironmentVariable("WORLD_STUDIO_SOURCE"), drivers = Environment.GetEnvironmentVariable("SUNRISE_PARITY_DRIVERS");
+    if (!string.IsNullOrWhiteSpace(oracle) && !string.IsNullOrWhiteSpace(drivers))
     {
-        var start = new ProcessStartInfo("python") { UseShellExecute = false };
-        foreach (string arg in new[] { "-I", Path.Combine(AppContext.BaseDirectory, "parity.py"), oracle, scratch }) start.ArgumentList.Add(arg);
+        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("PYTHON") ?? "python") { UseShellExecute = false };
+        foreach (string arg in new[] { "-I", Path.Combine(drivers, "navigation_parity.py"), oracle, scratch }) start.ArgumentList.Add(arg);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Cannot start Python parity check.");
         process.WaitForExit(); Check(process.ExitCode == 0, "Python navigation parity check");
         foreach (string name in fixtures.Keys)
@@ -139,7 +140,7 @@ try
             Check(python.Layers.Length == 3, "Studio reads Python output");
         }
     }
-    else Console.WriteLine("Python parity skipped: set SUNRISE_NAVIGATION_ORACLE to the World Studio directory.");
+    else Console.WriteLine("SKIP navigation python-parity: set WORLD_STUDIO_SOURCE and SUNRISE_PARITY_DRIVERS.");
     if (Argument("--game-root") is { } game)
     {
         using var catalog = PackageCatalog.Open(game, Argument("--keys"), new() { Enabled = false });
