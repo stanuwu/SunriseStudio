@@ -187,6 +187,15 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
             var data = ReadBytes(tag);
             switch (entry.Reference)
             {
+                case 0x80808CB6: // navigation root
+                    Navigation(tag, data, bubble, transform);
+                    break;
+                case 0x80808CB8: // standalone mesh inspection validates every array
+                    _ = NavigationDecoder.DecodeMesh(data.Bytes);
+                    break;
+                case 0x80808CBA: // agent and point graph
+                    _ = NavigationDecoder.DecodeGraph(data.Bytes);
+                    break;
                 case SMapRoot.Class:
                 {
                     var entries = SceneReads.Rows<SMapRoot, MapBubbleRef>(data, 0, nameof(SMapRoot.MapEntries), MapBubbleRef.Class);
@@ -369,6 +378,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
     /** A row whose resource names decoded content visits it; any other row becomes a marker. */
     internal bool VisitsChild(byte[] data, int resource, uint resourceClass) => resourceClass switch
     {
+        0x80808C76 => data.Has(resource, 0x20), // navigation instance record
         SStaticInstancesPayload.Class => TagView.FitsThrough<SStaticInstancesPayload>(data, resource,
             nameof(SStaticInstancesPayload.StaticOwner)),
         SSpawnPointsPayload.Class => TagView.FitsThrough<SSpawnPointsPayload>(data, resource, nameof(SSpawnPointsPayload.SpawnPoints)),
@@ -537,7 +547,11 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                     throw new InvalidDataException("Placed AO resource has the wrong map class.");
                 scene.OcclusionOwners.Add(new NativeOcclusionOwner(bubble, tag, row, map));
             }
-            if (VisitsChild(data, resource, resourceClass) && resourceClass == STerrainPayload.Class)
+            if (VisitsChild(data, resource, resourceClass) && resourceClass == 0x80808C76)
+            {
+                Visit(data.U32(resource + 0x18), bubble, transform, depth + 1);
+            }
+            else if (VisitsChild(data, resource, resourceClass) && resourceClass == STerrainPayload.Class)
             {
                 terrainResource = data.AsMemory(resource, Unsafe.SizeOf<STerrainPayload>());
                 try { Visit(TagView.At<STerrainPayload>(data, resource).Terrain, bubble, transform, depth + 1); }

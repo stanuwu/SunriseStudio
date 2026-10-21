@@ -5,7 +5,7 @@ namespace SunriseStudio.Viewport;
 
 public sealed partial class AssetViewport
 {
-    private enum LineStream { Grid, Markers, SelectedMarkers, Points, SelectedPoints, Cursor }
+    private enum LineStream { Grid, Markers, SelectedMarkers, Points, SelectedPoints, Cursor, Navigation }
     private readonly Dictionary<LineStream, GpuLineMesh> overlayLineMeshes = [];
     public bool CacheOverlayLines { get; set; } = true;
     public int OverlayLineUploads => overlayLineMeshes.Values.Sum(mesh => mesh.Uploads);

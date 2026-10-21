@@ -391,6 +391,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     public void Clear()
     {
         ClearOverlayLines();
+        navigationScene = null; navigationLines.Clear();
         ClearCollision();
         if (livePoseMeshes.Count > 0) ClearLivePoseGeometry();
         if (liveIndices.Count > 0) ClearLiveTransforms();
@@ -1381,6 +1382,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         DrawVolumes(view);
         RecordOverlayPhase(5, ref phase);
         if (Scene is not null) DrawMarkers(view);
+        if (Scene is not null) DrawNavigation(view);
         RecordOverlayPhase(6, ref phase);
         DrawPointProxies(view);
         RecordOverlayPhase(7, ref phase);

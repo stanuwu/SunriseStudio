@@ -37,9 +37,9 @@ public sealed class SceneVisibility
     private ulong preparedBoundsRevision;
     public HashSet<SceneLayer> HiddenLayers { get; } = [];
     /** Hides what a layer draws: meshes, volume shapes and effect particles. */
-    public HashSet<SceneLayer> HiddenGeometryLayers { get; } = [];
+    public HashSet<SceneLayer> HiddenGeometryLayers { get; } = [SceneLayer.Navigation];
     /** Hides a layer's placement boxes: markers and point proxies. */
-    public HashSet<SceneLayer> HiddenOverlayLayers { get; } = [];
+    public HashSet<SceneLayer> HiddenOverlayLayers { get; } = [SceneLayer.Navigation];
     public HashSet<uint> HiddenBubbles { get; } = [];
     /**
      * Bubbles a live game has loaded; null shows every bubble. It is apart from the user's hidden
