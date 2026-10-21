@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene.Collision;
 using SunriseStudio.Tags.Generated;
@@ -144,7 +144,7 @@ internal sealed class StaticCollisionRule : IObjectEditRule
             Multiply(owner.Rotation, row.Rotation), owner.Scale.X * row.Scale);
 
     /** Undoes the entity placement; the client applies only its rotation and translation. */
-    private static QsTransform ToLocal(QsTransform placement, QsTransform world)
+    internal static QsTransform ToLocal(QsTransform placement, QsTransform world)
     {
         var inverse = Quaternion.Conjugate(Quaternion.Normalize(placement.Rotation));
         return new(Rotate(inverse, world.Translation - placement.Translation),

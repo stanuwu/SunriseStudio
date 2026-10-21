@@ -80,14 +80,16 @@ public sealed partial class ObjectEditContext
     internal void CompleteGenerated(uint tag, byte[] bytes,
         IReadOnlyDictionary<int, PackageInstanceOrigin>? instances = null,
         IReadOnlyDictionary<int, PackagePlacementOrigin>? placements = null,
-        IReadOnlyList<PackageInstanceReplacement>? replaces = null)
+        IReadOnlyList<PackageInstanceReplacement>? replaces = null,
+        IReadOnlyDictionary<int, PackageAddedInstance>? added = null)
     {
         generated[tag] = generated[tag] with
         {
             Data = bytes,
             InstanceOrigins = instances ?? new Dictionary<int, PackageInstanceOrigin>(),
             PlacementOrigins = placements ?? new Dictionary<int, PackagePlacementOrigin>(),
-            Replaces = replaces ?? []
+            Replaces = replaces ?? [],
+            AddedInstances = added ?? new Dictionary<int, PackageAddedInstance>()
         };
     }
 }

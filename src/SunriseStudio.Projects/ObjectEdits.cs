@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text.Json.Serialization;
 using SunriseStudio.Packages;
 using SunriseStudio.Tags;
@@ -53,7 +53,8 @@ public sealed record ObjectEditTarget(uint SourceTag, ObjectEditLayout Layout, i
     int Index, ulong Identity, string OriginalSha256)
 {
     /** Edits merge by this key, so one object has one entry. */
-    [JsonIgnore] public string Key => $"{SourceTag:X8}/{Layout}/{Offset:X}";
+    [JsonIgnore] public string Key => Layout == ObjectEditLayout.AddedStaticInstance
+        ? $"{SourceTag:X8}/{Layout}/{Offset:X}/{Identity:X}" : $"{SourceTag:X8}/{Layout}/{Offset:X}";
 
     /** Checks what the manifest can check without the row layouts. */
     public void Validate()
@@ -64,9 +65,13 @@ public sealed record ObjectEditTarget(uint SourceTag, ObjectEditLayout Layout, i
     }
 }
 
+/** Where an added static copy draws: the 0x80808A54 map container, and whether its collision is copied too. */
+public sealed record AddedPlacement(uint Container, bool Collision = true);
+
 /**
  * Only set values are written. An unset value keeps the stored bytes exactly.
  * Rotation is a unit quaternion x, y, z, w. Name is a display label only.
+ * An added placement sets every transform value and Added; it stores no game bytes.
  */
 public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name = null,
@@ -139,7 +144,8 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
         if (Structural) { ValidateStructural(); return; }
         if (Model is not null) throw new InvalidDataException("Only an added placement names a model.");
         bool bounds = Target.Layout == ObjectEditLayout.TriggerVolume;
-        if (bounds != (Kind == ObjectEditKind.TriggerBounds))
+        bool added = Target.Layout == ObjectEditLayout.AddedStaticInstance;
+        if (bounds != (Kind == ObjectEditKind.TriggerBounds) || added != (Kind == ObjectEditKind.AddedPlacement))
             throw new InvalidDataException("Object edit kind does not match its layout.");
         // A trigger volume edit sets both bounds corners, the row's placement position, or both.
         if (bounds && ((Minimum is null) != (Maximum is null) || Rotation is not null || Scale is not null))

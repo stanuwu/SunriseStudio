@@ -30,7 +30,8 @@ public sealed record AddedAssetSnapshot(AddedProjectAsset Asset, byte[] Data);
 
 /**
  * Mod stays null and unwritten until set, so older Studio builds still open the file. Versions:
- * object edits 2, wide hashes 3, config bindings 4, names 5, groups 6, group collision parts 7.
+ * object edits 2, wide hashes 3, config bindings 4, names 5, groups 6, group collision parts 7,
+ * added placements 8.
  */
 public sealed record ProjectManifest(int Version, string Name,
     IReadOnlyList<ProjectAssetChange> Changes, IReadOnlyList<AddedProjectAsset> AddedAssets,

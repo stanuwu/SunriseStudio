@@ -65,6 +65,8 @@ public sealed partial class StudioProject
             || data.Version == 1 && data.ObjectEdits is not null || data.Version == 2 && data.ObjectEdits is null)
             throw new InvalidDataException("Unsupported project manifest.");
         foreach (var edit in data.ObjectEdits ?? []) edit.Validate();
+        if (data.Version < 8 && (data.ObjectEdits ?? []).Any(edit => edit.Kind == ObjectEditKind.AddedPlacement))
+            throw new InvalidDataException("Added placements require project manifest version 8.");
         if ((data.ObjectEdits ?? []).Select(edit => edit.Key).Distinct().Count() != (data.ObjectEdits?.Count ?? 0))
             throw new InvalidDataException("Project contains two edits of one object.");
         if (data.Changes.Select(x => x.TagHash).Distinct().Count() != data.Changes.Count
@@ -315,7 +317,8 @@ public sealed partial class StudioProject
         bool names = value.ObjectNames is { Count: > 0 };
         bool groups = value.ObjectGroups is { Count: > 0 };
         bool parts = groups && value.ObjectGroups!.Any(group => group.CollisionParts is not null);
-        int version = parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
+        bool added = objects && value.ObjectEdits!.Any(edit => edit.Kind == ObjectEditKind.AddedPlacement);
+        int version = added ? 8 : parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
         if (value.Version == version && ReferenceEquals(assets, value.AddedAssets)
             && (objects || value.ObjectEdits is null) && (bindings || value.ConfigBindings is null)
             && (names || value.ObjectNames is null) && (groups || value.ObjectGroups is null)) return value;
