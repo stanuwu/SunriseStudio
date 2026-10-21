@@ -23,14 +23,18 @@ public sealed record ProjectAssetAddition(string Name, byte[] Data,
     NativeAssetMetadata? Native = null, uint? BaseTagHash = null);
 
 public sealed record ProjectAssetEdits(IReadOnlyDictionary<uint, byte[]> Assets,
-    IReadOnlyDictionary<string, byte[]>? AddedAssets = null);
+    IReadOnlyDictionary<string, byte[]>? AddedAssets = null)
+{
+    /** Null keeps registrations; a list replaces them in the same transaction as their assets. */
+    public IReadOnlyList<AddedActivity>? AddedActivities { get; init; }
+}
 
 /** Undo holds reconstructed data in memory; derived assets still save only base-relative deltas. */
 public sealed record AddedAssetSnapshot(AddedProjectAsset Asset, byte[] Data);
 
 /**
  * Mod stays null and unwritten until set, so older Studio builds still open the file. Versions:
- * object edits 2, wide hashes 3, config bindings 4, names 5, groups 6, group collision parts 7.
+ * object edits 2, wide hashes 3, config bindings 4, names 5, groups 6, group collision parts 7, activities 8.
  */
 public sealed record ProjectManifest(int Version, string Name,
     IReadOnlyList<ProjectAssetChange> Changes, IReadOnlyList<AddedProjectAsset> AddedAssets,
@@ -43,6 +47,8 @@ public sealed record ProjectManifest(int Version, string Name,
     public IReadOnlyList<ProjectObjectName>? ObjectNames { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ProjectObjectGroup>? ObjectGroups { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<AddedActivity>? AddedActivities { get; init; }
 }
 
 /**

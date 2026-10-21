@@ -38,7 +38,7 @@ public static partial class ProjectBuilder
      */
     private static IReadOnlyList<RootManifestAsset> PlanRootManifests(PackageCatalog catalog,
         IReadOnlyList<RootManifestInput> inputs, IReadOnlyList<AddedEntry> added,
-        IReadOnlyDictionary<uint, byte[]> edited)
+        IReadOnlyDictionary<uint, byte[]> edited, IReadOnlyList<AddedActivity> activities)
     {
         var supplied = inputs.Where(input => input.Reference == PackageManifest.ClassId
                 && TagView.FitsThrough<ManifestView>(input.Data, 0, "RootTag"))
@@ -55,6 +55,8 @@ public static partial class ProjectBuilder
                 input.Data.Length, $"w64_sunrise_{input.PackageId:x4}_0", input.PackageId, input.EntryIndex) { TypeInfo = input.TypeInfo };
         }
         var edges = PointerEdges(added.Select(asset => (asset.Tag, asset.Data)), added).ToHashSet();
+        foreach (var activity in activities)
+            edges.Add((activity.Tag(), activity.MapRootTag));
         foreach (var asset in added)
             if (authored.ContainsKey(asset.Class) && asset.Class != asset.Tag)
                 edges.Add((asset.Tag, asset.Class));

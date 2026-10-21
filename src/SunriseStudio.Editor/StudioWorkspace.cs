@@ -78,7 +78,10 @@ public sealed partial class StudioWorkspace : IDisposable
         IReadOnlyDictionary<string, ObjectEdit?>? ObjectStates = null,
         IReadOnlyList<ProjectConfigBinding>? ConfigStates = null,
         ImportSelection? ReverseSelection = null,
-        IReadOnlyDictionary<string, byte[]>? ContentFiles = null);
+        IReadOnlyDictionary<string, byte[]>? ContentFiles = null)
+    {
+        public IReadOnlyList<AddedActivity>? ActivityStates { get; init; }
+    }
     private sealed record ImportSelection(uint Tag, string? AddedId, AssetOpenContext? Context);
     private readonly Stack<EditFrame> undo = [];
     private readonly Stack<EditFrame> redo = [];
@@ -535,6 +538,7 @@ public sealed partial class StudioWorkspace : IDisposable
         }
         BeforeAssetMutation?.Invoke();
         if (project is not null) project.ObjectEditCompiler ??= ObjectEditCompiler.Default;
+        if (project is not null) project.ActivityRegistrationCompiler ??= ActivityRegistrationCompiler.Default;
         if (project is not null) project.ConfigBindingCompiler ??= CuiConfigBindingCompiler.Default;
         Project = project;
         LastBuild = null; LastInstall = null;
@@ -767,6 +771,7 @@ public sealed partial class StudioWorkspace : IDisposable
             StringComparer.Ordinal);
         var objects = frame.ObjectStates?.Keys.ToDictionary(key => key, Project!.FindObjectEdit, StringComparer.Ordinal);
         var next = frame with { Bytes = bytes, AddedStates = states, ObjectStates = objects,
+            ActivityStates = frame.ActivityStates is null ? null : Project!.AddedActivities.ToArray(),
             ConfigStates = frame.ConfigStates is null ? null : Project!.ConfigBindings.ToArray() };
         return frame.ReverseSelection is not { } selection ? next : next with
         {
@@ -797,7 +802,7 @@ public sealed partial class StudioWorkspace : IDisposable
             var edits = frame.Selection == 0 && frame.AddedAssetId is { } id && frame.Bytes.ContainsKey(0)
                 ? new ProjectAssetEdits(new Dictionary<uint, byte[]>(), new Dictionary<string, byte[]> { [id] = frame.Bytes[0] })
                 : SplitAssetEdits(frame.Bytes);
-            Project!.RestoreTransaction(edits, frame.AddedStates ?? new Dictionary<string, AddedAssetSnapshot?>(), Catalog,
+            Project!.RestoreTransaction(edits with { AddedActivities = frame.ActivityStates }, frame.AddedStates ?? new Dictionary<string, AddedAssetSnapshot?>(), Catalog,
                 frame.ObjectStates);
         }, frame.AddedAssetId is null && frame.AddedStates is not { Count: > 0 } ? frame.Bytes.Keys : null);
     }

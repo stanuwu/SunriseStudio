@@ -27,6 +27,7 @@ public static partial class ProjectBuilder
         var config = project.CompileConfigBindings(catalog);
         var tags = CompileContent(project, catalog, tagSchema, project.AddedAssets.Where(x => x.Native is not null)
             .Select(x => x.Native!.PackageId).Concat(objects.GeneratedAssets.Select(x => x.Native.PackageId)));
+        var activities = project.CompileActivities(catalog);
         if (project.Changes.Count == 0 && objects.Assets.Count == 0 && config.Assets.Count == 0
             && project.AddedAssets.Count == 0 && objects.GeneratedAssets.Count == 0 && tags.Count == 0)
             throw new InvalidOperationException("The project has no changes to build.");
@@ -38,17 +39,19 @@ public static partial class ProjectBuilder
         var addedTags = project.AddedAssets.Where(asset => asset.Native is not null)
             .Select(asset => TagHashes.Make(asset.Native!.PackageId, asset.Native!.EntryIndex!.Value)).ToHashSet();
         foreach (uint tag in project.Changes.Select(change => change.TagHash).Union(objects.Assets.Keys)
-            .Union(config.Assets.Keys).Where(tag => !addedTags.Contains(tag)).Order())
+            .Union(config.Assets.Keys).Union(activities.Keys).Where(tag => !addedTags.Contains(tag)).Order())
         {
             if (!catalog.TryGetEntry(tag, out _))
                 throw new InvalidDataException($"Original asset {tag:X8} is missing.");
-            byte[] data = config.Assets.TryGetValue(tag, out var configured) ? configured
+            byte[] data = activities.TryGetValue(tag, out var registered) ? registered
+                : config.Assets.TryGetValue(tag, out var configured) ? configured
                 : objects.Assets.TryGetValue(tag, out var compiled) ? compiled.ToArray() : project.ReadAsset(tag, catalog);
             // An entry equal to its installed original needs no patch.
             if (!data.AsSpan().SequenceEqual(catalog.ReadOriginal(tag))) edited[tag] = data;
         }
         var added = project.AddedAssets.Where(x => x.Native is not null)
-            .Select(x => (Asset: x, Data: config.Assets.TryGetValue(TagHashes.Make(x.Native!.PackageId, x.Native!.EntryIndex!.Value), out var configured)
+            .Select(x => (Asset: x, Data: activities.TryGetValue(TagHashes.Make(x.Native!.PackageId, x.Native!.EntryIndex!.Value), out var registered) ? registered
+                : config.Assets.TryGetValue(TagHashes.Make(x.Native!.PackageId, x.Native!.EntryIndex!.Value), out var configured)
                 ? configured : project.ReadAddedAsset(x.Id, catalog))).ToArray();
         var reserved = added.Select(item => item.Asset.Native!.PackageId).ToHashSet();
         if (objects.GeneratedAssets.Any(asset => reserved.Contains(asset.Native.PackageId)))
@@ -74,8 +77,8 @@ public static partial class ProjectBuilder
         addedEntries = [.. addedEntries, .. tags.Select(tag => new AddedEntry(TagFileId(tag.Name), tag.TagHash, tag.ClassId, tag.Data,
             tag.WideHash == 0 ? WideHashAliases.Empty : new([tag.WideHash]), tag.TypeInfo))];
         var rootManifests = PlanRootManifests(catalog, [.. added.Select(item => RootManifestInput.Of(item.Asset, item.Data)),
-            .. tags.Select(RootManifestInput.Of)], addedEntries, edited);
-        var manifests = PlanManifests(catalog, edited, addedEntries);
+            .. tags.Select(RootManifestInput.Of)], addedEntries, edited, project.AddedActivities);
+        var manifests = PlanManifests(catalog, edited, addedEntries, project.AddedActivities);
         foreach (var (tag, data) in manifests.Data) edited.Add(tag, data);
         var replacements = new Dictionary<string, Dictionary<int, byte[]>>(StringComparer.OrdinalIgnoreCase);
         foreach (var (tag, data) in edited)
@@ -85,7 +88,7 @@ public static partial class ProjectBuilder
             if (!replacements.TryGetValue(source, out var group)) replacements.Add(source, group = []);
             group.Add(entry.EntryIndex, data);
         }
-        var dependencies = PlanDependencies(catalog, edited, generated, addedEntries);
+        var dependencies = PlanDependencies(catalog, edited, generated, addedEntries, project.AddedActivities);
         var changedMisc = dependencies.Misc.Where(pair => !pair.Value.AsSpan().SequenceEqual(PackageWriter.ReadMisc(pair.Key)))
             .ToDictionary(StringComparer.OrdinalIgnoreCase);
         // Checked before any folder is made, so a no-op build leaves nothing behind.
@@ -334,13 +337,13 @@ public static partial class ProjectBuilder
      * entry pointing at it, when that manifest already lists entries of the added entry's class.
      */
     private static ManifestPlan PlanManifests(PackageCatalog catalog, IReadOnlyDictionary<uint, byte[]> edited,
-        IReadOnlyList<AddedEntry> added)
+        IReadOnlyList<AddedEntry> added, IReadOnlyList<AddedActivity> activities)
     {
         var plan = new ManifestPlan([], []);
         var resident = added.Where(asset => PackageNativeDependencies.IsResident(asset.TypeInfo)).ToArray();
         var edges = PointerEdges(edited.Select(pair => (pair.Key, pair.Value))
             .Concat(resident.Select(asset => (asset.Tag, asset.Data))), resident);
-        var nativeEdges = NativeDependencyEdges(catalog, edited, added);
+        var nativeEdges = NativeDependencyEdges(catalog, edited, added).Concat(ActivityEdges(activities)).ToHashSet();
         var socketDependencies = PlanSocketDependencies(catalog, edited, added);
         var sources = edges.Concat(nativeEdges).Select(edge => edge.From).Where(edited.ContainsKey).ToHashSet();
         if (sources.Count == 0 && socketDependencies.Count == 0) return plan;
@@ -435,7 +438,7 @@ public static partial class ProjectBuilder
 
     /** Generated entries join source records; added entries follow references from listed entries. */
     private static DependencyPlan PlanDependencies(PackageCatalog catalog, IReadOnlyDictionary<uint, byte[]> edited,
-        IReadOnlyList<GeneratedObjectAsset> generated, IReadOnlyList<AddedEntry> added)
+        IReadOnlyList<GeneratedObjectAsset> generated, IReadOnlyList<AddedEntry> added, IReadOnlyList<AddedActivity> activities)
     {
         var misc = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         var rows = new List<DependencyEdit>();
@@ -494,7 +497,7 @@ public static partial class ProjectBuilder
         var native = NativeDependencyEdges(catalog, edited, added);
         var edges = PointerEdges(edited.Select(pair => (pair.Key, pair.Value))
             .Concat(generated.Select(asset => (asset.TagHash, asset.Data)))
-            .Concat(added.Select(asset => (asset.Tag, asset.Data))), added).Concat(native).Distinct().ToArray();
+            .Concat(added.Select(asset => (asset.Tag, asset.Data))), added).Concat(native).Concat(ActivityEdges(activities)).Distinct().ToArray();
         bool Lists((string Path, int Record) record, uint tag) =>
             tables[record.Path].Table.Records[record.Record].Lists(TagHashes.Split(tag).PackageId, TagHashes.Split(tag).EntryIndex);
         for (bool changed = true; changed;)

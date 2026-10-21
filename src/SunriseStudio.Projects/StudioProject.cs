@@ -11,7 +11,7 @@ public sealed partial class StudioProject
 {
     public const string ProjectFileName = "sunrise.project.json";
     // The newest manifest version this build reads and writes.
-    public const int ManifestVersion = 7;
+    public const int ManifestVersion = 8;
     // A whole ported region lists about 76,000 assets, about 50 MB of manifest.
     private const int MaximumManifestBytes = 128 * 1024 * 1024;
     private ProjectManifest manifest;
@@ -65,6 +65,11 @@ public sealed partial class StudioProject
             || data.Version == 1 && data.ObjectEdits is not null || data.Version == 2 && data.ObjectEdits is null)
             throw new InvalidDataException("Unsupported project manifest.");
         foreach (var edit in data.ObjectEdits ?? []) edit.Validate();
+        if (data.AddedActivities is not null && data.Version < 8)
+            throw new InvalidDataException("Activity registrations require project manifest version 8.");
+        ValidateActivities(data.AddedActivities ?? [], data.AddedAssets);
+        data = data with { AddedActivities = data.AddedActivities is { Count: > 0 }
+            ? Array.AsReadOnly(data.AddedActivities.ToArray()) : null };
         if ((data.ObjectEdits ?? []).Select(edit => edit.Key).Distinct().Count() != (data.ObjectEdits?.Count ?? 0))
             throw new InvalidDataException("Project contains two edits of one object.");
         if (data.Changes.Select(x => x.TagHash).Distinct().Count() != data.Changes.Count
@@ -315,14 +320,16 @@ public sealed partial class StudioProject
         bool names = value.ObjectNames is { Count: > 0 };
         bool groups = value.ObjectGroups is { Count: > 0 };
         bool parts = groups && value.ObjectGroups!.Any(group => group.CollisionParts is not null);
-        int version = parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
+        bool activities = value.AddedActivities is { Count: > 0 };
+        int version = activities ? 8 : parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
         if (value.Version == version && ReferenceEquals(assets, value.AddedAssets)
             && (objects || value.ObjectEdits is null) && (bindings || value.ConfigBindings is null)
-            && (names || value.ObjectNames is null) && (groups || value.ObjectGroups is null)) return value;
+            && (names || value.ObjectNames is null) && (groups || value.ObjectGroups is null)
+            && (activities || value.AddedActivities is null)) return value;
         return value with { Version = version, AddedAssets = assets,
             ObjectEdits = objects ? value.ObjectEdits : null,
             ConfigBindings = bindings ? value.ConfigBindings : null, ObjectNames = names ? value.ObjectNames : null,
-            ObjectGroups = groups ? value.ObjectGroups : null };
+            ObjectGroups = groups ? value.ObjectGroups : null, AddedActivities = activities ? value.AddedActivities : null };
     }
 
     private static byte[] SerializeManifest(ProjectManifest value)
