@@ -290,6 +290,7 @@ internal static class PlacementChecks
         Check(project.RecordObjectEdits(edits, catalog), "Recording two placements saved nothing.");
         var manifest = JsonNode.Parse(File.ReadAllText(project.ManifestPath))!;
         Check(manifest["version"]!.GetValue<int>() == 8 && manifest["objectEdits"]!.AsArray().Count == 2
+            && manifest["features"]!.AsArray().Select(name => name!.GetValue<string>()).SequenceEqual([ProjectFeatures.AddedPlacements])
             && manifest["objectEdits"]![0]!["added"]!["container"]!.GetValue<uint>() == Container,
             "The manifest did not save version 8 placement recipes.");
         Check(project.Changes.Count == 0 && project.AddedAssets.Count == 0, "The project stored game bytes for a placement.");
@@ -308,7 +309,12 @@ internal static class PlacementChecks
         var old = JsonNode.Parse(File.ReadAllText(reopened.ManifestPath))!; old["version"] = 7;
         File.WriteAllText(reopened.ManifestPath, old.ToJsonString());
         Throws<InvalidDataException>(() => StudioProject.Open(reopened.ManifestPath));
-        Console.WriteLine($"PASS placement-project version=8 recipes=2 deltas=0 reopen=same package-readback={readback} remove=1-row version7=refused");
+        old["version"] = 8; old["features"] = new JsonArray(ProjectFeatures.AddedPlacements, "later-feature");
+        File.WriteAllText(reopened.ManifestPath, old.ToJsonString());
+        Check(Throws<InvalidDataException>(() => StudioProject.Open(reopened.ManifestPath)).Message == "This project needs a newer Sunrise Studio.",
+            "A manifest naming an unknown feature opened.");
+        Console.WriteLine($"PASS placement-project version=8 features={ProjectFeatures.AddedPlacements} recipes=2 deltas=0 reopen=same "
+            + $"package-readback={readback} remove=1-row version7=refused unknown-feature=refused");
     }
 
     /**
