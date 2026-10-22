@@ -249,6 +249,28 @@ public sealed partial class NativeSceneRenderer : IDisposable
     private GpuTexture? studioReflection;
     /** Studio radiance is an editor reference level, independent of map atmosphere. */
     private const float StudioEnvironmentRadiance = .18f;
+    // Asset previews reflect a studio and take a key light that follow the camera; maps keep the flat level.
+    private NativeStudioEnvironment? studioEnvironment;
+    private NativeRenderTargets? antialiased;
+    // The key in camera terms: right, up and toward the eye.
+    private static readonly Vector3 StudioKeyView = Vector3.Normalize(new(-.35f, .55f, .76f));
+    // Key light colour in the sun's units, and the native ambient strength under it: the key models the form and the
+    // ambient keeps the shaded side readable.
+    private static readonly Vector4 StudioKeyColor = new(StudioKeyIntensity, StudioKeyIntensity, StudioKeyIntensity, 1);
+    private const float StudioKeyIntensity = 16, AssetAmbientIntensity = .5f;
+    // Asset previews hold one exposure, as the game's inspect screen does, so a black weapon stays black instead of
+    // metering up to middle grey. The value is where the meter settled for light weapons under the studio key.
+    private const float AssetViewerStops = 1.5f;
+    // An asset's backdrop is one dark blue-grey, about as bright as the viewer gradient, so the sky meter and the
+    // transparents it exposes read as they do over the gradient. The gain alone darkens it; through the film curve it shows as
+    // sRGB 24, 28, 35.
+    private static readonly Vector3 AssetBackdrop = new Vector3(.85f, 1, 1.35f) * .045f;
+    private const float AssetBackdropGain = .13f;
+    /** An asset preview draws its flat backdrop; off draws the viewer gradient behind it, as maps have. */
+    public bool FlatBackdrop { get; set; }
+    private bool AssetBackdropActive => Plan.AssetPreview && FlatBackdrop;
+    private Vector3 studioKey = Vector3.UnitZ;
+    private bool StudioKeyActive => Plan.AssetPreview && LightingMode == NativeLightingMode.Studio;
     private NativeLightingMode lightingMode = NativeLightingMode.Studio;
     /** A lighting change meters the new mode once before displaying it. */
     public NativeLightingMode LightingMode
@@ -259,6 +281,8 @@ public sealed partial class NativeSceneRenderer : IDisposable
             if (!Enum.IsDefined(value)) throw new ArgumentOutOfRangeException(nameof(value));
             if (lightingMode == value) return;
             lightingMode = value;
+            // An asset preview holds its exposure only under its studio key; other lighting meters as maps do.
+            if (Plan.AssetPreview) AutoExposure = value != NativeLightingMode.Studio;
             RequestExposureWarmup();
         }
     }
@@ -325,7 +349,8 @@ public sealed partial class NativeSceneRenderer : IDisposable
         + (AtmosphereActive ? " " + NativeAtmosphere.Policy
             : " Sky fallback: a labelled viewer gradient stands in for the atmosphere lookup; the map has no usable placed atmosphere.")
         + (SkyLightingActive ? " " + NativeSkyLighting.Policy : "")
-        + (StudioLightingActive ? " Studio lighting uses a neutral inspection environment with no atmospheric fog." : "")
+        + (StudioLightingActive ? Plan.AssetPreview ? " " + NativeStudioEnvironment.Policy
+            : " Studio lighting uses a neutral inspection environment with no atmospheric fog." : "")
         + (DeferredActive ? " " + NativeDeferredShading.Policy : " The viewer composite uses diffuse lighting.")
         + $" Ambient intensity 0x{AmbientIntensityKey:X8} = {AmbientIntensity:F2} unless overridden; the viewer default is 1, the authored default 0."
         + (Plan.ParameterOverrides is { Count: > 0 } overrides ? " Explicit TFX parameter overrides: "
@@ -384,6 +409,11 @@ public sealed partial class NativeSceneRenderer : IDisposable
     {
         this.renderer = renderer; Plan = plan;
         ambientOverrides = new(plan.ParameterOverrides ?? new Dictionary<uint, Vector4>());
+        if (plan.AssetPreview)
+        {
+            ambientOverrides[AmbientIntensityKey] = new(AssetAmbientIntensity, 0, 0, 0);
+            AutoExposure = false; ViewerStops = AssetViewerStops;
+        }
         // Resource creation overlaps target and material setup below; binding stays on this thread.
         var preload = new GpuPreload(renderer, plan);
         try
@@ -828,7 +858,8 @@ public sealed partial class NativeSceneRenderer : IDisposable
             if (program.Dependencies.Any(d => d is { Extern: 1, Element: 7 or 8 })) material.UsesExposure = true;
             if (ReferenceEquals(stage, source.Execution.Vertex)) material.VertexShare = ShareOf(stage, program);
             else material.PixelShare = ShareOf(stage, program);
-            var inputs = NativeScenePlan.MaterialInputs(0, Plan.Parameters, null, Plan.AtmosphereSlots, timeOfDay: TimeOfDay);
+            var inputs = NativeScenePlan.MaterialInputs(0, Plan.Parameters, null, Plan.AtmosphereSlots, timeOfDay: TimeOfDay,
+                assetPreview: Plan.AssetPreview);
             NativeGearDye.Apply(inputs, source.GearDyeBit);
             inputs.ObjectChannels = source.ObjectChannels;
             if (decorator is not null)
@@ -916,7 +947,8 @@ public sealed partial class NativeSceneRenderer : IDisposable
             ? lookup.View : absentTexture.View;
         var noise = textures.GetValueOrDefault(Plan.WindNoiseTexture)?.View ?? absentTexture.View;
         // The transparent pass binds sky_hemisphere_mips as extern 3 resource 19; 0x7FF742E96782.
-        var environment = (SkyLightingActive ? skyLighting?.Reflection : StudioLightingActive ? studioReflection : null)?.View
+        var environment = (SkyLightingActive ? skyLighting?.Reflection
+            : StudioLightingActive ? Plan.AssetPreview ? studioEnvironment?.Reflection : studioReflection : null)?.View
             ?? absentTexture.View;
         Span<ID3D11ShaderResourceView?> current = [refraction.Textures[0].View, screenUv.View, lookup2D,
             skyLookup.Textures[0].View, gbuffer.NormalRead.View, sceneDepth ?? absentTexture.View, gbuffer.StencilRead, environment];
@@ -1134,7 +1166,8 @@ public sealed partial class NativeSceneRenderer : IDisposable
         float ev = Math.Clamp(ExposureEv, NativeAmbientLighting.MinimumExposureEv, NativeAmbientLighting.MaximumExposureEv);
         var inputs = NativeScenePlan.MaterialInputs(simulationSeconds, Plan.Parameters, NativeViewInputs.CreateCameraInputs(
             checked((ushort)Targets.Width), checked((ushort)Targets.Height), camera.View, camera.Projection(aspectRatio)),
-            Plan.AtmosphereSlots, camera.Position.Z, NativeAtmosphere.SizeOf(skyLookup.Width, skyLookup.Height), ev, TimeOfDay);
+            Plan.AtmosphereSlots, camera.Position.Z, NativeAtmosphere.SizeOf(skyLookup.Width, skyLookup.Height), ev, TimeOfDay,
+            Plan.AssetPreview);
         windFrame ??= new NativeWindFrame(Plan.WindSettings);
         if (windTime != simulationSeconds) { windFrame.Tick(simulationSeconds); windTime = simulationSeconds; }
         windFrame.Apply(inputs);
@@ -1295,8 +1328,11 @@ public sealed partial class NativeSceneRenderer : IDisposable
             RenderLighting(resolved, camera, simulationSeconds);
             if (!AtmosphereActive)
             {
-                composite.DrawSkyGradient(skyColor, resolved.Depth, cameraView * cameraProjection, AtmosphereFill);
-                composite.DrawSkyGradient(skyLookup, resolved.Depth, cameraView * cameraProjection, AtmosphereFill);
+                // An item orbited in its own frame keeps the gradient's zenith above it on screen.
+                var skyUp = Vector3.Transform(Vector3.UnitZ, camera.Basis);
+                composite.DrawSkyGradient(skyColor, resolved.Depth, cameraView * cameraProjection, AtmosphereFill,
+                    AssetBackdropActive ? AssetBackdrop : null, skyUp);
+                composite.DrawSkyGradient(skyLookup, resolved.Depth, cameraView * cameraProjection, AtmosphereFill, up: skyUp);
             }
             foreach (var reader in lookupReaders)
                 reader.Bindings.Resources[new(GameShaderStage.Pixel, NativeScenePlan.AtmosphereLookupSlot)] = skyLookup.Textures[0].View;
@@ -1313,14 +1349,17 @@ public sealed partial class NativeSceneRenderer : IDisposable
             float skyDisplayLog = float.IsNaN(skyLog) ? SkyFixedLog : skyLog;
             float viewerGain = MathF.Pow(2, float.IsNaN(viewerLog) ? ViewerStops : viewerLog);
             DeferredActive = RenderDeferred(resolved, simulationSeconds, ev, MathF.Pow(2, skyDisplayLog) / viewerGain);
+            float backdrop = AssetBackdropActive && !AtmosphereActive ? AssetBackdropGain : 1;
             composite.Composite(sceneColor, resolved.Albedo, LightingEnabled && LightingError is null ? Lighting?.Diffuse : null,
                 LightingEnabled && LightingError is null ? Lighting?.Specular : null, resolved.Depth, background,
-                skyColor.Textures[0], MathF.Pow(2, skyDisplayLog) / viewerGain, DeferredActive);
+                skyColor.Textures[0], MathF.Pow(2, skyDisplayLog) / viewerGain * backdrop, DeferredActive);
             if (hasForward)
             {
                 // The game's forward pass is pre-exposed: frame row 1 X is the exposure and authored colours are
-                // display values. It runs here in display units, exposed like the sky.
-                var forwardFrame = NativeScenePlan.InspectionFrame(simulationSeconds, ev, MathF.Pow(2, skyDisplayLog - ev));
+                // display values. It runs here in display units, exposed like the sky; an asset preview has no sky
+                // of its own, so its transparents, such as hologram shells, take the item's exposure.
+                float forwardExposure = Plan.AssetPreview ? viewerGain : MathF.Pow(2, skyDisplayLog);
+                var forwardFrame = NativeScenePlan.InspectionFrame(simulationSeconds, ev, forwardExposure / MathF.Pow(2, ev));
                 renderer.UpdateNativeConstantBuffer(forwardFrameConstants, MemoryMarshal.AsBytes(forwardFrame.Vectors.AsSpan()));
                 composite.Scale(sceneColor.Textures[0], forwardColor, viewerGain);
                 // Water refracts the lit colour as it stands before transparents.
@@ -1915,10 +1954,18 @@ public sealed partial class NativeSceneRenderer : IDisposable
                         Plan.Reader.ReadTfxParameterDefaults(NativeScenePlan.RenderGlobalsTag), Plan.Parameters, states);
                     if (studio)
                     {
-                        studioReflection ??= Own(renderer.CreateTexture(1, 1, Format.R32G32B32A32_Float,
+                        GpuTexture reflection;
+                        if (Plan.AssetPreview)
+                        {
+                            studioKey = Vector3.Normalize(camera.Right * StudioKeyView.X + camera.Up * StudioKeyView.Y
+                                - camera.Forward * StudioKeyView.Z);
+                            studioEnvironment ??= Own(new NativeStudioEnvironment(renderer));
+                            reflection = studioEnvironment.Update(studioKey, camera.Right);
+                        }
+                        else reflection = studioReflection ??= Own(renderer.CreateTexture(1, 1, Format.R32G32B32A32_Float,
                             MemoryMarshal.AsBytes(new Vector4[] { new(StudioEnvironmentRadiance, StudioEnvironmentRadiance,
                                 StudioEnvironmentRadiance, 1) }.AsSpan()), 16));
-                        skyLighting.Render(inputs, cameraScope, cameraView, cameraProjection, simulationSeconds, ev, studioReflection);
+                        skyLighting.Render(inputs, cameraScope, cameraView, cameraProjection, simulationSeconds, ev, reflection);
                         StudioLightingActive = true;
                     }
                     else if (skyLighting.Generate(atmosphereFrame!))
@@ -2044,6 +2091,17 @@ public sealed partial class NativeSceneRenderer : IDisposable
         {
             finalCombine ??= Own(new NativeFinalCombine(renderer, Plan.Reader));
             image = finalCombine.Render(exposedColor.Textures[0]);
+            if (Plan.AssetPreview)
+            {
+                if (antialiased is null || antialiased.Width != image.Width || antialiased.Height != image.Height)
+                {
+                    antialiased?.Dispose();
+                    antialiased = renderer.CreateNativeTargets(image.Width, image.Height, Format.R16G16B16A16_Float);
+                }
+                composite.Antialias(image, antialiased);
+                renderer.RestoreMainTarget();
+                image = antialiased.Textures[0];
+            }
         }
         else
         {
@@ -2112,7 +2170,7 @@ public sealed partial class NativeSceneRenderer : IDisposable
         disposed = true;
         display?.Dispose();
         ambient?.Dispose(); localCubemaps?.Dispose(); skyLighting?.Dispose(); ssao?.Dispose(); atmosphere?.Dispose(); deferred?.Dispose();
-        sunLighting?.Dispose(); DisposeShadows(); DisposeLocalLights();
+        sunLighting?.Dispose(); DisposeShadows(); DisposeLocalLights(); antialiased?.Dispose();
         exposedColor?.Dispose(); skyColor?.Dispose(); skyLookup?.Dispose(); sceneColor?.Dispose(); gbuffer?.Dispose();
         screenUv?.Dispose(); refraction?.Dispose(); forwardColor?.Dispose();
         for (int i = owned.Count - 1; i >= 0; i--) owned[i].Dispose();

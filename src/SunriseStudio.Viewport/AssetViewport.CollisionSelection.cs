@@ -234,7 +234,9 @@ public sealed partial class AssetViewport
         distance = float.PositiveInfinity;
         triangle = -1;
         if (!Visibility.ShowCollisionContent || collisionView is not { } data || visibleCollision.Count == 0) return -1;
-        if (size.X <= 0 || size.Y <= 0 || !Matrix4x4.Invert(Camera.ViewProjection(size.X / size.Y), out var inverse)) return -1;
+        // Through the item's pose, as the collision is drawn.
+        if (size.X <= 0 || size.Y <= 0 || !Matrix4x4.Invert(itemPose * Camera.ViewProjection(size.X / size.Y), out var inverse))
+            return -1;
         var ndc = new Vector2(viewportPixel.X / size.X * 2 - 1, 1 - viewportPixel.Y / size.Y * 2);
         var near = Vector4.Transform(new Vector4(ndc, 0, 1), inverse);
         var far = Vector4.Transform(new Vector4(ndc, .5f, 1), inverse);

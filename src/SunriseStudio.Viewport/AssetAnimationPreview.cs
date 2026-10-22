@@ -438,7 +438,7 @@ public sealed class AssetAnimationPreview : IDisposable
         float available = ImGui.GetContentRegionAvail().X;
         float right = ImGui.GetCursorScreenPos().X + available;
         ImGui.BeginDisabled(IsLoading || Source.Binding is null);
-        ImGui.SetNextItemWidth(MathF.Min(250, MathF.Max(1, available)));
+        ImGui.SetNextItemWidth(MathF.Min(160, MathF.Max(1, available)));
         string label = IsLoading ? $"Loading {pendingTag:X8}" : Clip is null ? "Bind pose"
             : Source.ClipNames.GetValueOrDefault(Clip.TagHash, $"{Clip.TagHash:X8}");
         bool clipsOpen = ImGui.BeginCombo("##clip", label, ImGuiComboFlags.HeightLarge);

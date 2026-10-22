@@ -218,7 +218,11 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         framedAnimationClip = animation.Clip;
         animationPoseFramed = true;
         if (!Camera.PivotFree) return;
-        if (Scene?.Instances.Count > 0) Frame();
+        if (Scene?.Instances.Count > 0)
+        {
+            // The pose can turn the whole item, so a profile view is taken again from the posed geometry.
+            FrameItem(FacePreview(Scene));
+        }
         else if (animation.DisplayPose.Rig.Bones.Count > 0)
         {
             var positions = animation.DisplayPose.ObjectTransforms.Select(x => x.Translation).ToArray();
@@ -358,7 +362,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             // A packfile or collision owner has nothing else to show.
             if (scene.Instances.Count == 0 && scene.Markers.Count == 0 && CollisionPossible(scene)) Visibility.ShowCollisionContent = true;
             gridDirty = true;
-            Frame();
+            FrameItem(FacePreview(scene));
             PreparationProgress?.Invoke("Preparing view", 3, 3);
             // Progress presents a loading frame, so report at most every 50 ms.
             while (!work.Wait(50)) PreparationProgress?.Invoke("Uploading geometry", Volatile.Read(ref uploaded), uploads.Count);
@@ -538,6 +542,129 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         imageOffset = Vector2.Zero;
     }
 
+    /**
+     * A native item outside a map orbits in its model's own frame, Z up, turned with it by an animation pose measured on
+     * its largest part, and opens at a three-quarter angle, so a weapon posed at an angle stands level.
+     * Returns false, with the world frame kept, when the scene has no part to take the frame from.
+     */
+    private bool FacePreview(SceneDocument scene)
+    {
+        Camera.Basis = Quaternion.Identity;
+        itemPose = Matrix4x4.Identity;
+        gridHeight = gridStep = 0;
+        if (!Camera.PivotFree || scene.Bubbles.Count != 0 || scene.MapLayers.Count != 0) return false;
+        // Item parts are entity objects; effects, markers and backdrop layers do not place the item.
+        var parts = scene.Instances.Where(instance => instance.Layer is SceneLayer.Geometry or SceneLayer.Objects).ToArray();
+        // The largest part by size sets the frame: a held weapon is smaller than the guardian holding it.
+        var main = parts.MaxBy(instance => Span(instance.Mesh));
+        // Only native items take the preview view; plain geometry keeps the editor's camera.
+        if (main?.Mesh.Native is not { Kind: NativeMeshKind.Entity }
+            || !Matrix4x4.Decompose(main.Transform, out _, out var rotation, out _)) return false;
+        var turn = PoseTurn(main.Mesh);
+        Camera.Basis = Quaternion.Normalize(rotation * turn);
+        itemPose = RestToPose(main, turn);
+        // The grid lies under the posed item, its lines a fixed tenth or so of the item's length apart. A part with a
+        // pose gives its posed vertices, so a guardian stands on the floor in the clip's pose.
+        var toFrame = Matrix4x4.CreateFromQuaternion(Quaternion.Inverse(Camera.Basis));
+        var low = new Vector3(float.MaxValue); var high = new Vector3(float.MinValue);
+        void Extend(Vector3 point) { low = Vector3.Min(low, point); high = Vector3.Max(high, point); }
+        foreach (var part in parts)
+        {
+            var transform = part.Transform * toFrame;
+            if (selection.PosedPositions(part.Mesh) is { } posed && posed.Count == part.Mesh.Vertices.Length)
+                foreach (var point in posed) Extend(Vector3.Transform(point, transform));
+            else
+            {
+                var rest = part.Transform * itemPose * toFrame;
+                foreach (var vertex in part.Mesh.Vertices) Extend(Vector3.Transform(vertex.Position, rest));
+            }
+        }
+        if (low.X <= high.X)
+        {
+            gridHeight = low.Z;
+            gridStep = MathF.Pow(10, MathF.Round(MathF.Log10(MathF.Max(.01f, MathF.Max(high.X - low.X, high.Y - low.Y) / 10))));
+        }
+        Camera.SetView(PreviewYaw, PreviewPitch);
+        return true;
+    }
+
+    /** The squared diagonal of a mesh's rest bounds. */
+    private static float Span(MeshData mesh)
+    {
+        if (mesh.Vertices.Length == 0) return 0;
+        var low = new Vector3(float.MaxValue); var high = new Vector3(float.MinValue);
+        foreach (var vertex in mesh.Vertices) { low = Vector3.Min(low, vertex.Position); high = Vector3.Max(high, vertex.Position); }
+        return (high - low).LengthSquared();
+    }
+
+    /** Frames the scene; an item in its preview view closes in past the bounding-sphere fit. */
+    private void FrameItem(bool preview)
+    {
+        Frame();
+        if (preview) Camera.Zoom(Camera.Orthographic ? OrthographicZoom : ProfileZoom);
+    }
+
+    /**
+     * How a pose turns a mesh, from its spans along mesh X and Z at rest and posed; identity at rest.
+     * Item parts move rigidly with their bone, so two spans fix the turn. A skinned part, such as a guardian's body,
+     * bends with many bones and gives no turn.
+     */
+    private Quaternion PoseTurn(MeshData mesh)
+    {
+        var rest = mesh.Vertices;
+        if (selection.PosedPositions(mesh) is not { } posed || posed.Count != rest.Length || rest.Length < 3)
+            return Quaternion.Identity;
+        int Extreme(Func<Vector3, float> measure, bool most) => Enumerable.Range(0, rest.Length)
+            .Aggregate((a, b) => (measure(rest[b].Position) > measure(rest[a].Position)) == most ? b : a);
+        int left = Extreme(p => p.X, false), right = Extreme(p => p.X, true);
+        int low = Extreme(p => p.Z, false), high = Extreme(p => p.Z, true);
+        // A rigid part keeps the lengths between its vertices; a bending one changes them.
+        bool Rigid(int a, int b)
+        {
+            float length = Vector3.Distance(rest[a].Position, rest[b].Position);
+            return MathF.Abs(Vector3.Distance(posed[a], posed[b]) - length) <= RigidTolerance * MathF.Max(length, 1e-4f);
+        }
+        if (!Rigid(left, right) || !Rigid(low, high) || !Rigid(left, high)) return Quaternion.Identity;
+        Matrix4x4? Axes(Vector3 along, Vector3 across)
+        {
+            if (along.LengthSquared() < 1e-12f) return null;
+            var x = Vector3.Normalize(along);
+            var y = across - x * Vector3.Dot(across, x);
+            if (y.LengthSquared() < 1e-12f) return null;
+            y = Vector3.Normalize(y);
+            var z = Vector3.Cross(x, y);
+            return new(x.X, x.Y, x.Z, 0, y.X, y.Y, y.Z, 0, z.X, z.Y, z.Z, 0, 0, 0, 0, 1);
+        }
+        if (Axes(rest[right].Position - rest[left].Position, rest[high].Position - rest[low].Position) is not { } before
+            || Axes(posed[right] - posed[left], posed[high] - posed[low]) is not { } after) return Quaternion.Identity;
+        // Rows hold each frame's axes, so rest coordinates times the posed rows give the posed direction.
+        return Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(Matrix4x4.Transpose(before) * after));
+    }
+
+    /** Takes the part's rest placement to its pose in world space: its turn about its centre, then the centre's move. */
+    private Matrix4x4 RestToPose(MeshInstance part, Quaternion turn)
+    {
+        var rest = part.Mesh.Vertices;
+        if (selection.PosedPositions(part.Mesh) is not { } posed || posed.Count != rest.Length || rest.Length == 0
+            || !Matrix4x4.Invert(part.Transform, out var toMesh)) return Matrix4x4.Identity;
+        var from = rest.Aggregate(Vector3.Zero, (sum, vertex) => sum + vertex.Position) / rest.Length;
+        var to = posed.Aggregate(Vector3.Zero, (sum, point) => sum + point) / posed.Count;
+        return toMesh * Matrix4x4.CreateTranslation(-from) * Matrix4x4.CreateFromQuaternion(turn)
+            * Matrix4x4.CreateTranslation(to) * part.Transform;
+    }
+
+    // Collision, markers and volumes sit on the item at rest; the preview draws it posed, so they take its pose.
+    private Matrix4x4 itemPose = Matrix4x4.Identity;
+    // The grid's height and spacing in the frame the camera orbits in: under and fitted to the posed item, else the
+    // world floor with spacing that follows the camera.
+    private float gridHeight, gridStep;
+
+    // The preview's yaw and pitch in the model frame. The view closes in this many zoom steps past the bounding-sphere
+    // fit, which leaves room for depth; an orthographic view has none to leave room for, so it closes in further.
+    private const float PreviewYaw = 2.221f, PreviewPitch = -.25f, ProfileZoom = 1, OrthographicZoom = 3;
+    // How far a span may change length, as a share of it, while the part still counts as moving rigidly.
+    private const float RigidTolerance = .02f;
+
     /** Bubble identities may be either package tags or canonical name hashes. */
     public bool FrameBubble(uint bubbleHash)
     {
@@ -592,6 +719,16 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     private (int Width, int Height) heldSize;
     private long heldAt;
 
+    /** The controls show across the view's top while the pointer is on it, or always while pinned. */
+    public bool ControlsOnHover { get; set; }
+    /** With ControlsOnHover, the controls stay shown in a bar above the view instead; their pin toggles it. */
+    public bool ControlsPinned { get; set; }
+    /** With ControlsOnHover, a pop-out button at the controls' top right calls this; null draws none. */
+    public Action? PopOut { get; set; }
+    /** Asset previews draw a flat backdrop; off draws the viewer's sky gradient. One choice for every view. */
+    public static bool FlatBackdrop { get; set; }
+    private bool controlsShown;
+
     /** Draw inside an ImGui window after NewFrame and before the host renders ImGui. */
     public void DrawImGui(Vector2 size)
     {
@@ -599,10 +736,13 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         if (size.X < 1 || size.Y < 1) return;
         var start = ImGui.GetCursorPosY();
         Animation?.Tick(ImGui.GetIO().DeltaTime);
-        DrawToolbar();
-        Animation?.DrawImGui();
+        bool floating = ControlsOnHover && !ControlsPinned;
+        if (ControlsOnHover && ControlsPinned) ControlsBar(size.X);
+        else if (!floating) DrawControls();
         size.Y = MathF.Max(1, size.Y - (ImGui.GetCursorPosY() - start));
         var origin = ImGui.GetCursorScreenPos();
+        // Floating controls draw over the view and take the pointer there.
+        if (floating) ImGui.SetNextItemAllowOverlap();
         ImGui.InvisibleButton("##asset-viewport", size,
             ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight |
             ImGuiButtonFlags.MouseButtonMiddle);
@@ -629,6 +769,37 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             DrawGizmo(draw, origin, size, hovered);
         }
         draw.PopClipRect();
+        if (floating) DrawFloatingControls(origin, size);
+    }
+
+    private void DrawControls()
+    {
+        DrawToolbar();
+        Animation?.DrawImGui();
+    }
+
+    /** The controls across the view's top while the pointer is over it, or while one of their menus is open. */
+    private void DrawFloatingControls(Vector2 origin, Vector2 size)
+    {
+        bool over = ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows | ImGuiHoveredFlags.AllowWhenBlockedByActiveItem)
+            && ImGui.IsMouseHoveringRect(origin, origin + size);
+        controlsShown = over || controlsShown && ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel);
+        if (!controlsShown) return;
+        ImGui.SetCursorScreenPos(origin);
+        ControlsBar(size.X, .88f);
+        // Back to the view's bottom edge with an empty item, since a window must not end on a bare cursor move.
+        ImGui.SetCursorScreenPos(origin with { Y = origin.Y + size.Y });
+        ImGui.Dummy(Vector2.Zero);
+    }
+
+    /** The controls in a padded bar the view's width; a floating bar lets the view show through. */
+    private void ControlsBar(float width, float opacity = 1)
+    {
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(.055f, .065f, .08f, opacity));
+        if (ImGui.BeginChild("##view-controls", new(width, 0), ImGuiChildFlags.AutoResizeY | ImGuiChildFlags.AlwaysUseWindowPadding))
+            DrawControls();
+        ImGui.EndChild();
+        ImGui.PopStyleColor();
     }
 
     /** The scene at this size: a new render, or the last one again while RenderInterval holds the next back. */
@@ -649,6 +820,8 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         float available = ImGui.GetContentRegionAvail().X;
         float right = ImGui.GetCursorScreenPos().X + available;
         float button = ImGui.GetFrameHeight();
+        // The other controls wrap before the corner the pin and pop-out take.
+        if (ControlsOnHover) right -= DrawCornerControls(right, button) + style.ItemSpacing.X;
         var tips = ToolbarTips();
         // A followed camera is placed by the live link each frame; controls that move it are off.
         bool locked = textureData is null && !Camera.PivotFree;
@@ -719,6 +892,12 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             {
                 SetPlayerCamera(false);
                 Camera.Orthographic = orthographic;
+                // An item in its own frame snaps back to its preview view, framed for the projection.
+                if (Camera.Basis != Quaternion.Identity)
+                {
+                    Camera.SetView(PreviewYaw, PreviewPitch);
+                    FrameItem(true);
+                }
             }
             ImGui.EndDisabled();
             if (Scene is not null) DrawPlayerControls(Next);
@@ -727,11 +906,22 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
                 Next(button);
                 ImGuiIcons.Toggle("game-shaders", StudioIcon.Shader, "Game shaders", ref useGameShaders);
             }
+            if (nativeScene is { Plan.AssetPreview: true })
+            {
+                Next(button);
+                bool flat = FlatBackdrop;
+                if (ImGuiIcons.Toggle("flat-backdrop", StudioIcon.Backdrop,
+                    "Flat backdrop\nOff shows the original sky gradient.", ref flat))
+                    FlatBackdrop = flat;
+            }
             if (SelectionMode == SceneSelectionMode.MeshPart && Visibility.AvailableDetailLevels.Count > 0)
             {
-                Next(110);
-                ImGui.SetNextItemWidth(110);
-                if (ImGui.BeginCombo("##asset-lod", $"LOD {Visibility.DetailLevel}"))
+                // As wide as its label, so the view controls keep to one row.
+                string detail = $"LOD {Visibility.DetailLevel}";
+                float width = ImGui.CalcTextSize(detail).X + button + style.FramePadding.X * 2;
+                Next(width);
+                ImGui.SetNextItemWidth(width);
+                if (ImGui.BeginCombo("##asset-lod", detail))
                 {
                     foreach (int level in Visibility.AvailableDetailLevels)
                         if (ImGui.Selectable($"LOD {level}", Visibility.DetailLevel == level))
@@ -755,8 +945,9 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
                 }
                 if (presentLayers.Count > 1 || presentLayers.Contains(SceneLayer.Effects) || presentLayers.Contains(SceneLayer.Collision))
                 {
-                    Next(100);
-                    ImGui.SetNextItemWidth(100);
+                    float width = ImGui.CalcTextSize("Layers").X + button + style.FramePadding.X * 2;
+                    Next(width);
+                    ImGui.SetNextItemWidth(width);
                     if (ImGui.BeginCombo("##asset-layers", "Layers"))
                     {
                         SceneLayerMenu.Draw(Visibility, presentLayers, this);
@@ -776,6 +967,26 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             Next(width + text);
             ImGui.SetNextItemWidth(width);
         }
+    }
+
+    /**
+     * The pop-out and the pin at the top right of the controls, then back to where the controls start.
+     * @return The width the corner takes.
+     */
+    private float DrawCornerControls(float right, float button)
+    {
+        float gap = ImGui.GetStyle().ItemSpacing.X, width = PopOut is null ? button : button * 2 + gap;
+        var start = ImGui.GetCursorScreenPos();
+        ImGui.SetCursorScreenPos(start with { X = right - width });
+        if (PopOut is { } popOut)
+        {
+            if (ImGuiIcons.Button("pop-out", StudioIcon.PopOut, "Open in its own window")) popOut();
+            ImGui.SameLine(0, gap);
+        }
+        bool pinned = ControlsPinned;
+        if (ImGuiIcons.Toggle("pin-controls", StudioIcon.Pushpin, "Keep controls shown", ref pinned)) ControlsPinned = pinned;
+        ImGui.SetCursorScreenPos(start);
+        return width;
     }
 
     /** Tooltips name the current bindings; they are rebuilt only after a binding changes. */
@@ -830,6 +1041,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             {
                 nativeScene.Resize(width, height);
                 nativeScene.TimeOfDay = Math.Clamp(TimeOfDay, 0, 1);
+                nativeScene.FlatBackdrop = FlatBackdrop;
                 nativeScene.Render(Camera, timeSeconds, nativeHandles, new Vector4(.0015f, .0025f, .005f, 1));
                 if (MeasureFrameTimes)
                 {
@@ -1373,6 +1585,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         outline ??= new SelectionOutlinePass(renderer);
         outline.Begin(width, height, depth);
         var view = Camera.ViewProjection((float)width / height);
+        var posed = itemPose * view;
         foreach (var instance in selectedParts)
             if (Visibility.IsVisible(instance) && DiagnosticMesh(instance, out var mesh, out var transform))
                 outline.Draw(mesh, transform * view, true);
@@ -1394,23 +1607,23 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
                     transform = Matrix4x4.CreateScale(Vector3.Max((bounds.Maximum - bounds.Minimum) * .5f, new Vector3(.05f))) *
                         Matrix4x4.CreateTranslation(bounds.Center);
                 }
-                outline.Draw(markerBox, transform * view, true);
+                outline.Draw(markerBox, transform * posed, true);
             }
         }
-        DrawCollisionOutline(view);
+        DrawCollisionOutline(posed);
         RecordOverlayPhase(1, ref phase);
         var result = outline.Composite(source);
         RecordOverlayPhase(2, ref phase);
-        DrawCollision(view, width, height);
+        DrawCollision(posed, width, height);
         RecordOverlayPhase(3, ref phase);
         if (grid) DrawGrid(view);
         RecordOverlayPhase(4, ref phase);
-        DrawVolumes(view);
+        DrawVolumes(posed);
         RecordOverlayPhase(5, ref phase);
-        if (Scene is not null) DrawMarkers(view);
-        if (Scene is { NavMeshes.Count: > 0 }) DrawNavMesh(view);
+        if (Scene is not null) DrawMarkers(posed);
+        if (Scene is { NavMeshes.Count: > 0 }) DrawNavMesh(posed);
         RecordOverlayPhase(6, ref phase);
-        DrawPointProxies(view);
+        DrawPointProxies(posed);
         RecordOverlayPhase(7, ref phase);
         if (ShowCursor) DrawCursor(view, height);
         RecordOverlayPhase(8, ref phase);
@@ -1448,7 +1661,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         DrawOverlayLines(LineStream.SelectedPoints, CollectionsMarshal.AsSpan(selectedOverlayLines), view, false);
     }
 
-    /** The cursor's world axes and rings stay visible through scene depth. */
+    /** The cursor's axes and rings stay visible through scene depth; they turn with the frame the grid lies in. */
     private void DrawCursor(Matrix4x4 view, int height)
     {
         // A fixed pixel radius keeps the orbit center readable at every zoom level.
@@ -1461,6 +1674,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             var direction = Vector3.Zero; direction[axis] = radius * 1.5f;
             var color = axis switch { 0 => new Vector4(1, .2f, .2f, 1),
                 1 => new Vector4(.25f, 1, .35f, 1), _ => new Vector4(.3f, .6f, 1, 1) };
+            direction = Vector3.Transform(direction, Camera.Basis);
             overlayLines.Add(new(Camera.Pivot - direction, color));
             overlayLines.Add(new(Camera.Pivot + direction, color));
             for (int segment = 0; segment < ringSegments; segment++)
@@ -1475,7 +1689,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
                 var offset = Vector3.Zero;
                 offset[(axis + 1) % 3] = MathF.Cos(angle) * radius;
                 offset[(axis + 2) % 3] = MathF.Sin(angle) * radius;
-                return Camera.Pivot + offset;
+                return Camera.Pivot + Vector3.Transform(offset, Camera.Basis);
             }
         }
         DrawOverlayLines(LineStream.Cursor, CollectionsMarshal.AsSpan(overlayLines), view, false);
@@ -1490,24 +1704,33 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
                     depthTest: OccludeOverlays && !selectedMemberSet.Contains(instance));
     }
 
-    /** Grid spacing follows camera distance so both props and maps stay readable. */
+    /**
+     * Grid spacing follows camera distance so both props and maps stay readable. The grid lies on the floor of the
+     * frame the camera orbits in, so an item seen in its own frame stands on it, at a spacing that zooming keeps.
+     */
     private void DrawGrid(Matrix4x4 view)
     {
-        float step = MathF.Pow(10, MathF.Floor(MathF.Log10(MathF.Max(.01f, Camera.Distance / 8))));
-        float x = MathF.Floor(Camera.Pivot.X / step) * step;
-        float y = MathF.Floor(Camera.Pivot.Y / step) * step;
+        float step = gridStep > 0 ? gridStep : MathF.Pow(10, MathF.Floor(MathF.Log10(MathF.Max(.01f, Camera.Distance / 8))));
+        var pivot = Vector3.Transform(Camera.Pivot, Quaternion.Inverse(Camera.Basis));
+        // Lines stay on whole steps from the origin, so the axes keep their colours; an item's grid centres on the
+        // nearest step under the item.
+        float x = (gridStep > 0 ? MathF.Round(pivot.X / step) : MathF.Floor(pivot.X / step)) * step;
+        float y = (gridStep > 0 ? MathF.Round(pivot.Y / step) : MathF.Floor(pivot.Y / step)) * step;
         float extent = step * 20;
         overlayLines.Clear();
+        // A mid grey reads on the flat backdrop and on the lighter gradient.
+        var color = new Vector4(.36f, .4f, .46f, 1);
+        float z = gridHeight;
         for (int i = -20; i <= 20; i++)
         {
             float px = x + i * step, py = y + i * step;
-            var color = new Vector4(.19f, .22f, .27f, 1);
-            overlayLines.Add(new(new(px, y - extent, 0), px == 0 ? new(.35f, .62f, .38f, 1) : color));
-            overlayLines.Add(new(new(px, y + extent, 0), overlayLines[^1].Color));
-            overlayLines.Add(new(new(x - extent, py, 0), py == 0 ? new(.7f, .3f, .27f, 1) : color));
-            overlayLines.Add(new(new(x + extent, py, 0), overlayLines[^1].Color));
+            overlayLines.Add(new(new(px, y - extent, z), px == 0 ? new(.35f, .62f, .38f, 1) : color));
+            overlayLines.Add(new(new(px, y + extent, z), overlayLines[^1].Color));
+            overlayLines.Add(new(new(x - extent, py, z), py == 0 ? new(.7f, .3f, .27f, 1) : color));
+            overlayLines.Add(new(new(x + extent, py, z), overlayLines[^1].Color));
         }
-        DrawOverlayLines(LineStream.Grid, CollectionsMarshal.AsSpan(overlayLines), view);
+        DrawOverlayLines(LineStream.Grid, CollectionsMarshal.AsSpan(overlayLines),
+            Matrix4x4.CreateFromQuaternion(Camera.Basis) * view);
     }
 
     /** Unselected marker boxes respect scene depth without writing it. */

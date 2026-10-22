@@ -14,6 +14,15 @@ public sealed record PreparedGuardian(SceneDocument Scene, AssetAnimationSource?
     GuardianParts Parts, IReadOnlyList<string> Diagnostics, IReadOnlySet<uint> SourceTags,
     IReadOnlyDictionary<string, IReadOnlyList<string>> SlotNotes);
 
+/**
+ * A guardian that wears or shows an item in its preview; EntityTag is the item's model entity for that class and gender,
+ * 0 for an item with no model of its own.
+ */
+public sealed record ArmorWearer(GuardianClass Class, bool Female, uint EntityTag)
+{
+    public string Name => $"{Class.Name} {GuardianAppearance.GenderNames[Female ? 1 : 0]}";
+}
+
 /** Thread-safe; caches the appearance tables and each body's base animation source for the catalog's life. */
 public sealed class GuardianAssembler(PackageCatalog catalog)
 {
@@ -69,8 +78,11 @@ public sealed class GuardianAssembler(PackageCatalog catalog)
     /**
      * Runs on a worker. Scene.TagHash = bodyTag; instance names are prefixed with their part label.
      * A part that cannot load or skin is left out or stays at bind, with a diagnostic.
+     * @param shown The parts the scene draws; null draws all. Every part still joins the rig, so shown parts pose as worn.
+     * @param armorDyes Dyes every armor piece takes in place of its own, such as a shader's; null keeps each piece's.
      */
-    public PreparedGuardian Prepare(uint bodyTag, GuardianLoadout loadout, CancellationToken token = default)
+    public PreparedGuardian Prepare(uint bodyTag, GuardianLoadout loadout, CancellationToken token = default,
+        Func<GuardianPart, bool>? shown = null, NativeGearDyes? armorDyes = null)
     {
         var parts = Appearance.Resolve(Catalog, bodyTag, loadout, token);
         var notes = new Notes(parts);
@@ -103,16 +115,80 @@ public sealed class GuardianAssembler(PackageCatalog catalog)
             undrawn += visible.Length - drawn.Length;
             if (drawn.Length == 0) { notes.Add(part.Label, "nothing to draw", $"Entity 0x{part.EntityTag:X8} has no drawn geometry."); continue; }
             foreach (var instance in drawn) instance.Name = $"{part.Label}: {instance.Name}";
-            scene.Instances.AddRange(drawn);
+            if (shown is null || shown(part)) scene.Instances.AddRange(drawn);
             loaded.Add((part, drawn));
         }
         if (undrawn != 0)
             notes.Lines.Add($"Viewer: {undrawn} {(undrawn == 1 ? "part" : "parts")} not drawn\nThe viewer does not draw their render stages.");
-        SetDyes(loaded, notes);
+        SetDyes(loaded, notes, armorDyes);
         var (animation, pose) = Animate(bodyTag, row, parts, loaded, notes, sources, token);
         return new(scene, animation, pose, parts, notes.Lines.AsReadOnly(), sources,
             notes.Slots.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<string>)pair.Value.AsReadOnly(), StringComparer.Ordinal));
     }
+
+    /** The guardians an armor item has art for, by class and then gender; art rows name a class or any class. */
+    public IReadOnlyList<ArmorWearer> Wearers(uint itemTag)
+    {
+        byte[] item = Catalog.Read(itemTag);
+        var wearers = new List<ArmorWearer>();
+        foreach (var guardianClass in GuardianClasses.All)
+            foreach (bool female in (bool[])[false, true])
+                try
+                {
+                    if (GuardianArt.ItemEntities(Catalog, item, guardianClass.ClassByte, female) is [var entity, ..])
+                        wearers.Add(new(guardianClass, female, entity));
+                }
+                catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or ArgumentException) { }
+        return wearers;
+    }
+
+    /**
+     * Runs on a worker. An armor item as an item preview shows it: worn and posed by the wearer, or the first guardian
+     * it has art for, with only the item's own parts drawn.
+     * @param wholeGuardian Draws the wearer too, in its default armor with this item in its slot.
+     */
+    public PreparedGuardian PrepareItem(uint itemTag, ArmorWearer? wearer = null, CancellationToken token = default,
+        bool wholeGuardian = false)
+    {
+        int slot = GuardianAppearance.ArmorSlot(Catalog.Read(itemTag));
+        if (slot < 0) throw new InvalidDataException("The item is not in an armor slot.");
+        wearer ??= Wearers(itemTag).FirstOrDefault() ?? throw new InvalidDataException("The item has no art for any class.");
+        var loadout = DefaultLoadout(wearer.Female).WithArmor(slot, itemTag);
+        var prepared = Prepare(wearer.Class.BodyTag, loadout, token, wholeGuardian ? null : part => part.ItemTag == itemTag);
+        if (prepared.Scene.Instances.Count == 0) throw new InvalidDataException("The item's art has no drawn geometry.");
+        return prepared;
+    }
+
+    /**
+     * Runs on a worker. A guardian of this class and gender, for an item shown on it rather than worn: a weapon in its
+     * hands, in the default loadout. A shader's dyes go on showcase armor, since the default slots hold the undyed
+     * gear-preview placeholders.
+     * @param weapon The weapon item it holds in its hold pose; 0 holds none.
+     */
+    public PreparedGuardian PrepareWearer(ArmorWearer wearer, NativeGearDyes? armorDyes = null, CancellationToken token = default,
+        uint weapon = 0)
+    {
+        var loadout = DefaultLoadout(wearer.Female) with { Weapon = weapon };
+        if (armorDyes is not null)
+        {
+            byte classByte = wearer.Class.ClassByte;
+            uint[] armor = GuardianArt.ShowcaseArmor(Catalog, classByte, wearer.Female,
+                Appearance.PreviewDefault(classByte, GuardianAppearance.ArmorSlots - 1));
+            for (int slot = 0; slot < armor.Length; slot++)
+                if (armor[slot] != 0) loadout = loadout.WithArmor(slot, armor[slot]);
+        }
+        return Prepare(wearer.Class.BodyTag, loadout, token, armorDyes: armorDyes);
+    }
+
+    /** Every class and gender, with no item model, for an item shown on a guardian. */
+    public static IReadOnlyList<ArmorWearer> AllWearers { get; } =
+        [.. GuardianClasses.All.SelectMany(guardianClass => new[] { false, true }.Select(female => new ArmorWearer(guardianClass, female, 0)))];
+
+    /** The default loadout on the first race and gender row of this gender. */
+    private GuardianLoadout DefaultLoadout(bool female) => GuardianLoadout.Default with
+    {
+        RaceGender = Enumerable.Range(0, Appearance.Rows.Count).FirstOrDefault(index => Appearance.Rows[index].Female == female)
+    };
 
     /**
      * The body's hand parts of one gender. The gear component shows parts labelled gear-applied true
@@ -148,8 +224,9 @@ public sealed class GuardianAssembler(PackageCatalog catalog)
      * Armor and weapon parts use the item's dyes; customisation parts their dye indices.
      * Each item, and each other entity, is its own gear object with its own plate atlases.
      * An item's bucket gives its gear kind, which sizes the atlases; a part with no item is kind 0.
+     * @param armorDyes Dyes every armor piece takes in place of its own; null keeps each piece's.
      */
-    private void SetDyes(List<(GuardianPart Part, MeshInstance[] Instances)> loaded, Notes notes)
+    private void SetDyes(List<(GuardianPart Part, MeshInstance[] Instances)> loaded, Notes notes, NativeGearDyes? armorDyes)
     {
         var items = new Dictionary<uint, NativeGearDyes?>();
         foreach (var (part, instances) in loaded)
@@ -161,7 +238,8 @@ public sealed class GuardianAssembler(PackageCatalog catalog)
             foreach (var instance in instances) NativeGearPlating.SetGearObject(instance, gearObject, kind);
             NativeGearDyes? dyes = null;
             string? error = null;
-            if (item is not null && !items.TryGetValue(part.ItemTag, out dyes))
+            if (armorDyes is not null && part.Kind == GuardianPartKind.Armor) dyes = armorDyes;
+            else if (item is not null && !items.TryGetValue(part.ItemTag, out dyes))
             {
                 items.Add(part.ItemTag, dyes = NativeGearPlating.ReadItemDyes(Catalog, item, out error));
                 if (dyes is null) notes.Add(part.Label, "dyes unreadable", $"Uses the default dyes. {error}");

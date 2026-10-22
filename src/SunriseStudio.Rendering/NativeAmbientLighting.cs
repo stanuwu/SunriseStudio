@@ -106,6 +106,8 @@ public sealed class NativeAmbientLighting : IDisposable
     public bool Sun { get; }
     /** Extern 41 vector 1, the sun colour; zero for technique 39. */
     public Vector4 SunColor { get; }
+    /** A viewer light colour used in place of SunColor, such as an asset preview's studio key; null uses SunColor. */
+    public Vector4? SunColorOverride { get; set; }
     public TfxParameterLookup Parameters { get; }
     public NativeStateSelection States { get; }
     public NativeRenderTargets? Targets => targets;
@@ -221,7 +223,7 @@ public sealed class NativeAmbientLighting : IDisposable
             if (sun.Mask.Width != (output.Width + 1) / 2 || sun.Mask.Height != (output.Height + 1) / 2
                 || sun.UpsampleDepth.Width != sun.Mask.Width || sun.UpsampleDepth.Height != sun.Mask.Height)
                 throw new ArgumentException("Mask mode 1 reads a half-resolution mask and min/max depth.");
-            tfx.Vectors[new(41, 1)] = SunColor;
+            tfx.Vectors[new(41, 1)] = SunColorOverride ?? SunColor;
             tfx.Vectors[new(41, 3)] = new(Vector3.Normalize(sun.SkyDirection), 0);
             tfx.Resources[new(42, 0)] = maskToken;
             tfx.Resources[new(42, 2)] = upsampleToken;

@@ -373,6 +373,9 @@ public sealed class SceneSelection
         return true;
     }
 
+    /** The mesh's deformed vertices in mesh space, or null while it shows its bind pose. */
+    public IReadOnlyList<Vector3>? PosedPositions(MeshData mesh) => posed.TryGetValue(mesh, out var positions) ? positions : null;
+
     /** Picking tracks the same deformed vertices uploaded for the selection mask. */
     public void SetPose(MeshData mesh, IReadOnlyList<Vector3> positions)
     {
@@ -509,10 +512,11 @@ public sealed class SceneSelection
     /**
      * @param faces The faces a ray can hit on each candidate; None skips it.
      * @param hitDistance World distance of the hit along the pick ray; infinity when nothing is hit.
+     * @param overlayPose The rigid move overlays are drawn through, from where they rest; null when none.
      */
     public object? Pick(ViewerCamera camera, Vector2 pixel, Vector2 size, Func<object, PickFaces> faces, out float hitDistance,
         IReadOnlyList<int>? candidates = null, IReadOnlySet<object>? selectedOverlays = null,
-        bool occludeOverlays = true)
+        bool occludeOverlays = true, Matrix4x4? overlayPose = null)
     {
         hitDistance = float.PositiveInfinity;
         if (size.X <= 0 || size.Y <= 0 || pixel.X < 0 || pixel.Y < 0 || pixel.X >= size.X || pixel.Y >= size.Y ||
@@ -565,6 +569,15 @@ public sealed class SceneSelection
         }
         float geometryDistance = best;
         bool selectedOverlayHit = false;
+        // Posed overlays are hit where they rest: the ray goes back through the pose, which keeps its distances.
+        var view = camera.ViewProjection(size.X / size.Y);
+        var (restOrigin, restDirection) = (origin, direction);
+        if (overlayPose is { IsIdentity: false } pose && Matrix4x4.Invert(pose, out var toRest))
+        {
+            restOrigin = Vector3.Transform(origin, toRest);
+            restDirection = Vector3.Normalize(Vector3.TransformNormal(direction, toRest));
+            view = pose * view;
+        }
         for (int index = 0; index < (candidates?.Count ?? objects.Count); index++)
         {
             var item = objects[candidates is null ? index : candidates[index]];
@@ -576,8 +589,9 @@ public sealed class SceneSelection
                 2 * MathF.Max(.01f, Vector3.Dot(box.Center - camera.Position, camera.Forward) + box.Radius) *
                     MathF.Tan(camera.VerticalFieldOfView(size.X / size.Y) / 2)) / size.Y * 8;
             var broad = new SelectionBounds(box.Minimum - new Vector3(padding), box.Maximum + new Vector3(padding));
-            if (!RayBox(origin, direction, broad, limit, out _) ||
-                !OverlayHit(item, camera, pixel, size, origin, direction, out float distance) || distance > limit) continue;
+            if (!RayBox(restOrigin, restDirection, broad, limit, out _) ||
+                !OverlayHit(item, camera, view, pixel, size, restOrigin, restDirection, out float distance) || distance > limit)
+                continue;
             if (selectedOverlayHit && !xray || xray == selectedOverlayHit && distance >= best) continue;
             selectedOverlayHit = xray;
             best = distance;
@@ -588,10 +602,9 @@ public sealed class SceneSelection
     }
 
     /** Wire overlays hit projected edges; small markers retain a usable center target. */
-    private bool OverlayHit(object item, ViewerCamera camera, Vector2 pixel, Vector2 size,
+    private bool OverlayHit(object item, ViewerCamera camera, Matrix4x4 view, Vector2 pixel, Vector2 size,
         Vector3 origin, Vector3 direction, out float distance)
     {
-        var view = camera.ViewProjection(size.X / size.Y);
         float nearest = float.PositiveInfinity;
         if (item is SceneMarker marker)
         {

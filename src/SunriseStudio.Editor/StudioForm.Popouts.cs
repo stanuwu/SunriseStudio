@@ -16,7 +16,7 @@ public sealed partial class StudioForm
     {
         if (options.Smoke) { settings.Popouts = []; return; }
         foreach (var state in settings.Popouts.ToArray())
-            if (layout.Find(state.Panel) is null && !IsPoppedOut(state.Panel))
+            if (Remembered(state.Panel) && layout.Find(state.Panel) is null && !IsPoppedOut(state.Panel))
             {
                 // A window that cannot open docks its editor; the editor must stay reachable.
                 try { OpenPopout(state.Panel, new Rectangle(state.X, state.Y, state.Width, state.Height)); }
@@ -53,7 +53,8 @@ public sealed partial class StudioForm
     {
         var kind = popout.Panel;
         ClosePopout(kind);
-        if (layout.Find(kind) is null) layout.Show(kind);
+        // The preview returns to its document's model pane.
+        if (kind != StudioPanelKind.Preview && layout.Find(kind) is null) layout.Show(kind);
         layoutDirty = true;
     }
 
@@ -79,7 +80,10 @@ public sealed partial class StudioForm
         return true;
     }
 
-    private void RememberPopouts() => settings.Popouts = popouts.Select(popout =>
+    // The preview shows the open document's model, and none is open at launch, so its window is not reopened.
+    private static bool Remembered(StudioPanelKind kind) => kind != StudioPanelKind.Preview;
+
+    private void RememberPopouts() => settings.Popouts = popouts.Where(popout => Remembered(popout.Panel)).Select(popout =>
     {
         var bounds = popout.WindowState == FormWindowState.Normal ? popout.Bounds : popout.RestoreBounds;
         return new StudioPopoutState(popout.Panel, bounds.X, bounds.Y, bounds.Width, bounds.Height);
@@ -124,12 +128,16 @@ public sealed partial class StudioForm
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted(PanelTitle(popout.Panel));
         float titleEnd = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + ImGui.GetStyle().ItemSpacing.X;
-        string label = "Pop in";
-        float width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2;
-        float buttons = 3 * 46 * scale;
-        ImGui.SameLine(MathF.Max(titleEnd, size.X - buttons - width - 8 * scale));
-        if (ImGui.Button(label)) popout.RequestPopIn();
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Put this editor back into the main window");
+        // The preview has no place in the layout; closing its window returns the view to its document's pane.
+        if (popout.Panel != StudioPanelKind.Preview)
+        {
+            string label = "Pop in";
+            float width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2;
+            float buttons = 3 * 46 * scale;
+            ImGui.SameLine(MathF.Max(titleEnd, size.X - buttons - width - 8 * scale));
+            if (ImGui.Button(label)) popout.RequestPopIn();
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Put this editor back into the main window");
+        }
         popout.Chrome.DrawButtons(header, popout.RequestPopIn);
         ImGui.End();
         ImGui.PopStyleVar(2);

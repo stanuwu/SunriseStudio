@@ -16,8 +16,12 @@ public sealed class RelatedAssetsPage : IStudioPage
     public unsafe void Draw(StudioPageContext context)
     {
         if (context.Workspace.Document?.Connections is not { } connections) return;
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputTextWithHint("##relatedSearch", "Find connected asset", ref search, 256);
+        bool none = connections.Related.Count == 0;
+        if (!none)
+        {
+            ImGui.SetNextItemWidth(-1);
+            ImGui.InputTextWithHint("##relatedSearch", "Find connected asset", ref search, 256);
+        }
         if (!ReferenceEquals(previous, connections) || search != appliedSearch)
         {
             rows = connections.Related.Where(link => search.Length == 0
@@ -26,9 +30,10 @@ public sealed class RelatedAssetsPage : IStudioPage
                 || link.Kind.ToString().Contains(search, StringComparison.OrdinalIgnoreCase)).ToArray();
             previous = connections; appliedSearch = search;
         }
-        ImGui.TextDisabled($"{rows.Length:N0} connected assets");
+        ImGui.TextDisabled(none ? "No connected assets" : $"{rows.Length:N0} connected assets");
         if (connections.Diagnostics.Count > 0 && ImGui.CollapsingHeader($"Notes ({connections.Diagnostics.Count})###notes"))
             StudioUi.Facts("connection-notes", connections.Diagnostics);
+        if (none) return;
         if (!ImGui.BeginTable("connections", 2, ImGuiTableFlags.ScrollY | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable,
             ImGui.GetContentRegionAvail())) return;
         ImGui.TableSetupColumn("Asset", ImGuiTableColumnFlags.WidthStretch);

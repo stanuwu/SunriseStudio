@@ -39,6 +39,67 @@ public sealed partial class StudioWorkspace
         }
     }
 
+    /** Armor previews draw their wearer, not only the piece, and weapons open in a guardian's hands; reopen to apply. */
+    public bool ShowGuardian { get; set; }
+
+    /**
+     * Runs on a worker. An armor item opens worn by the wearer the model picker chose, the piece alone unless
+     * ShowGuardian is set. An armor item without a readable model still opens, with the reason as a preview note.
+     */
+    private StudioDocument ReadArmorModelDocument(PackageCatalog catalog, PackageEntry entry, string name,
+        AssetOpenContext context, StudioDocument document) =>
+        ReadGuardianItemDocument(catalog, entry, name, context, document, "No armor model",
+            assembler => assembler.Wearers(entry.TagHash),
+            (assembler, wearer) => assembler.PrepareItem(entry.TagHash, wearer, OperationToken, ShowGuardian));
+
+    /**
+     * Runs on a worker. A shader or a weapon opens on a guardian, the one the model picker chose: a shader's dyes colour
+     * showcase armor, and a weapon is held in its hold pose.
+     * @param dyes The shader's dyes; null keeps each armor piece's own.
+     * @param weapon The weapon item the guardian holds; 0 holds none.
+     */
+    private StudioDocument ReadShownOnGuardianDocument(PackageCatalog catalog, PackageEntry entry, string name,
+        AssetOpenContext context, StudioDocument document, NativeGearDyes? dyes, uint weapon = 0) =>
+        ReadGuardianItemDocument(catalog, entry, name, context, document, "No guardian", _ => GuardianAssembler.AllWearers,
+            (assembler, wearer) => assembler.PrepareWearer(wearer ?? GuardianAssembler.AllWearers[0], dyes, OperationToken, weapon));
+
+    /**
+     * An item on the wearer whose class body and gender the context names, else the first; the preview note gives the
+     * reason a guardian did not assemble.
+     */
+    private StudioDocument ReadGuardianItemDocument(PackageCatalog catalog, PackageEntry entry, string name,
+        AssetOpenContext context, StudioDocument document, string failure, Func<GuardianAssembler, IReadOnlyList<ArmorWearer>> list,
+        Func<GuardianAssembler, ArmorWearer?, PreparedGuardian> prepare)
+    {
+        PreparedGuardian prepared;
+        IReadOnlyList<ArmorWearer> wearers;
+        try
+        {
+            ReportProgress("Assembling guardian");
+            var assembler = GuardianAssemblerFor(catalog);
+            wearers = list(assembler);
+            var wearer = wearers.FirstOrDefault(value => value.Class.BodyTag == context.EntityTag
+                && value.Female == context.WearerFemale);
+            prepared = prepare(assembler, wearer);
+        }
+        catch (Exception error) when (error is not (OperationCanceledException or OutOfMemoryException))
+        {
+            return document with { OpenContext = context, PreviewError = $"{failure}: {error.Message}" };
+        }
+        var scene = prepared.Scene;
+        Names?.NameScene(scene);
+        scene.Name = name;
+        var native = PrepareScene(scene, out string nativeError, assetPreview: true);
+        return document with
+        {
+            Scene = scene, Animation = prepared.Animation, Wearers = wearers, NativePlan = native, NativeError = nativeError,
+            OpenContext = context,
+            Surface = AssetSurface.Read(catalog, entry.TagHash, scene: scene, nameResolver: ResolveName,
+                token: OperationToken, decodedTextures: native?.Textures),
+            SourceTags = (document.SourceTags ?? new HashSet<uint>()).Concat(prepared.SourceTags).ToHashSet()
+        };
+    }
+
     /** Runs on a worker. A failed assembly keeps the body open with the reason as a preview note. */
     private StudioDocument ReadGuardianDocument(PackageCatalog catalog, PackageEntry entry, string name, AssetOpenContext context)
     {

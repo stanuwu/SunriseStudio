@@ -81,7 +81,8 @@ public static class NativeGearPlating
     }
 
     /**
-     * Item dyes with no plugs: MaterialOverrides1 rows, then MaterialOverrides2 rows replace rows of the same i8 key.
+     * Item dyes: art block +0x38 rows, then +0x48 rows replace rows of the same i8 key, then the rows of the shader the
+     * item's sockets start with, read the same way. A shader that does not read leaves the item's own.
      * Rows are {i8 key, i8 pad, u16 dye index}; 0x7FF742200F30 owns the order.
      * @return The records by slot, the default record where the item names none; null when unreadable.
      */
@@ -90,24 +91,32 @@ public static class NativeGearPlating
         error = null;
         try
         {
-            int art = Relative(item, in TagView.Member<ItemDefinition, RelativePointer<ItemTranslationBlock>>(item, 0,
-                nameof(ItemDefinition.TranslationItemBlock)));
-            int stride = Unsafe.SizeOf<ItemMaterialOverride>();
-            int[] first = Rows(item, art + TagView.FieldOffset<ItemTranslationBlock>(nameof(ItemTranslationBlock.MaterialOverrides1)),
-                ItemMaterialOverride.Class, stride);
-            int[] second = Rows(item, art + TagView.FieldOffset<ItemTranslationBlock>(nameof(ItemTranslationBlock.MaterialOverrides2)),
-                ItemMaterialOverride.Class, stride);
             var rows = new List<(sbyte Key, int Dye)>();
-            foreach (int row in first.Concat(second))
+            void Take(byte[] source)
             {
-                ref readonly var entry = ref TagView.At<ItemMaterialOverride>(item, row);
-                (sbyte Key, int Dye) value = (entry.Key, entry.Value);
-                int same = rows.FindIndex(other => other.Key == value.Key);
-                if (same < 0) rows.Add(value);
-                else rows[same] = value;
+                int art = Relative(source, 136);
+                foreach (int row in Rows(source, art + 0x38, 0x808077B3, 4).Concat(Rows(source, art + 0x48, 0x808077B3, 4)))
+                {
+                    (sbyte Key, int Dye) value = ((sbyte)source[row], BinaryPrimitives.ReadUInt16LittleEndian(source.AsSpan(row + 2)));
+                    int same = rows.FindIndex(other => other.Key == value.Key);
+                    if (same < 0) rows.Add(value);
+                    else rows[same] = value;
+                }
             }
+            Take(item);
+            string described = "the item's dyes";
+            var own = rows.ToList();
+            try
+            {
+                if (GuardianArt.EquippedShader(catalog, item) is not 0 and var shader)
+                {
+                    Take(catalog.Read(shader));
+                    described = "the item's dyes with its shader";
+                }
+            }
+            catch (Exception exception) when (Unreadable(exception)) { rows = own; }
             var (records, decalMode) = ScopeRecords(catalog, rows.Select(row => row.Dye));
-            return new(records, "the item's dyes", decalMode, ItemKind(item));
+            return new(records, described, decalMode, ItemKind(item));
         }
         catch (Exception exception) when (Unreadable(exception))
         {

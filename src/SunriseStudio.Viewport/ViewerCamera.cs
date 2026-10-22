@@ -24,12 +24,18 @@ public sealed class ViewerCamera
     /** True when the editor may move the pivot itself. */
     public bool PivotFree => externalPose is null && !PivotFollowed;
 
+    /**
+     * The frame Yaw and Pitch turn in: identity for maps, an asset's own axes for a posed model such as a weapon,
+     * so the orbit turns about the model's up and the model stays level on screen.
+     */
+    public Quaternion Basis { get; set; } = Quaternion.Identity;
+
     public ViewerCamera() => Pivot = Vector3.Zero;
 
-    public Vector3 Forward => externalPose?.Forward ?? new(MathF.Cos(Pitch) * MathF.Cos(Yaw),
-        MathF.Cos(Pitch) * MathF.Sin(Yaw), MathF.Sin(Pitch));
+    public Vector3 Forward => externalPose?.Forward ?? Vector3.Transform(new(MathF.Cos(Pitch) * MathF.Cos(Yaw),
+        MathF.Cos(Pitch) * MathF.Sin(Yaw), MathF.Sin(Pitch)), Basis);
     public Vector3 Right => externalPose is { } pose ? Vector3.Normalize(Vector3.Cross(pose.Forward, pose.Up))
-        : new(MathF.Sin(Yaw), -MathF.Cos(Yaw), 0);
+        : Vector3.Transform(new(MathF.Sin(Yaw), -MathF.Cos(Yaw), 0), Basis);
     public Vector3 Up => externalPose?.Up ?? Vector3.Cross(Right, Forward);
     public Vector3 Position => externalPose?.Eye ?? Pivot - Forward * Distance;
     public float NearPlane => Orthographic ? -FarPlane : Player ? 0.05f : Math.Clamp(Distance * 0.002f, 0.01f, 1f);
@@ -156,7 +162,7 @@ public sealed class ViewerCamera
     /** Places the eye and faces it toward pivot, which becomes the orbit centre. */
     public void LookFrom(Vector3 eye, Vector3 pivot)
     {
-        var offset = pivot - eye;
+        var offset = Vector3.Transform(pivot - eye, Quaternion.Inverse(Basis));
         float length = offset.Length();
         if (!float.IsFinite(length) || length < 1e-3f) { Pivot = pivot; return; }
         Yaw = MathF.Atan2(offset.Y, offset.X);
