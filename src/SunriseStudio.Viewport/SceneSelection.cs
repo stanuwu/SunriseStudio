@@ -585,8 +585,9 @@ public sealed class SceneSelection
             bool xray = !occludeOverlays || (selectedOverlays?.Contains(item) ?? false);
             float limit = xray ? float.PositiveInfinity : geometryDistance;
             var box = GetBounds(item);
+            // Perspective W is view depth, including the overlay's pose.
             float padding = (camera.Orthographic ? camera.ViewHeight :
-                2 * MathF.Max(.01f, Vector3.Dot(box.Center - camera.Position, camera.Forward) + box.Radius) *
+                2 * MathF.Max(.01f, Vector4.Transform(new Vector4(box.Center, 1), view).W + box.Radius) *
                     MathF.Tan(camera.VerticalFieldOfView(size.X / size.Y) / 2)) / size.Y * 8;
             var broad = new SelectionBounds(box.Minimum - new Vector3(padding), box.Maximum + new Vector3(padding));
             if (!RayBox(restOrigin, restDirection, broad, limit, out _) ||
@@ -610,7 +611,7 @@ public sealed class SceneSelection
         {
             var extent = Vector3.Max(Vector3.Abs(marker.RenderExtents), new Vector3(.05f));
             var bounds = GetBounds(marker);
-            float depth = MathF.Max(.01f, Vector3.Dot(marker.RenderPosition - camera.Position, camera.Forward));
+            float depth = MathF.Max(.01f, Vector4.Transform(new Vector4(marker.RenderPosition, 1), view).W);
             float worldPerPixel = (camera.Orthographic ? camera.ViewHeight :
                 2 * depth * MathF.Tan(camera.VerticalFieldOfView(size.X / size.Y) / 2)) / size.Y;
             // Small markers need a center target even when all box edges fall between pixels.

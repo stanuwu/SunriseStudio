@@ -12,7 +12,7 @@ public sealed record WeaponArtVariant(int Selector, uint WrapperTag, uint Entity
     IReadOnlyList<uint> ArtHashes)
 {
     /** The variant's index among the arrangement row's art regions. */
-    public int Holder { get; init; }
+    public int HolderIndex { get; init; }
 }
 public sealed record WeaponArchetypeSource(ushort GearIndex, ushort ArtIndex, uint EntityTag,
     IReadOnlyList<WeaponArtVariant> Variants);
@@ -84,7 +84,7 @@ public static class WeaponArchetypeAuthoring
             uint modelEntity = wrapperBytes.U32(16);
             if (modelEntity is 0 or uint.MaxValue) continue;
             Read(catalog, modelEntity, EntityClass);
-            variants.Add(new(selector, wrapper, modelEntity, values) { Holder = i });
+            variants.Add(new(selector, wrapper, modelEntity, values) { HolderIndex = i });
         }
         if (variants.Count == 0 || variants.Select(value => value.Selector).Distinct().Count()
             != variants.Count)
@@ -216,7 +216,7 @@ public static class WeaponArchetypeAuthoring
             output.AddRange(arrangement.Slice(originalGroup, 24));
             Put64(output, newHolders + i * 8, group - newHolders - i * 8);
             // An empty region stays empty in the copy.
-            if (v == source.Variants.Count || source.Variants[v].Holder != i)
+            if (v == source.Variants.Count || source.Variants[v].HolderIndex != i)
             { AppendArray(output, group + 8, ArtHashClass, 0, 4); continue; }
             var variant = source.Variants[v];
             int hashes = AppendArray(output, group + 8, ArtHashClass, variant.ArtHashes.Count, 4);

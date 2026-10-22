@@ -29,7 +29,7 @@ public sealed record StudioPageContext(StudioWorkspace Workspace, AssetViewport 
      * The view drawn in a bordered box with no padding, its controls pinned above it or shown on hover, with Pop Out
      * among them. The model choice sits above the box, within the size.
      */
-    public void PreviewBox(string id, Vector2 size, Action draw)
+    public void PreviewBox(string id, Vector2 size)
     {
         ImGui.BeginGroup();
         if (PreviewChoice is { } choice)
@@ -42,7 +42,7 @@ public sealed record StudioPageContext(StudioWorkspace Workspace, AssetViewport 
         ImGui.BeginChild(id, size, ImGuiChildFlags.Borders);
         ImGui.PopStyleVar();
         Viewport.ControlsOnHover = true; Viewport.PopOut = PopOutPreview;
-        draw();
+        Viewport.DrawImGui(ImGui.GetContentRegionAvail());
         Viewport.ControlsOnHover = false; Viewport.PopOut = null;
         ImGui.EndChild();
         ImGui.EndGroup();
@@ -135,8 +135,7 @@ public sealed partial class ScenePage : IStudioPage
         if (context.Workspace.Document?.Scene is not { } scene) return;
         var available = ImGui.GetContentRegionAvail();
         if (!context.PreviewElsewhere)
-            context.PreviewBox("part-preview", new(0, Math.Max(150, available.Y * .55f)),
-                () => context.Viewport.DrawImGui(ImGui.GetContentRegionAvail()));
+            context.PreviewBox("part-preview", new(0, Math.Max(150, available.Y * .55f)));
         if (scene.SpawnChoices.Count != 0 || scene.EntityVariants.Count != 0) SpawnInputs(context, scene);
         if (scene.EntityParameters.Count != 0) ParameterInputs(context, scene);
         if (scene.ObjectChannels.Count != 0) ChannelInputs(context, scene);

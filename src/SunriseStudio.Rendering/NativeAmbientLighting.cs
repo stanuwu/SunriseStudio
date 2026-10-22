@@ -106,7 +106,7 @@ public sealed class NativeAmbientLighting : IDisposable
     public bool Sun { get; }
     /** Extern 41 vector 1, the sun colour; zero for technique 39. */
     public Vector4 SunColor { get; }
-    /** A viewer light colour used in place of SunColor, such as an asset preview's studio key; null uses SunColor. */
+    /** A viewer light color used in place of SunColor, such as an asset preview's studio key; null uses SunColor. */
     public Vector4? SunColorOverride { get; set; }
     public TfxParameterLookup Parameters { get; }
     public NativeStateSelection States { get; }

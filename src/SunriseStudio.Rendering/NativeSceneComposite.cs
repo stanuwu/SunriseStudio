@@ -108,7 +108,7 @@ public sealed class NativeSceneComposite : IDisposable
     /**
      * Fills a target with the viewer gradient in sky-layer units, times scale.
      * @param scale One for the sky layer; the atmosphere lookup stand-in uses a brighter copy.
-     * @param flat One colour in place of the gradient, such as an asset preview's backdrop; null draws the gradient.
+     * @param flat One color in place of the gradient, such as an asset preview's backdrop; null draws the gradient.
      * @param up The gradient's zenith direction; null is world up. An item orbited in its own frame passes that frame's up.
      */
     public void DrawSkyGradient(NativeRenderTargets sky, ID3D11ShaderResourceView depth, Matrix4x4 viewProjection,
@@ -328,9 +328,12 @@ public sealed class NativeSceneComposite : IDisposable
             float sw = Luma(Tap(uv + float2(-1, 1) * texel)), se = Luma(Tap(uv + texel));
             float m = Luma(middle);
             float low = min(m, min(min(nw, ne), min(sw, se))), high = max(m, max(max(nw, ne), max(sw, se)));
+            // Skip contrast below 0.0312 luma or one eighth of the brightest sample.
             if (high - low < max(0.0312, high * 0.125)) return float4(middle, 1);
             float2 direction = float2(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
+            // One eighth of the mean corner luma, at least 1/128, keeps the direction stable in dark regions.
             float reduce = max((nw + ne + sw + se) * (0.25 / 8.0), 1.0 / 128.0);
+            // Limit the filter span to eight pixels on either axis.
             direction = clamp(direction / (min(abs(direction.x), abs(direction.y)) + reduce), -8.0, 8.0) * texel;
             float3 two = 0.5 * (Tap(uv + direction * (1.0 / 3.0 - 0.5)) + Tap(uv + direction * (2.0 / 3.0 - 0.5)));
             float3 four = two * 0.5 + 0.25 * (Tap(uv - direction * 0.5) + Tap(uv + direction * 0.5));

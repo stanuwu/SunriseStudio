@@ -9,7 +9,7 @@ namespace SunriseStudio.Rendering;
 
 /**
  * The studio a previewed asset reflects, in the layout the sky-apply pass 0x80B9E24B reads: a world direction d
- * (Z up) sits at uv = 0.5 + 0.5 * d.xy / |d + (0, 0, 1)|, up at the centre and down at the rim. Diffuse reads mip 8
+ * (Z up) sits at uv = 0.5 + 0.5 * d.xy / |d + (0, 0, 1)|, up at the center and down at the rim. Diffuse reads mip 8
  * at the normal and reflection reads mip 8 * sqrt(1 - smoothness) at the reflected view.
  */
 public sealed class NativeStudioEnvironment : IDisposable
@@ -122,6 +122,7 @@ public sealed class NativeStudioEnvironment : IDisposable
             float r2 = min(dot(p, p), 1);
             float3 d = float3(2 * p * sqrt(1 - r2), 1 - 2 * r2);
             float gradient = lerp(0.08, 0.6, saturate(0.5 + 0.6 * d.z));
+            // 0.06 sets the softbox's angular falloff; roughness 0.4 (1 / 2.5) blends fully to the flat level.
             float softbox = 1.4 * exp(-(1 - dot(d, Key.xyz)) / 0.06);
             float sharp = gradient + softbox;
             float value = lerp(sharp, Mip.w, saturate(Mip.y * 2.5)) * Mip.z;

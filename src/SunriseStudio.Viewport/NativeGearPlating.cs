@@ -111,12 +111,20 @@ public static class NativeGearPlating
                 if (GuardianArt.EquippedShader(catalog, item) is not 0 and var shader)
                 {
                     Take(catalog.Read(shader));
-                    described = "the item's dyes with its shader";
+                    return Dyes("the item's dyes with its shader");
                 }
             }
-            catch (Exception exception) when (Unreadable(exception)) { rows = own; }
-            var (records, decalMode) = ScopeRecords(catalog, rows.Select(row => row.Dye));
-            return new(records, described, decalMode, ItemKind(item));
+            catch (Exception exception) when (Unreadable(exception))
+            {
+                rows = own;
+                described += $" (shader unreadable: {exception.Message})";
+            }
+            return Dyes(described);
+            NativeGearDyes Dyes(string source)
+            {
+                var (records, decalMode) = ScopeRecords(catalog, rows.Select(row => row.Dye));
+                return new(records, source, decalMode, ItemKind(item));
+            }
         }
         catch (Exception exception) when (Unreadable(exception))
         {

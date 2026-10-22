@@ -10,7 +10,7 @@ public sealed partial class StudioForm
     private void DrawAssetHeader(StudioDocument document)
     {
         ImGui.TextUnformatted(document.Name);
-        if (document.Scene is null && document.Texture is null) DrawPreviewChoice(document, -1);
+        if (document.Scene is null && document.Texture is null) DrawPreviewChoice(document, ImGui.GetContentRegionAvail().X);
     }
 
     /**

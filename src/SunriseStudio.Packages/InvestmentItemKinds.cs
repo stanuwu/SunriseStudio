@@ -26,15 +26,10 @@ public static class InvestmentItemKinds
         Artifacts, Mods, Currencies, Engrams, Consumables, Bounties, Quests, Other
     ];
 
-    /** The bucket of shader items, which recolour the item whose socket holds them. */
-    public const byte ShaderBucket = 14;
-    /** The Legendary tier at definition +186. */
-    public const byte LegendaryTier = 4;
-
     // Buckets with one fixed category; the ids are the inventory bucket ids at definition +184.
     private static readonly Dictionary<byte, string> BucketCategories = new()
     {
-        [8] = Ghosts, [9] = Vehicles, [10] = Ships, [12] = Emotes, [ShaderBucket] = Shaders, [16] = Subclasses,
+        [8] = Ghosts, [9] = Vehicles, [10] = Ships, [12] = Emotes, [14] = Shaders, [16] = Subclasses,
         [17] = ClanBanners, [27] = Emblems, [41] = Emotes, [47] = Finishers, [49] = Artifacts
     };
 

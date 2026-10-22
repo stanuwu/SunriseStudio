@@ -23,7 +23,15 @@ public sealed partial class AssetViewport
         if (Camera.HasExternalPose || player == Camera.Player) return;
         // Leaving keeps the eye and orbits a point a few metres ahead of it.
         const float OrbitDistance = 10;
-        if (player) Camera.EnterPlayer();
+        // First person walks the world floor, so an item seen in its own frame returns to the world frame and floor.
+        if (player && Camera.Basis != Quaternion.Identity)
+        {
+            var eye = Camera.Position;
+            var forward = Camera.Forward;
+            Camera.Basis = Quaternion.Identity;
+            Camera.LookFrom(eye, eye + forward);
+        }
+        if (player) { gridHeight = gridStep = 0; Camera.EnterPlayer(); }
         else Camera.EnterEditor(Camera.Position + Camera.Forward * OrbitDistance);
     }
 

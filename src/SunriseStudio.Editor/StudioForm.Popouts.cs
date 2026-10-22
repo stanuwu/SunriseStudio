@@ -16,7 +16,7 @@ public sealed partial class StudioForm
     {
         if (options.Smoke) { settings.Popouts = []; return; }
         foreach (var state in settings.Popouts.ToArray())
-            if (Remembered(state.Panel) && layout.Find(state.Panel) is null && !IsPoppedOut(state.Panel))
+            if (layout.Find(state.Panel) is null && !IsPoppedOut(state.Panel))
             {
                 // A window that cannot open docks its editor; the editor must stay reachable.
                 try { OpenPopout(state.Panel, new Rectangle(state.X, state.Y, state.Width, state.Height)); }
@@ -80,10 +80,8 @@ public sealed partial class StudioForm
         return true;
     }
 
-    // The preview shows the open document's model, and none is open at launch, so its window is not reopened.
-    private static bool Remembered(StudioPanelKind kind) => kind != StudioPanelKind.Preview;
-
-    private void RememberPopouts() => settings.Popouts = popouts.Where(popout => Remembered(popout.Panel)).Select(popout =>
+    // The preview shows the open document's model, and none is open at launch, so its window is not saved.
+    private void RememberPopouts() => settings.Popouts = popouts.Where(popout => popout.Panel != StudioPanelKind.Preview).Select(popout =>
     {
         var bounds = popout.WindowState == FormWindowState.Normal ? popout.Bounds : popout.RestoreBounds;
         return new StudioPopoutState(popout.Panel, bounds.X, bounds.Y, bounds.Width, bounds.Height);
@@ -128,7 +126,7 @@ public sealed partial class StudioForm
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted(PanelTitle(popout.Panel));
         float titleEnd = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + ImGui.GetStyle().ItemSpacing.X;
-        // The preview has no place in the layout; closing its window returns the view to its document's pane.
+        // Closing Preview returns it to the document's model pane.
         if (popout.Panel != StudioPanelKind.Preview)
         {
             string label = "Pop in";

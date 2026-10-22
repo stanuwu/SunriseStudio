@@ -182,10 +182,7 @@ public sealed partial class StudioForm : Form
             missionGraph.CodeFont = gui.MonospaceFont;
             StudioTheme.Apply(scale);
             viewport = new AssetViewport(renderer)
-            {
-                UseGameShaders = settings.GameShaders, ShowGameShaderToggle = false, FullDetail = settings.FullDetail,
-                ControlsPinned = settings.AssetControlsPinned
-            };
+                { UseGameShaders = settings.GameShaders, ShowGameShaderToggle = false, FullDetail = settings.FullDetail };
             assetViewport = new AssetViewport(renderer)
                 { UseGameShaders = settings.GameShaders, ShowGameShaderToggle = false, FullDetail = settings.FullDetail };
             viewport.EffectControls = assetViewport.EffectControls = effectControls;
@@ -193,8 +190,9 @@ public sealed partial class StudioForm : Form
             assetViewport.ObjectName = SceneObjectName;
             viewport.ShowCursor = settings.ShowAssetCursor;
             assetViewport.ShowCursor = settings.ShowAssetCursor;
-            AssetViewport.FlatBackdrop = settings.FlatBackdrop;
-            viewport.Camera.Orthographic = settings.Orthographic;
+            viewport.ControlsPinned = assetViewport.ControlsPinned = settings.AssetControlsPinned;
+            viewport.FlatBackdrop = assetViewport.FlatBackdrop = settings.FlatBackdrop;
+            viewport.Camera.Orthographic = assetViewport.Camera.Orthographic = settings.Orthographic;
             workspace.ShowGuardian = settings.ShowGuardian;
             viewport.PreparationProgress = ReportPreparation;
             assetViewport.PreparationProgress = ReportPreparation;
@@ -419,7 +417,11 @@ public sealed partial class StudioForm : Form
         bool orthographic = viewport.Camera.Orthographic;
         var priorMesh = viewport.SelectedObject as MeshInstance;
         string? priorObject = selectedWorldId, priorGroup = selectedGroupId;
-        RememberCursorPreferences();
+        RememberViewPreferences();
+        var preview = workspace.World is null ? viewport : assetViewport!;
+        preview.ControlsPinned = settings.AssetControlsPinned;
+        preview.FlatBackdrop = settings.FlatBackdrop;
+        preview.Camera.Orthographic = settings.Orthographic;
         adoptedAsset = nextAsset;
         adoptedMap = workspace.World?.Map.Tag;
         selectedProperty = null;
@@ -526,14 +528,14 @@ public sealed partial class StudioForm : Form
         _ => null
     };
 
-    private void RememberCursorPreferences()
+    private void RememberViewPreferences()
     {
-        if (viewport is not null)
-        {
-            if (adoptedMap is not null) settings.ShowSceneCursor = viewport.ShowCursor;
-            else settings.ShowAssetCursor = viewport.ShowCursor;
-        }
-        if (adoptedMap is not null && assetViewport is not null) settings.ShowAssetCursor = assetViewport.ShowCursor;
+        if (adoptedMap is not null && viewport is not null) settings.ShowSceneCursor = viewport.ShowCursor;
+        if ((adoptedMap is null ? viewport : assetViewport) is not { } preview) return;
+        settings.ShowAssetCursor = preview.ShowCursor;
+        settings.AssetControlsPinned = preview.ControlsPinned;
+        settings.FlatBackdrop = preview.FlatBackdrop;
+        settings.Orthographic = preview.Camera.Orthographic;
     }
 
     /** Clip navigation prepares the selected owner's pose before the editor is revealed; a guardian holds its weapon. */
@@ -543,7 +545,7 @@ public sealed partial class StudioForm : Form
         target.SetAnimation(source);
         if (workspace.Document.Connections?.SelectedClipTag is > 0 and var clip)
             target.Animation!.SelectClip(clip);
-        else if (workspace.Document.Guardian is { PoseClipTag: > 0 and var hold })
+        else if (workspace.Document.PoseClipTag is > 0 and var hold)
             target.Animation!.SelectClip(hold, play: false);
     }
 
@@ -785,9 +787,7 @@ public sealed partial class StudioForm : Form
         float extent = wide ? available.X : available.Y, divider = 6 * scale;
         // Until the divider is dragged, the pane takes 55% of the width beside the pages or 45% of the height above them.
         float pane = MathF.Max(150 * scale, extent * (settings.ModelPaneDivider ?? (wide ? .55f : .45f)));
-        context.PreviewBox("model-pane", wide ? new(pane, available.Y) : new(available.X, pane),
-            () => pages.Pages.FirstOrDefault(page => page.Id == StudioCategories.PreviewPageId)
-                ?.Draw(context with { PreviewChoice = null }));
+        context.PreviewBox("model-pane", wide ? new(pane, available.Y) : new(available.X, pane));
         // The divider drags the pane's share; a double click returns it to the default.
         if (wide) ImGui.SameLine(0, 0);
         ImGui.InvisibleButton("model-pane-divider", wide ? new(divider, available.Y) : new(available.X, divider));
@@ -916,9 +916,7 @@ public sealed partial class StudioForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         closed = true;
-        RememberCursorPreferences();
-        if (viewport is not null) { settings.AssetControlsPinned = viewport.ControlsPinned; settings.Orthographic = viewport.Camera.Orthographic; }
-        settings.FlatBackdrop = AssetViewport.FlatBackdrop;
+        RememberViewPreferences();
         settings.ShowGuardian = workspace.ShowGuardian;
         try { WriteFrameProfile(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)

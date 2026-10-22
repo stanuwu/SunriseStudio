@@ -63,6 +63,8 @@ public sealed record StudioDocument(PackageEntry Entry, string Name, byte[] Byte
     public string Kind { get; init; } = "";
     /** The assembled guardian of a guardian view; null for every other document. */
     public PreparedGuardian? Guardian { get; init; }
+    /** The preview's initial hold pose; 0 opens in bind pose. */
+    public uint PoseClipTag { get; init; }
     /** The guardians an item can be shown on: armor's wearers, or every class and gender; empty for other documents. */
     public IReadOnlyList<ItemWearer> Wearers { get; init; } = [];
     /** The art arrangement an item model view draws; -1 for every other document. */
@@ -383,8 +385,8 @@ public sealed partial class StudioWorkspace : IDisposable
             return context.WeaponEffectClipTag != 0 ? ReadWeaponEffectDocument(catalog, entry, name, context)
                 // Show Guardian puts the weapon in a guardian's hands.
                 : ShowGuardian && entry.TagHash == context.WeaponItemTag
-                    ? ReadShownOnGuardianDocument(catalog, entry, name, context,
-                        ReadDocument(catalog, entry, name, false, new AssetOpenContext()), null, entry.TagHash)
+                    ? ReadGuardianItemDocument(catalog, ReadDocument(catalog, entry, name, false, new AssetOpenContext()),
+                        context, weapon: entry.TagHash)
                     : ReadWeaponModelDocument(catalog, entry, name, context);
         ReportProgress("Reading asset");
         byte[] bytes = catalog.Read(entry.TagHash);

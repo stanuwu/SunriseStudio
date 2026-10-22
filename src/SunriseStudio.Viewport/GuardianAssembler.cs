@@ -142,16 +142,14 @@ public sealed class GuardianAssembler(PackageCatalog catalog)
     }
 
     /**
-     * Runs on a worker. An armor item as an item preview shows it: worn and posed by the wearer, or the first guardian
-     * it has art for, with only the item's own parts drawn.
+     * Runs on a worker. An armor item is worn and posed by the chosen wearer, with only the item's own parts drawn.
      * @param wholeGuardian Draws the wearer too, in its default armor with this item in its slot.
      */
-    public PreparedGuardian PrepareItem(uint itemTag, ItemWearer? wearer = null, CancellationToken token = default,
+    public PreparedGuardian PrepareItem(uint itemTag, ItemWearer wearer, CancellationToken token = default,
         bool wholeGuardian = false)
     {
         int slot = GuardianAppearance.ArmorSlot(Catalog.Read(itemTag));
         if (slot < 0) throw new InvalidDataException("The item is not in an armor slot.");
-        wearer ??= Wearers(itemTag).FirstOrDefault() ?? throw new InvalidDataException("The item has no art for any class.");
         var loadout = DefaultLoadout(wearer.Female).WithArmor(slot, itemTag);
         var prepared = Prepare(wearer.Class.BodyTag, loadout, token, wholeGuardian ? null : part => part.ItemTag == itemTag);
         if (prepared.Scene.Instances.Count == 0) throw new InvalidDataException("The item's art has no drawn geometry.");

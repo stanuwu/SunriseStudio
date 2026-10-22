@@ -15,12 +15,12 @@ public sealed partial class StudioWorkspace
     {
         var document = ReadDocument(catalog, entry, name, false, new AssetOpenContext());
         if (GuardianAppearance.ArmorSlot(document.Bytes) >= 0)
-            return ReadArmorModelDocument(catalog, entry, name, context, document);
+            return ReadGuardianItemDocument(catalog, document, context);
         // A shader has no model of its own; it shows on a guardian. A kind names the category then the type.
         if (StudioCategories.ForKind(DocumentKind(entry))?.Name == InvestmentItemKinds.Shaders)
         {
             var shaderDyes = NativeGearPlating.ReadItemDyes(catalog, document.Bytes, out string? shaderError);
-            var shown = ReadShownOnGuardianDocument(catalog, entry, name, context, document, shaderDyes);
+            var shown = ReadGuardianItemDocument(catalog, document, context, shaderDyes);
             if (shaderDyes is null) shown.Scene?.Diagnostics.Add($"Dyes: unreadable, using the armor's own ({shaderError})");
             return shown;
         }
@@ -48,21 +48,31 @@ public sealed partial class StudioWorkspace
             {
                 OpenContext = context, PreviewError = $"No item model: {string.Join('\n', scene.Diagnostics)}"
             };
-        Names?.NameScene(scene);
-        scene.Name = name;
-        // The item's own dyes colour its gear shaders, as on a weapon.
+        // The item's own dyes color its gear shaders, as on a weapon.
         if (NativeGearPlating.ReadItemDyes(catalog, document.Bytes, out string? dyeError) is { } dyes)
             NativeGearPlating.SetDyes(scene, dyes);
         else scene.Diagnostics.Add($"Dyes: unreadable, using defaults ({dyeError})");
-        var native = PrepareScene(scene, out string nativeError, assetPreview: true);
-        return document with
+        return PrepareModelDocument(catalog, document with
         {
-            Scene = scene, NativePlan = native, NativeError = nativeError, OpenContext = context,
+            OpenContext = context,
             Connections = document.Connections is { } connections ? connections with { EntityCandidates = entities } : null,
             ArtArrangement = arrangement,
-            Surface = AssetSurface.Read(catalog, entry.TagHash, scene: scene, nameResolver: ResolveName,
-                token: OperationToken, decodedTextures: native?.Textures),
             SourceTags = sources
+        }, scene);
+    }
+
+    /** Names and prepares an item's or guardian's assembled model and its material pages. */
+    private StudioDocument PrepareModelDocument(PackageCatalog catalog, StudioDocument document, SceneDocument scene)
+    {
+        Names?.NameScene(scene);
+        scene.Name = document.Name;
+        var native = PrepareScene(scene, out string nativeError, assetPreview: true);
+        ReportProgress("Reading materials and shaders");
+        return document with
+        {
+            Scene = scene, NativePlan = native, NativeError = nativeError,
+            Surface = AssetSurface.Read(catalog, document.Entry.TagHash, scene: scene, nameResolver: ResolveName,
+                token: OperationToken, decodedTextures: native?.Textures)
         };
     }
 

@@ -53,20 +53,11 @@ public sealed partial class AssetViewport
         sceneGrid!.Query(planes, Camera.Position, 1, Camera.Orthographic, 0,
             pickStatic ??= index => pickDrawn[index] && !liveIndexSet.Contains(index) && !runtimeIndices.Contains(index)
                 && !livePoseIndices.Contains(index), pickCandidates);
-        // Markers are drawn through the item's pose, so the cone is also taken back to where they rest.
-        if (!itemPose.IsIdentity && Matrix4x4.Invert(itemPose, out var toRest))
-            sceneGrid.Query(SceneGrid.FrustumPlanes(itemPose * Camera.ViewProjection(size.X / size.Y) * crop),
-                Vector3.Transform(Camera.Position, toRest), 1, Camera.Orthographic, 0, pickStatic, pickCandidates);
         pickTransient ??= index => pickDrawn[index];
         QueryLive(planes, pickTransient, pickCandidates);
         QueryRuntime(planes, pickTransient, pickCandidates);
         QueryLivePose(planes, pickTransient, pickCandidates);
         pickCandidates.Sort();
-        // An item the cone finds both where it rests and through its pose is one candidate.
-        int unique = 0;
-        for (int i = 0; i < pickCandidates.Count; i++)
-            if (unique == 0 || pickCandidates[unique - 1] != pickCandidates[i]) pickCandidates[unique++] = pickCandidates[i];
-        pickCandidates.RemoveRange(unique, pickCandidates.Count - unique);
         return selection.Pick(Camera, viewportPixel, size, pickFaces ??= DrawnFaces, out distance, pickCandidates,
             selectedMemberSet, OccludeOverlays, itemPose);
     }
@@ -130,7 +121,11 @@ public sealed partial class AssetViewport
     private void EnsureSceneGrid()
     {
         if (!gridDirty && sceneGrid is not null && gridBoundsRevision == selection.AuthoredBoundsRevision) return;
-        var bounds = selection.Objects.Select(selection.GetAuthoredBounds).ToArray();
+        var bounds = selection.Objects.Select(item =>
+        {
+            var box = selection.GetAuthoredBounds(item);
+            return !itemPose.IsIdentity && SceneVisibility.IsOverlay(item) ? box.Transform(itemPose) : box;
+        }).ToArray();
         sceneGrid = new SceneGrid(bounds.Select(x => x.Center).ToArray(), bounds.Select(x => x.Radius).ToArray());
         SceneGridBuildCount++;
         gridBoundsRevision = selection.AuthoredBoundsRevision;

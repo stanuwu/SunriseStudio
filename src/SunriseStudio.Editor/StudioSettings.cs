@@ -32,7 +32,7 @@ public sealed class StudioSettings
     public bool FlatBackdrop { get; set; }
     /** The model pane keeps its controls shown; off shows them on hover. */
     public bool AssetControlsPinned { get; set; } = true;
-    /** The viewer opens with the orthographic view it was closed with. */
+    /** Asset previews keep the last projection choice. */
     public bool Orthographic { get; set; }
     /** Armor previews draw the guardian wearing the piece, and weapons show in a guardian's hands. */
     public bool ShowGuardian { get; set; }

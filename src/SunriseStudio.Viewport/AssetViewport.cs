@@ -137,8 +137,12 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             foreach (var item in selectedItems)
                 if (Bounds(item) is { IsFinite: true } next) bounds = bounds.Include(next.Minimum).Include(next.Maximum);
             return bounds;
-            SelectionBounds Bounds(object item) =>
-                selectionMode == SceneSelectionMode.Object ? selection.GroupBounds(item) : selection.GetBounds(item);
+            // Overlays are drawn through the item's pose, so their bounds take it too.
+            SelectionBounds Bounds(object item)
+            {
+                var box = selectionMode == SceneSelectionMode.Object ? selection.GroupBounds(item) : selection.GetBounds(item);
+                return !itemPose.IsIdentity && SceneVisibility.IsOverlay(item) ? box.Transform(itemPose) : box;
+            }
         }
     }
     public SceneSelectionMode SelectionMode
@@ -221,7 +225,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         if (Scene?.Instances.Count > 0)
         {
             // The pose can turn the whole item, so the preview view is taken again from the posed geometry.
-            FrameItem(FacePreview(Scene));
+            FrameItem(Scene);
         }
         else if (animation.DisplayPose.Rig.Bones.Count > 0)
         {
@@ -362,7 +366,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             // A packfile or collision owner has nothing else to show.
             if (scene.Instances.Count == 0 && scene.Markers.Count == 0 && CollisionPossible(scene)) Visibility.ShowCollisionContent = true;
             gridDirty = true;
-            FrameItem(FacePreview(scene));
+            FrameItem(scene);
             PreparationProgress?.Invoke("Preparing view", 3, 3);
             // Progress presents a loading frame, so report at most every 50 ms.
             while (!work.Wait(50)) PreparationProgress?.Invoke("Uploading geometry", Volatile.Read(ref uploaded), uploads.Count);
@@ -545,10 +549,11 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     /**
      * A native item outside a map orbits in its model's own frame, Z up, turned with it by an animation pose measured on
      * its largest part, and opens at a three-quarter angle, so a weapon posed at an angle stands level.
-     * Returns false, with the world frame kept, when the scene has no part to take the frame from.
+     * Returns false, with the world frame kept, in player mode or when the scene has no part to take the frame from.
      */
-    private bool FacePreview(SceneDocument scene)
+    private bool SetItemFrame(SceneDocument scene)
     {
+        gridDirty = true;
         Camera.Basis = Quaternion.Identity;
         itemPose = Matrix4x4.Identity;
         gridHeight = gridStep = 0;
@@ -565,6 +570,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         if (Animation?.BonePose(main.Mesh) is { } moved && Matrix4x4.Decompose(moved, out _, out turn, out _)
             && Matrix4x4.Invert(main.Transform, out var toMesh))
             itemPose = toMesh * moved * main.Transform;
+        if (Camera.Player) return false;
         Camera.Basis = Quaternion.Normalize(rotation * turn);
         // The grid lies under the posed item, its lines the power of ten nearest a tenth of its width apart. A part with a
         // pose gives its posed vertices, so a guardian stands on the floor in the clip's pose.
@@ -600,11 +606,13 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         return (high - low).LengthSquared();
     }
 
-    /** Frames the scene; an item in its preview view closes in past the bounding-sphere fit. */
-    private void FrameItem(bool preview)
+    /** Frames the scene; an item in its own frame closes in past the bounding-sphere fit. */
+    private void FrameItem(SceneDocument scene, bool itemOnly = false)
     {
+        bool item = SetItemFrame(scene);
+        if (itemOnly && !item) return;
         Frame();
-        if (preview) Camera.Zoom(Camera.Orthographic ? OrthographicZoom : PerspectiveZoom);
+        if (item) Camera.Zoom(Camera.Orthographic ? OrthographicZoom : PerspectiveZoom);
     }
 
     // Collision, markers and volumes sit on the item at rest; the preview draws it posed, so they take its pose.
@@ -678,8 +686,8 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     public bool ControlsPinned { get; set; }
     /** With ControlsOnHover, a pop-out button at the controls' top right calls this; null draws none. */
     public Action? PopOut { get; set; }
-    /** Asset previews draw a flat backdrop; off draws the viewer's sky gradient. One choice for every view. */
-    public static bool FlatBackdrop { get; set; }
+    /** Asset previews draw a flat backdrop; off draws the viewer's sky gradient. */
+    public bool FlatBackdrop { get; set; }
     private bool controlsShown;
 
     /** Draw inside an ImGui window after NewFrame and before the host renders ImGui. */
@@ -846,11 +854,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
                 SetPlayerCamera(false);
                 Camera.Orthographic = orthographic;
                 // An item in its own frame snaps back to its preview view, framed for the projection.
-                if (Camera.Basis != Quaternion.Identity)
-                {
-                    Camera.SetView(PreviewYaw, PreviewPitch);
-                    FrameItem(true);
-                }
+                if (Scene is not null) FrameItem(Scene, itemOnly: true);
             }
             ImGui.EndDisabled();
             if (Scene is not null) DrawPlayerControls(Next);
@@ -1541,7 +1545,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         var posed = itemPose * view;
         foreach (var instance in selectedParts)
             if (Visibility.IsVisible(instance) && DiagnosticMesh(instance, out var mesh, out var transform))
-                outline.Draw(mesh, transform * view, true);
+                outline.Draw(mesh, transform * (instance.Layer == SceneLayer.Volumes ? posed : view), true);
         foreach (var selected in selectedItems)
         {
             // An item with mesh parts is outlined by its parts; any other item gets a box.
@@ -1563,11 +1567,11 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
                 outline.Draw(markerBox, transform * posed, true);
             }
         }
-        DrawCollisionOutline(posed);
+        DrawCollisionOutline(view);
         RecordOverlayPhase(1, ref phase);
         var result = outline.Composite(source);
         RecordOverlayPhase(2, ref phase);
-        DrawCollision(posed, width, height);
+        DrawCollision(view, width, height);
         RecordOverlayPhase(3, ref phase);
         if (grid) DrawGrid(view);
         RecordOverlayPhase(4, ref phase);
@@ -1665,14 +1669,14 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     {
         float step = gridStep > 0 ? gridStep : MathF.Pow(10, MathF.Floor(MathF.Log10(MathF.Max(.01f, Camera.Distance / 8))));
         var pivot = Vector3.Transform(Camera.Pivot, Quaternion.Inverse(Camera.Basis));
-        // Lines stay on whole steps from the origin, so the axes keep their colours; an item's grid centres on the
+        // Lines stay on whole steps from the origin, so the axes keep their colors; an item's grid centers on the
         // nearest step under the item.
         float x = (gridStep > 0 ? MathF.Round(pivot.X / step) : MathF.Floor(pivot.X / step)) * step;
         float y = (gridStep > 0 ? MathF.Round(pivot.Y / step) : MathF.Floor(pivot.Y / step)) * step;
         float extent = step * 20;
         overlayLines.Clear();
-        // A mid grey reads on the flat backdrop and on the lighter gradient.
-        var color = new Vector4(.36f, .4f, .46f, 1);
+        // An item's grid is a mid gray, which reads on the flat backdrop and the lighter gradient; other views keep theirs.
+        var color = gridStep > 0 ? new Vector4(.36f, .4f, .46f, 1) : new Vector4(.19f, .22f, .27f, 1);
         float z = gridHeight;
         for (int i = -20; i <= 20; i++)
         {
