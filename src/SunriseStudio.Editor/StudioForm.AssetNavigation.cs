@@ -42,14 +42,15 @@ public sealed partial class StudioForm
             // Armor names its model entity, like the weapon owners, with the guardian it is worn by; an item with no
             // model of its own, a shader, names the guardian alone and always draws it.
             bool piece = current.EntityTag != 0;
-            string Label(ArmorWearer wearer) => piece ? $"{workspace.DisplayName(wearer.EntityTag)} - {wearer.Name}" : wearer.Name;
+            string Label(ItemWearer wearer) => piece ? $"{workspace.DisplayName(wearer.EntityTag)} - {wearer.Name}" : wearer.Name;
             ImGui.SetNextItemWidth(piece || weapon ? MathF.Max(1, width - toggle) : width);
-            if (ImGui.BeginCombo("##armor-wearer", Label(current)))
+            if (ImGui.BeginCombo("##item-wearer", Label(current)))
             {
                 foreach (var wearer in document.Wearers)
                     if (ImGui.Selectable(Label(wearer), wearer == current) && wearer != current)
-                        workspace.Select(document.Entry.TagHash, context: (context ?? new AssetOpenContext
-                            { ItemModelTag = document.Entry.TagHash }) with { EntityTag = wearer.Class.BodyTag, WearerFemale = wearer.Female });
+                        workspace.Select(document.Entry.TagHash,
+                            context: (context ?? new AssetOpenContext { ItemModelTag = document.Entry.TagHash })
+                                with { EntityTag = wearer.Class.BodyTag, WearerFemale = wearer.Female });
                 ImGui.EndCombo();
             }
             if (piece || weapon) GuardianToggle(true);

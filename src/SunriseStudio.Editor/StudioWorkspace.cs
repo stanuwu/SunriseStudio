@@ -64,7 +64,7 @@ public sealed record StudioDocument(PackageEntry Entry, string Name, byte[] Byte
     /** The assembled guardian of a guardian view; null for every other document. */
     public PreparedGuardian? Guardian { get; init; }
     /** The guardians an item can be shown on: armor's wearers, or every class and gender; empty for other documents. */
-    public IReadOnlyList<ArmorWearer> Wearers { get; init; } = [];
+    public IReadOnlyList<ItemWearer> Wearers { get; init; } = [];
     /** The art arrangement an item model view draws; -1 for every other document. */
     public int ArtArrangement { get; init; } = -1;
 }

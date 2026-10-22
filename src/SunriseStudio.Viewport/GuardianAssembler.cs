@@ -18,7 +18,7 @@ public sealed record PreparedGuardian(SceneDocument Scene, AssetAnimationSource?
  * A guardian that wears or shows an item in its preview; EntityTag is the item's model entity for that class and gender,
  * 0 for an item with no model of its own.
  */
-public sealed record ArmorWearer(GuardianClass Class, bool Female, uint EntityTag)
+public sealed record ItemWearer(GuardianClass Class, bool Female, uint EntityTag)
 {
     public string Name => $"{Class.Name} {GuardianAppearance.GenderNames[Female ? 1 : 0]}";
 }
@@ -127,18 +127,17 @@ public sealed class GuardianAssembler(PackageCatalog catalog)
     }
 
     /** The guardians an armor item has art for, by class and then gender; art rows name a class or any class. */
-    public IReadOnlyList<ArmorWearer> Wearers(uint itemTag)
+    public IReadOnlyList<ItemWearer> Wearers(uint itemTag)
     {
         byte[] item = Catalog.Read(itemTag);
-        var wearers = new List<ArmorWearer>();
-        foreach (var guardianClass in GuardianClasses.All)
-            foreach (bool female in (bool[])[false, true])
-                try
-                {
-                    if (GuardianArt.ItemEntities(Catalog, item, guardianClass.ClassByte, female) is [var entity, ..])
-                        wearers.Add(new(guardianClass, female, entity));
-                }
-                catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or ArgumentException) { }
+        var wearers = new List<ItemWearer>();
+        foreach (var wearer in AllWearers)
+            try
+            {
+                if (GuardianArt.ItemEntities(Catalog, item, wearer.Class.ClassByte, wearer.Female) is [var entity, ..])
+                    wearers.Add(wearer with { EntityTag = entity });
+            }
+            catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or ArgumentException) { }
         return wearers;
     }
 
@@ -147,7 +146,7 @@ public sealed class GuardianAssembler(PackageCatalog catalog)
      * it has art for, with only the item's own parts drawn.
      * @param wholeGuardian Draws the wearer too, in its default armor with this item in its slot.
      */
-    public PreparedGuardian PrepareItem(uint itemTag, ArmorWearer? wearer = null, CancellationToken token = default,
+    public PreparedGuardian PrepareItem(uint itemTag, ItemWearer? wearer = null, CancellationToken token = default,
         bool wholeGuardian = false)
     {
         int slot = GuardianAppearance.ArmorSlot(Catalog.Read(itemTag));
@@ -165,7 +164,7 @@ public sealed class GuardianAssembler(PackageCatalog catalog)
      * gear-preview placeholders.
      * @param weapon The weapon item it holds in its hold pose; 0 holds none.
      */
-    public PreparedGuardian PrepareWearer(ArmorWearer wearer, NativeGearDyes? armorDyes = null, CancellationToken token = default,
+    public PreparedGuardian PrepareWearer(ItemWearer wearer, NativeGearDyes? armorDyes = null, CancellationToken token = default,
         uint weapon = 0)
     {
         var loadout = DefaultLoadout(wearer.Female) with { Weapon = weapon };
@@ -181,8 +180,9 @@ public sealed class GuardianAssembler(PackageCatalog catalog)
     }
 
     /** Every class and gender, with no item model, for an item shown on a guardian. */
-    public static IReadOnlyList<ArmorWearer> AllWearers { get; } =
-        [.. GuardianClasses.All.SelectMany(guardianClass => new[] { false, true }.Select(female => new ArmorWearer(guardianClass, female, 0)))];
+    public static IReadOnlyList<ItemWearer> AllWearers { get; } =
+        [.. GuardianClasses.All.SelectMany(guardianClass =>
+            new[] { false, true }.Select(female => new ItemWearer(guardianClass, female, 0)))];
 
     /** The default loadout on the first race and gender row of this gender. */
     private GuardianLoadout DefaultLoadout(bool female) => GuardianLoadout.Default with

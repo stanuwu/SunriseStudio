@@ -25,8 +25,8 @@ public sealed class ViewerCamera
     public bool PivotFree => externalPose is null && !PivotFollowed;
 
     /**
-     * The frame Yaw and Pitch turn in: identity for maps, an asset's own axes for a posed model such as a weapon,
-     * so the orbit turns about the model's up and the model stays level on screen.
+     * The frame Yaw and Pitch turn in: identity for maps, the model's own axes for an entity previewed outside a map,
+     * so the orbit turns about the model's up and a posed model such as a weapon stays level on screen.
      */
     public Quaternion Basis { get; set; } = Quaternion.Identity;
 

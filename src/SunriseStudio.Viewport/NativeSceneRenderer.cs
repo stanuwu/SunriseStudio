@@ -258,12 +258,12 @@ public sealed partial class NativeSceneRenderer : IDisposable
     // ambient keeps the shaded side readable.
     private static readonly Vector4 StudioKeyColor = new(StudioKeyIntensity, StudioKeyIntensity, StudioKeyIntensity, 1);
     private const float StudioKeyIntensity = 16, AssetAmbientIntensity = .5f;
-    // Asset previews hold one exposure, as the game's inspect screen does, so a black weapon stays black instead of
-    // metering up to middle grey. The value is where the meter settled for light weapons under the studio key.
+    // Asset previews hold one exposure, so a black weapon stays black instead of metering up to middle grey. The value
+    // is where the meter settled for light weapons under the studio key.
     private const float AssetViewerStops = 1.5f;
     // An asset's backdrop is one dark blue-grey, about as bright as the viewer gradient, so the sky meter and the
-    // transparents it exposes read as they do over the gradient. The gain alone darkens it; through the film curve it shows as
-    // sRGB 24, 28, 35.
+    // transparents it exposes read as they do over the gradient. The gain alone darkens it; through the film curve it
+    // shows as sRGB 24, 28, 35.
     private static readonly Vector3 AssetBackdrop = new Vector3(.85f, 1, 1.35f) * .045f;
     private const float AssetBackdropGain = .13f;
     /** An asset preview draws its flat backdrop; off draws the viewer gradient behind it, as maps have. */
@@ -1960,7 +1960,7 @@ public sealed partial class NativeSceneRenderer : IDisposable
                             studioKey = Vector3.Normalize(camera.Right * StudioKeyView.X + camera.Up * StudioKeyView.Y
                                 - camera.Forward * StudioKeyView.Z);
                             studioEnvironment ??= Own(new NativeStudioEnvironment(renderer));
-                            reflection = studioEnvironment.Update(studioKey, camera.Right);
+                            reflection = studioEnvironment.Update(studioKey);
                         }
                         else reflection = studioReflection ??= Own(renderer.CreateTexture(1, 1, Format.R32G32B32A32_Float,
                             MemoryMarshal.AsBytes(new Vector4[] { new(StudioEnvironmentRadiance, StudioEnvironmentRadiance,

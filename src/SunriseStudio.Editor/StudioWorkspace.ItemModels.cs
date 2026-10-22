@@ -75,7 +75,7 @@ public sealed partial class StudioWorkspace
                 if (GuardianArt.ItemEntities(catalog, item, guardianClass.ClassByte, false) is { Count: > 0 } entities)
                     return (GuardianArt.ItemArrangement(item, guardianClass.ClassByte), entities);
             }
-            catch (Exception error) when (error is InvalidDataException or KeyNotFoundException) { }
+            catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or ArgumentException) { }
         return (-1, []);
     }
 }

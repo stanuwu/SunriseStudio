@@ -390,6 +390,27 @@ public sealed class AssetAnimationPreview : IDisposable
             : part.RigidEntries > 0 ? Enumerable.Repeat(DisplayPose.SkinMatrices[0], part.RigidEntries).ToArray()
             : part.Palette == SkinPaletteKind.ClothInput ? Pose.ClothInputSkinMatrices : DisplayPose.SkinMatrices;
 
+    /**
+     * How the shown pose moves a mesh that follows one bone, in mesh space: an attached part's bone, else the bone
+     * carrying more than half its skin weight. Null for a mesh spread over many bones, such as a guardian's body, and
+     * for cloth or an unskinned mesh.
+     */
+    public Matrix4x4? BonePose(MeshData mesh)
+    {
+        if (!parts.TryGetValue(mesh, out var part) || part.Palette == SkinPaletteKind.ClothInput) return null;
+        if (part.Attached is { } attached) return Pose.ObjectTransforms[attached.Bone];
+        var weightByBone = new Dictionary<int, float>();
+        void Add(int bone, float weight) { if (weight > 0) weightByBone[bone] = weightByBone.GetValueOrDefault(bone) + weight; }
+        foreach (var weights in part.Weights)
+        {
+            Add(weights.Bone0, weights.Weights.X); Add(weights.Bone1, weights.Weights.Y);
+            Add(weights.Bone2, weights.Weights.Z); Add(weights.Bone3, weights.Weights.W);
+        }
+        if (weightByBone.Count == 0) return null;
+        var (bone, weight) = weightByBone.MaxBy(pair => pair.Value);
+        return weight * 2 > weightByBone.Values.Sum() ? DisplayPose.SkinMatrices[bone] : null;
+    }
+
     /** Bone endpoints use the evaluated skeleton pose and are shown without depth testing. */
     public void DrawBones(Dx11Renderer renderer, Matrix4x4 viewProjection)
     {

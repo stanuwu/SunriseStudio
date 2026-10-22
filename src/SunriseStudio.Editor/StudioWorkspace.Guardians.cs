@@ -68,11 +68,11 @@ public sealed partial class StudioWorkspace
      * reason a guardian did not assemble.
      */
     private StudioDocument ReadGuardianItemDocument(PackageCatalog catalog, PackageEntry entry, string name,
-        AssetOpenContext context, StudioDocument document, string failure, Func<GuardianAssembler, IReadOnlyList<ArmorWearer>> list,
-        Func<GuardianAssembler, ArmorWearer?, PreparedGuardian> prepare)
+        AssetOpenContext context, StudioDocument document, string failure, Func<GuardianAssembler, IReadOnlyList<ItemWearer>> list,
+        Func<GuardianAssembler, ItemWearer?, PreparedGuardian> prepare)
     {
         PreparedGuardian prepared;
-        IReadOnlyList<ArmorWearer> wearers;
+        IReadOnlyList<ItemWearer> wearers;
         try
         {
             ReportProgress("Assembling guardian");

@@ -220,7 +220,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         if (!Camera.PivotFree) return;
         if (Scene?.Instances.Count > 0)
         {
-            // The pose can turn the whole item, so a profile view is taken again from the posed geometry.
+            // The pose can turn the whole item, so the preview view is taken again from the posed geometry.
             FrameItem(FacePreview(Scene));
         }
         else if (animation.DisplayPose.Rig.Bones.Count > 0)
@@ -560,10 +560,13 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         // Only native items take the preview view; plain geometry keeps the editor's camera.
         if (main?.Mesh.Native is not { Kind: NativeMeshKind.Entity }
             || !Matrix4x4.Decompose(main.Transform, out _, out var rotation, out _)) return false;
-        var turn = PoseTurn(main.Mesh);
+        // A posed part moves with its bone; the move, taken from mesh space to the world, places the overlays.
+        var turn = Quaternion.Identity;
+        if (Animation?.BonePose(main.Mesh) is { } moved && Matrix4x4.Decompose(moved, out _, out turn, out _)
+            && Matrix4x4.Invert(main.Transform, out var toMesh))
+            itemPose = toMesh * moved * main.Transform;
         Camera.Basis = Quaternion.Normalize(rotation * turn);
-        itemPose = RestToPose(main, turn);
-        // The grid lies under the posed item, its lines a fixed tenth or so of the item's length apart. A part with a
+        // The grid lies under the posed item, its lines the power of ten nearest a tenth of its width apart. A part with a
         // pose gives its posed vertices, so a guardian stands on the floor in the clip's pose.
         var toFrame = Matrix4x4.CreateFromQuaternion(Quaternion.Inverse(Camera.Basis));
         var low = new Vector3(float.MaxValue); var high = new Vector3(float.MinValue);
@@ -601,56 +604,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     private void FrameItem(bool preview)
     {
         Frame();
-        if (preview) Camera.Zoom(Camera.Orthographic ? OrthographicZoom : ProfileZoom);
-    }
-
-    /**
-     * How a pose turns a mesh, from its spans along mesh X and Z at rest and posed; identity at rest.
-     * Item parts move rigidly with their bone, so two spans fix the turn. A skinned part, such as a guardian's body,
-     * bends with many bones and gives no turn.
-     */
-    private Quaternion PoseTurn(MeshData mesh)
-    {
-        var rest = mesh.Vertices;
-        if (selection.PosedPositions(mesh) is not { } posed || posed.Count != rest.Length || rest.Length < 3)
-            return Quaternion.Identity;
-        int Extreme(Func<Vector3, float> measure, bool most) => Enumerable.Range(0, rest.Length)
-            .Aggregate((a, b) => (measure(rest[b].Position) > measure(rest[a].Position)) == most ? b : a);
-        int left = Extreme(p => p.X, false), right = Extreme(p => p.X, true);
-        int low = Extreme(p => p.Z, false), high = Extreme(p => p.Z, true);
-        // A rigid part keeps the lengths between its vertices; a bending one changes them.
-        bool Rigid(int a, int b)
-        {
-            float length = Vector3.Distance(rest[a].Position, rest[b].Position);
-            return MathF.Abs(Vector3.Distance(posed[a], posed[b]) - length) <= RigidTolerance * MathF.Max(length, 1e-4f);
-        }
-        if (!Rigid(left, right) || !Rigid(low, high) || !Rigid(left, high)) return Quaternion.Identity;
-        Matrix4x4? Axes(Vector3 along, Vector3 across)
-        {
-            if (along.LengthSquared() < 1e-12f) return null;
-            var x = Vector3.Normalize(along);
-            var y = across - x * Vector3.Dot(across, x);
-            if (y.LengthSquared() < 1e-12f) return null;
-            y = Vector3.Normalize(y);
-            var z = Vector3.Cross(x, y);
-            return new(x.X, x.Y, x.Z, 0, y.X, y.Y, y.Z, 0, z.X, z.Y, z.Z, 0, 0, 0, 0, 1);
-        }
-        if (Axes(rest[right].Position - rest[left].Position, rest[high].Position - rest[low].Position) is not { } before
-            || Axes(posed[right] - posed[left], posed[high] - posed[low]) is not { } after) return Quaternion.Identity;
-        // Rows hold each frame's axes, so rest coordinates times the posed rows give the posed direction.
-        return Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(Matrix4x4.Transpose(before) * after));
-    }
-
-    /** Takes the part's rest placement to its pose in world space: its turn about its centre, then the centre's move. */
-    private Matrix4x4 RestToPose(MeshInstance part, Quaternion turn)
-    {
-        var rest = part.Mesh.Vertices;
-        if (selection.PosedPositions(part.Mesh) is not { } posed || posed.Count != rest.Length || rest.Length == 0
-            || !Matrix4x4.Invert(part.Transform, out var toMesh)) return Matrix4x4.Identity;
-        var from = rest.Aggregate(Vector3.Zero, (sum, vertex) => sum + vertex.Position) / rest.Length;
-        var to = posed.Aggregate(Vector3.Zero, (sum, point) => sum + point) / posed.Count;
-        return toMesh * Matrix4x4.CreateTranslation(-from) * Matrix4x4.CreateFromQuaternion(turn)
-            * Matrix4x4.CreateTranslation(to) * part.Transform;
+        if (preview) Camera.Zoom(Camera.Orthographic ? OrthographicZoom : PerspectiveZoom);
     }
 
     // Collision, markers and volumes sit on the item at rest; the preview draws it posed, so they take its pose.
@@ -659,11 +613,10 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     // world floor with spacing that follows the camera.
     private float gridHeight, gridStep;
 
-    // The preview's yaw and pitch in the model frame. The view closes in this many zoom steps past the bounding-sphere
+    // The preview's yaw and pitch in the model frame: the eye sits 53 degrees from the model's +X toward -Y and 14 degrees
+    // above it, a three-quarter view. The view closes in this many zoom steps past the bounding-sphere
     // fit, which leaves room for depth; an orthographic view has none to leave room for, so it closes in further.
-    private const float PreviewYaw = 2.221f, PreviewPitch = -.25f, ProfileZoom = 1, OrthographicZoom = 3;
-    // How far a span may change length, as a share of it, while the part still counts as moving rigidly.
-    private const float RigidTolerance = .02f;
+    private const float PreviewYaw = 2.221f, PreviewPitch = -.25f, PerspectiveZoom = 1, OrthographicZoom = 3;
 
     /** Bubble identities may be either package tags or canonical name hashes. */
     public bool FrameBubble(uint bubbleHash)

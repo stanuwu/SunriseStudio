@@ -27,8 +27,7 @@ public sealed record StudioPageContext(StudioWorkspace Workspace, AssetViewport 
 
     /**
      * The view drawn in a bordered box with no padding, its controls pinned above it or shown on hover, with Pop Out
-     * among them.
-     * The model choice sits above the box, within the size.
+     * among them. The model choice sits above the box, within the size.
      */
     public void PreviewBox(string id, Vector2 size, Action draw)
     {
@@ -468,9 +467,8 @@ public sealed class ReferencesPage : IStudioPage
     public unsafe void Draw(StudioPageContext context)
     {
         if (context.Workspace.Document is not { } document) return;
-        int count = document.Inspection.References.Count;
-        ImGui.TextDisabled(count == 0 ? "No references" : $"{count:N0} references");
-        if (count == 0 || !ImGui.BeginTable("references", 3, ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
+        ImGui.TextDisabled($"{document.Inspection.References.Count:N0} references");
+        if (!ImGui.BeginTable("references", 3, ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
             | ImGuiTableFlags.Resizable, ImGui.GetContentRegionAvail())) return;
         ImGui.TableSetupColumn("Asset", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Offset", ImGuiTableColumnFlags.WidthFixed, 72);

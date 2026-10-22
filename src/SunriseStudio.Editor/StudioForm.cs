@@ -106,10 +106,7 @@ public sealed partial class StudioForm : Form
         Text = $"Sunrise Studio {StudioVersion.Text}";
         chrome = new(this);
         Icon = studioIcon = StudioBrand.CreateIcon();
-        // Four fifths of the screen's height, at least 960, in a 16:10 shape that fits the screen.
-        var area = Screen.FromPoint(MousePosition).WorkingArea;
-        int height = Math.Min(area.Height, Math.Max(960, area.Height * 4 / 5));
-        ClientSize = new Size(Math.Min(area.Width, height * 8 / 5), height);
+        ClientSize = new Size(1540, 960);
         MinimumSize = new Size(1100, 720);
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;

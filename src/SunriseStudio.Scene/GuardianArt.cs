@@ -44,7 +44,8 @@ public static class GuardianArt
                 if (tables.ItemTag(index) is not { } found) return false;
                 byte[] definition = catalog.Read(found);
                 slot = GuardianAppearance.ArmorSlot(definition);
-                if (slot < 0 || definition[ItemTierField] != InvestmentItemKinds.LegendaryTier) return false;
+                if (slot < 0 || definition.Length <= ItemTierField
+                    || definition[ItemTierField] != InvestmentItemKinds.LegendaryTier) return false;
                 try { if (ItemEntities(tables, definition, classByte, female).Count == 0) return false; }
                 catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or ArgumentException) { return false; }
                 tag = found;
