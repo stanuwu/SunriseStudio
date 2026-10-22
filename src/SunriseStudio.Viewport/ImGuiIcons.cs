@@ -9,7 +9,7 @@ public enum StudioIcon
     Back, Forward, Expand, Collapse, Folder, Map, Cube, Pin, Light, Group,
     Play, Pause, Reset, Loop, Import, Export, Build, Plus, Open, Shader, Player, PopOut, PopIn,
     Select, Move, Rotate, Scale,
-    Spark, Warning, Remove, Up, Down, Undo, Redo, Check, Copy, Edit
+    Spark, Warning, Remove, Up, Down, Undo, Redo, Check, Copy, Edit, Pushpin, Backdrop, Wearer
 }
 
 /** Vector icons share the current font scale and need no external font or texture. */
@@ -220,6 +220,18 @@ public static class ImGuiIcons
                 break;
             case StudioIcon.Edit:
                 Line(.1f, .9f, .75f, .25f); Line(.75f, .25f, .9f, .4f); Line(.9f, .4f, .25f, 1); Line(.1f, .9f, .25f, 1);
+                break;
+            case StudioIcon.Pushpin:
+                Line(.3f, .05f, .7f, .05f); Line(.38f, .05f, .38f, .4f); Line(.62f, .05f, .62f, .4f);
+                Line(.38f, .4f, .2f, .6f); Line(.62f, .4f, .8f, .6f); Line(.2f, .6f, .8f, .6f); Line(.5f, .6f, .5f, 1);
+                break;
+            case StudioIcon.Backdrop:
+                Rect(0, .1f, 1, .9f); draw.AddRectFilled(P(0, .55f), P(1, .9f), color);
+                break;
+            case StudioIcon.Wearer:
+                // A head and shoulders, apart from Player's whole figure.
+                draw.AddCircle(P(.5f, .3f), size * .2f, color, 12, stroke);
+                Line(.12f, 1, .25f, .66f); Line(.25f, .66f, .75f, .66f); Line(.75f, .66f, .88f, 1);
                 break;
         }
     }

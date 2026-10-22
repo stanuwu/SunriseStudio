@@ -352,18 +352,19 @@ public sealed partial class AssetViewport
         return CollisionScene.WorldBounds(view.Scene.Pieces[placement.Piece].Shape, CollisionWorld(view.Scene, index));
     }
 
-    /** The drawn world matrix: a posed bone for an opened entity while an animation plays, else the loaded one. */
+    /** The drawn world matrix: a posed bone for an opened entity, else the loaded placement through the item's pose. */
     private Matrix4x4 CollisionWorld(CollisionScene scene, int index)
     {
         var placement = scene.Placements[index];
         var entity = scene.Entities[placement.Entity];
         if (placement.Bone < 0 || entity.Source != CollisionSource.EntityPhysics || entity.Marker is not null
-            || Animation?.Pose.ObjectTransforms is not { } pose || placement.Bone >= pose.Count) return placement.World;
+            || Animation?.Pose.ObjectTransforms is not { } pose || placement.Bone >= pose.Count) return placement.World * itemPose;
+        // The bone already places this shape; applying the item's pose again would move it twice.
         return pose[placement.Bone] * entity.Frame;
     }
 
-    /** True while an animation poses the opened entity's physics, which then skips the culling grid. */
-    private bool CollisionPosed(CollisionScene scene) => Animation is not null
+    /** True while the item or its bones move collision off its loaded bounds, which then skips the culling grid. */
+    private bool CollisionPosed(CollisionScene scene) => !itemPose.IsIdentity || Animation is not null
         && scene.Entities.Any(entity => entity.Source == CollisionSource.EntityPhysics && entity.Marker is null);
 
     /** Drawn when its entity shows, its role is not hidden, and it is enabled or selected. */
@@ -399,7 +400,7 @@ public sealed partial class AssetViewport
             collisionBoxes.Clear();
             foreach (int index in visibleCollision)
             {
-                var box = scene.Placements[index].Bone >= 0
+                var box = scene.Placements[index].Bone >= 0 || !itemPose.IsIdentity
                     ? BoxMatrix(scene.Pieces[scene.Placements[index].Piece].Shape) * CollisionWorld(scene, index) : data.Boxes[index];
                 collisionBoxes.Add(new(box, data.Tints[index] with { W = 1 }));
             }
@@ -439,7 +440,8 @@ public sealed partial class AssetViewport
         {
             var placement = scene.Placements[index];
             if (placement.Role == CollisionRole.Trigger != trigger) continue;
-            instances[collisionPieceCounts[placement.Piece]++] = new(placement.Bone >= 0 ? CollisionWorld(scene, index) : placement.World,
+            instances[collisionPieceCounts[placement.Piece]++] = new(placement.Bone >= 0 || !itemPose.IsIdentity
+                ? CollisionWorld(scene, index) : placement.World,
                 data.Tints[index]);
         }
         collisionPass!.Draw(data.Geometry!, instances, CollectionsMarshal.AsSpan(collisionRanges), view, true, CollisionEdges,

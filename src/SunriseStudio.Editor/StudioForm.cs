@@ -58,6 +58,8 @@ public sealed partial class StudioForm : Form
     private uint? adoptedMap;
     private StudioDocument? adoptedDocument;
     private bool changesOnly;
+    /** The next document adopted frames the view, though it reopens the same asset. */
+    private bool reframeView;
     public string? Failure { get; private set; }
     public StudioPageRegistry Pages => pages;
     public StudioWorkspace Workspace => workspace;
@@ -182,6 +184,10 @@ public sealed partial class StudioForm : Form
             assetViewport.ObjectName = SceneObjectName;
             viewport.ShowCursor = settings.ShowAssetCursor;
             assetViewport.ShowCursor = settings.ShowAssetCursor;
+            viewport.ControlsPinned = assetViewport.ControlsPinned = settings.AssetControlsPinned;
+            viewport.FlatBackdrop = assetViewport.FlatBackdrop = settings.FlatBackdrop;
+            viewport.Camera.Orthographic = assetViewport.Camera.Orthographic = settings.Orthographic;
+            workspace.ShowGuardian = settings.ShowGuardian;
             viewport.PreparationProgress = ReportPreparation;
             assetViewport.PreparationProgress = ReportPreparation;
             viewport.SelectionChanged += OnViewportSelection;
@@ -391,13 +397,18 @@ public sealed partial class StudioForm : Form
         var nextAsset = workspace.Document is { } document
             ? (document.Entry.TagHash, document.AddedAssetId) : ((uint, string?)?)null;
         bool preserveView = workspace.World is { } world ? adoptedMap == world.Map.Tag
-            : adoptedMap is null && viewport!.Scene is not null && adoptedAsset is not null && nextAsset == adoptedAsset;
+            : !reframeView && adoptedMap is null && viewport!.Scene is not null && adoptedAsset is not null && nextAsset == adoptedAsset;
+        reframeView = false;
         var eye = viewport!.Camera.Position;
         var pivot = viewport.Camera.Pivot;
         bool orthographic = viewport.Camera.Orthographic;
         var priorMesh = viewport.SelectedObject as MeshInstance;
         string? priorObject = selectedWorldId, priorGroup = selectedGroupId;
-        RememberCursorPreferences();
+        RememberViewPreferences();
+        var preview = workspace.World is null ? viewport : assetViewport!;
+        preview.ControlsPinned = settings.AssetControlsPinned;
+        preview.FlatBackdrop = settings.FlatBackdrop;
+        preview.Camera.Orthographic = settings.Orthographic;
         adoptedAsset = nextAsset;
         adoptedMap = workspace.World?.Map.Tag;
         selectedProperty = null;
@@ -504,14 +515,14 @@ public sealed partial class StudioForm : Form
         _ => null
     };
 
-    private void RememberCursorPreferences()
+    private void RememberViewPreferences()
     {
-        if (viewport is not null)
-        {
-            if (adoptedMap is not null) settings.ShowSceneCursor = viewport.ShowCursor;
-            else settings.ShowAssetCursor = viewport.ShowCursor;
-        }
-        if (adoptedMap is not null && assetViewport is not null) settings.ShowAssetCursor = assetViewport.ShowCursor;
+        if (adoptedMap is not null && viewport is not null) settings.ShowSceneCursor = viewport.ShowCursor;
+        if ((adoptedMap is null ? viewport : assetViewport) is not { } preview) return;
+        settings.ShowAssetCursor = preview.ShowCursor;
+        settings.AssetControlsPinned = preview.ControlsPinned;
+        settings.FlatBackdrop = preview.FlatBackdrop;
+        settings.Orthographic = preview.Camera.Orthographic;
     }
 
     /** Clip navigation prepares the selected owner's pose before the editor is revealed; a guardian holds its weapon. */
@@ -521,7 +532,7 @@ public sealed partial class StudioForm : Form
         target.SetAnimation(source);
         if (workspace.Document.Connections?.SelectedClipTag is > 0 and var clip)
             target.Animation!.SelectClip(clip);
-        else if (workspace.Document.Guardian is { PoseClipTag: > 0 and var hold })
+        else if (workspace.Document.PoseClipTag is > 0 and var hold)
             target.Animation!.SelectClip(hold, play: false);
     }
 
@@ -706,15 +717,27 @@ public sealed partial class StudioForm : Form
     {
         DrawCreationBar(document);
         string bar = shownPrefix + "pages";
+        bool hasView = document.Scene is not null || document.Texture is not null;
+        // The Preview editor, docked or in its own window, shows the view in place of the pages.
+        bool previewElsewhere = hasView && workspace.World is null
+            && (layout.Find(StudioPanelKind.Preview) is not null || IsPoppedOut(StudioPanelKind.Preview));
+        context = context with
+        {
+            PopOutPreview = workspace.World is null && !IsPoppedOut(StudioPanelKind.Preview)
+                ? () => pendingLayoutChange = () => OpenPopout(StudioPanelKind.Preview, null) : null,
+            PreviewElsewhere = previewElsewhere,
+            PreviewChoice = width => DrawPreviewChoice(document, width)
+        };
         if (StudioCategories.ForKind(document.Kind) is not { } category)
         {
-            DrawPageTabs(bar, pages.Pages.Where(page => page.CanOpen(document)), shownPrefix, context);
+            DrawPageTabs(bar, pages.Pages.Where(page => page.CanOpen(document)
+                && !(previewElsewhere && page.Id == StudioCategories.PreviewPageId)), shownPrefix, context);
             return;
         }
-        bool hasView = document.Scene is not null || document.Texture is not null;
-        bool modelView = category.ModelPane && hasView;
+        bool modelView = category.ModelPane && hasView && !previewElsewhere;
         // The pane is the preview, so a request to show it is already met.
-        if (modelView && focusDocumentPage is { } focus && (focus.Equals(StudioCategories.PreviewPageId, StringComparison.OrdinalIgnoreCase)
+        if ((modelView || previewElsewhere) && focusDocumentPage is { } focus
+            && (focus.Equals(StudioCategories.PreviewPageId, StringComparison.OrdinalIgnoreCase)
             || focus.Equals("Scene", StringComparison.OrdinalIgnoreCase)))
             focusDocumentPage = null;
         if (category.ModelPane && !hasView && document.PreviewError.Length != 0)
@@ -722,7 +745,7 @@ public sealed partial class StudioForm : Form
             ImGui.TextDisabled("Model"); ImGui.SameLine(); ImGui.TextDisabled("not readable");
             StudioUi.Tip(document.PreviewError);
         }
-        var tabs = StudioCategories.Tabs(category, pages.Pages, document, modelView);
+        var tabs = StudioCategories.Tabs(category, pages.Pages, document, modelView || previewElsewhere);
         if (category.Sections.Length != 0 && !tabs.Any(page => page.Id == category.Sections[0]))
             ImGui.TextDisabled($"No {category.Label} view for this type");
         // A bar keeps its selected tab when the next document has that tab too.
@@ -738,11 +761,22 @@ public sealed partial class StudioForm : Form
         }
         var available = ImGui.GetContentRegionAvail();
         bool wide = available.X > 900 * scale;
-        ImGui.BeginChild("model-pane", wide ? new(available.X * .55f, available.Y)
-            : new(available.X, MathF.Max(150 * scale, available.Y * .45f)), ImGuiChildFlags.None);
-        pages.Pages.FirstOrDefault(page => page.Id == StudioCategories.PreviewPageId)?.Draw(context);
-        ImGui.EndChild();
-        if (wide) ImGui.SameLine();
+        float extent = wide ? available.X : available.Y, divider = 6 * scale;
+        // Until the divider is dragged, the pane takes 55% of the width beside the pages or 45% of the height above them.
+        float pane = MathF.Max(150 * scale, extent * (settings.ModelPaneDivider ?? (wide ? .55f : .45f)));
+        context.PreviewBox("model-pane", wide ? new(pane, available.Y) : new(available.X, pane));
+        // The divider drags the pane's share; a double click returns it to the default.
+        if (wide) ImGui.SameLine(0, 0);
+        ImGui.InvisibleButton("model-pane-divider", wide ? new(divider, available.Y) : new(available.X, divider));
+        var delta = ImGui.GetIO().MouseDelta;
+        if (ImGui.IsItemActive()) settings.ModelPaneDivider = Math.Clamp((pane + (wide ? delta.X : delta.Y)) / extent, .2f, .8f);
+        if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left)) settings.ModelPaneDivider = null;
+        if (ImGui.IsItemHovered() || ImGui.IsItemActive())
+            ImGui.SetMouseCursor(wide ? ImGuiMouseCursor.ResizeEW : ImGuiMouseCursor.ResizeNS);
+        var line = ImGui.GetItemRectMin() + (wide ? new Vector2(divider / 2, 0) : new Vector2(0, divider / 2));
+        ImGui.GetWindowDrawList().AddLine(line, line + (wide ? new Vector2(0, available.Y) : new Vector2(available.X, 0)),
+            ImGui.GetColorU32(ImGui.IsItemActive() || ImGui.IsItemHovered() ? StudioTheme.Accent : StudioTheme.Panel), 2 * scale);
+        if (wide) ImGui.SameLine(0, 0);
         ImGui.BeginChild("category-pages", Vector2.Zero, ImGuiChildFlags.None);
         if (DrawPageTabs(bar, tabs, shownPrefix, context) is { } drawn) documentTab = (bar, drawn);
         ImGui.EndChild();
@@ -827,7 +861,8 @@ public sealed partial class StudioForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         closed = true;
-        RememberCursorPreferences();
+        RememberViewPreferences();
+        settings.ShowGuardian = workspace.ShowGuardian;
         try { WriteFrameProfile(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         { Failure ??= error.Message; }

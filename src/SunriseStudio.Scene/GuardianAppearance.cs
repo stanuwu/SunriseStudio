@@ -62,9 +62,11 @@ public sealed class GuardianAppearance
     private const uint ClassDefaultsRowClass = 0x808074FA, ClassDefaultsItemClass = 0x808087DB;
     private const int ClassDefaultsStride = 32, ClassDefaultsItems = 8;
     // Item index rows are 24 bytes with the definition tag at +16; definition +184 is the bucket.
-    private const int ItemIndexStride = 24, ItemIndexTagField = 16, BucketField = 184;
+    internal const int ItemIndexStride = 24, ItemIndexTagField = 16, BucketField = 184;
     // Buckets 3 to 7 are armor slots 0 to 4.
-    private const int FirstArmorBucket = 3, ArmorSlots = 5;
+    private const int FirstArmorBucket = 3;
+    /** Armor slots, helmet to class item, in GuardianLoadout.Armor order. */
+    public const int ArmorSlots = 5;
     // The world draws the first selector of each pair. The part names are assumed.
     public const int HeadSelector = 13, HairSelector = 15, ThirdSelector = 17, MarkingSelector = 19;
     public static IReadOnlyList<string> RaceNames { get; } = ["Human", "Awoken", "Exo"];
@@ -96,6 +98,11 @@ public sealed class GuardianAppearance
         this.tables = tables;
         (previewDefaults, previewDefaultsError) = previews;
     }
+
+    /** The armor slot 0..4 of an item definition, in GuardianLoadout.Armor order; -1 for any other item. */
+    public static int ArmorSlot(byte[] definition) =>
+        definition.Length > BucketField && (uint)(definition[BucketField] - FirstArmorBucket) < ArmorSlots
+            ? definition[BucketField] - FirstArmorBucket : -1;
 
     /** The class's gear-preview placeholder for armor slot 0..4, in GuardianLoadout.Armor order; 0 when there is none. */
     public uint PreviewDefault(byte classByte, int slot) =>
@@ -165,9 +172,8 @@ public sealed class GuardianAppearance
                     if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != InvestmentTags.ItemClass)
                         throw new InvalidDataException($"Item index {item} does not name an item definition.");
                     byte[] definition = catalog.Read(tag);
-                    if (definition.Length <= BucketField) continue;
-                    int slot = definition[BucketField] - FirstArmorBucket;
-                    if ((uint)slot < ArmorSlots && slots[slot] == 0) slots[slot] = tag;
+                    int slot = ArmorSlot(definition);
+                    if (slot >= 0 && slots[slot] == 0) slots[slot] = tag;
                 }
             }
             return (result, error);

@@ -175,6 +175,18 @@ public sealed partial class StudioForm
                 DrawObjectTree("layout-tree");
                 ImGui.End();
                 break;
+            case StudioPanelKind.Preview:
+                BeginPanel("Preview area", position, size);
+                TrackAreaFocus();
+                if (viewport is not null && workspace.World is null
+                    && workspace.Document is { Scene: not null } or { Texture: not null })
+                {
+                    DrawPreviewChoice(workspace.Document, ImGui.GetContentRegionAvail().X);
+                    viewport.DrawImGui(ImGui.GetContentRegionAvail());
+                }
+                else ImGui.TextDisabled("No model");
+                ImGui.End();
+                break;
             default:
                 BeginPanel($"area-{area}-empty", position, size);
                 ImGui.End();

@@ -19,11 +19,21 @@ public sealed class StudioSettings
     public bool FullDetail { get; set; }
     public bool ShowSceneTree { get; set; } = true;
     public float SceneTreeWidth { get; set; } = 280;
+    /** Where the model pane's divider sits, as the share of the page the pane takes; null keeps the default share. */
+    public float? ModelPaneDivider { get; set; }
     public bool ShowSceneCursor { get; set; } = true;
     public bool ShowAssetCursor { get; set; } = true;
     public bool DiskCacheEnabled { get; set; } = true;
     public int DiskCacheLimitMiB { get; set; } = 512;
     public NativeLightingMode LightingMode { get; set; } = NativeLightingMode.Studio;
+    /** Asset previews draw a flat backdrop; off draws the viewer sky gradient behind them. */
+    public bool FlatBackdrop { get; set; }
+    /** The model pane keeps its controls shown; off shows them on hover. */
+    public bool AssetControlsPinned { get; set; } = true;
+    /** Asset previews keep the last projection choice. */
+    public bool Orthographic { get; set; }
+    /** Armor previews draw the guardian wearing the piece, and weapons show in a guardian's hands. */
+    public bool ShowGuardian { get; set; }
     /** Kept as raw JSON so a damaged section falls back per action instead of resetting every preference. */
     public JsonElement? Shortcuts { get; set; }
     public JsonElement? Layout { get; set; }
