@@ -21,7 +21,7 @@ public sealed class MapCatalog
     private MapCatalog(PackageCatalog catalog, Func<uint, string> name, CancellationToken token)
     {
         var maps = new List<MapEntry>();
-        foreach (var entry in catalog.Entries)
+        foreach (var entry in AllEntries(catalog))
         {
             token.ThrowIfCancellationRequested();
             if (entry.Reference == MapRootClass)
@@ -47,6 +47,10 @@ public sealed class MapCatalog
 
     public static MapCatalog Build(PackageCatalog catalog, Func<uint, string> name, CancellationToken token = default) =>
         new(catalog, name, token);
+
+    /** Installed entries, then the project's added entries, so a new map lists beside the installed ones. */
+    public static IEnumerable<PackageEntry> AllEntries(PackageCatalog catalog) => catalog.Entries.Concat(catalog.GetOverlayEntries()
+        .Select(overlay => overlay.Entry).Where(entry => !catalog.ContainsInstalledPackage(entry.PackageId)).OrderBy(entry => entry.TagHash));
 
     /** Bubble name hashes in map order, from the map definition's bubble rows. */
     private static MapEntry ReadMap(PackageCatalog catalog, uint mapTag, string name)

@@ -217,6 +217,8 @@ public sealed partial class StudioForm
         CreationMenuItem("Static prop", prop, () => StartCreation(prop));
         CreationMenuItem("Clone material", CreationTypes.For(CreationTypes.MaterialKey, CreationMode.Clone),
             () => StartClone(CreationTypes.MaterialKey));
+        var map = CreationTypes.For(CreationTypes.MapKey, CreationMode.New);
+        CreationMenuItem("Map", map, () => StartCreation(map));
         ImGui.Separator();
         foreach (var type in CreationTypes.Blocked) CreationMenuItem(type.Name, type, () => { });
         ImGui.EndPopup();

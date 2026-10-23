@@ -3,6 +3,9 @@
     <TargetFramework>net9.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="NewWorld/GeneratedGround.hlsl" LogicalName="SunriseStudio.Formats.GeneratedGround.hlsl" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../SunriseStudio.Packages/SunriseStudio.Packages.csproj" />
     <ProjectReference Include="../SunriseStudio.Scene/SunriseStudio.Scene.csproj" />
     <ProjectReference Include="../SunriseStudio.Animation/SunriseStudio.Animation.csproj" />

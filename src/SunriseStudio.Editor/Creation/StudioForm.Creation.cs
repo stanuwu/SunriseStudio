@@ -193,5 +193,8 @@ public sealed partial class StudioForm
             workspace.Run(() => workspace.SelectAdded(id));
         else if (next.Tag is { } tag) workspace.Run(() => workspace.Select(tag));
         if (next.Page is { } page) ShowAssetPage(page);
+        if (next.MapGroup is { } group && workspace.Project?.AddedAssets.FirstOrDefault(asset => asset.Group == group
+            && asset.Native?.Name == "map:" + group + ":root") is { Native: { } root })
+        { workspace.OpenMap(root.Tag()); focusWorldScene = true; }
     }
 }

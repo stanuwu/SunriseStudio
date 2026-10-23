@@ -18,7 +18,7 @@ public sealed class WorldLoader(PackageCatalog catalog, StudioNameIndex? names =
             .ToDictionary(x => x.Key, x => x.ToArray());
         var missions = new List<WorldMissionEntry>();
         var diagnostics = maps.Errors.ToList();
-        foreach (var entry in catalog.Entries.Where(x => x.Reference == 0x80809994))
+        foreach (var entry in MapCatalog.AllEntries(catalog).Where(x => x.Reference == 0x80809994))
         {
             token.ThrowIfCancellationRequested();
             if (matches.TryGetValue(entry.TagHash, out var owned))

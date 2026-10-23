@@ -49,8 +49,8 @@ internal static class CreationSafetyChecks
             && CreationTypes.KeyFor(plain with { Reference = InvestmentTags.ItemClass }, workspace) == InvestmentItemKinds.Other,
             "A vendor display or item record with no category row fell to the Other key.");
         Check(workspace.CloneBaseOf(first + 1) == first + 1, "A plain clone base was remapped.");
-        Check(!CreationTypes.Blocked.Single(type => type.Name == "Map").Blocker.Contains("no hash64"),
-            "Map blocker still denies authored wide-hash support.");
+        Check(CreationTypes.Blocked.All(type => type.Name != "Map") && CreationTypes.For(CreationTypes.MapKey, CreationMode.New).Available,
+            "New map is still blocked.");
         Console.WriteLine("creation_safety static_template=installed material_io=contained retry=pass search_error=nonselectable"
             + " row_swap=refiltered record_key=pass");
     }
