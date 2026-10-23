@@ -30,7 +30,9 @@ public enum ObjectEditLayout
      * 16-byte record in a 0x80807173 decorator block; Identity is its 0x80807164 payload.
      * Values are payload space: position, rotation, and one scale.
      */
-    DecoratorInstance
+    DecoratorInstance,
+    /** Added arrival row; Offset/Length/hash fingerprint the whole installed bank, Index is a stable project ordinal. */
+    AddedSpawnPoint
 }
 
 /**
@@ -41,7 +43,7 @@ public sealed record ObjectEditTarget(uint SourceTag, ObjectEditLayout Layout, i
     int Index, ulong Identity, string OriginalSha256)
 {
     /** Edits merge by this key, so one object has one entry. */
-    [JsonIgnore] public string Key => $"{SourceTag:X8}/{Layout}/{Offset:X}";
+    [JsonIgnore] public string Key => $"{SourceTag:X8}/{Layout}/{(Layout == ObjectEditLayout.AddedSpawnPoint ? Index : Offset):X}";
 
     /** Checks what the manifest can check without the row layouts. */
     public void Validate()
@@ -64,6 +66,8 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] float[]? Minimum = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] float[]? Maximum = null)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? SpawnRole { get; init; }
+
     [JsonIgnore] public string Key => Target.Key;
 
     [JsonIgnore] public bool HasValues => Position is not null || Rotation is not null || Scale is not null
@@ -105,6 +109,13 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
     {
         if (Target is null || !Enum.IsDefined(Kind)) throw new InvalidDataException("Invalid object edit target.");
         Target.Validate();
+        if (Target.Layout == ObjectEditLayout.AddedSpawnPoint && SpawnRole != "arrival")
+            throw new InvalidDataException($"Spawn role '{SpawnRole}' is not compiled. Only arrival is supported; respawn and checkpoint are refused.");
+        if (Target.Layout != ObjectEditLayout.AddedSpawnPoint && SpawnRole is not null)
+            throw new InvalidDataException("Spawn roles apply only to added arrival points.");
+        if (Target.Layout == ObjectEditLayout.AddedSpawnPoint && (Target.Offset != 0 || Target.Index < 0
+            || Target.Identity > uint.MaxValue || Position is null || Rotation is null || Scale is not null))
+            throw new InvalidDataException("Added arrival points need a bank fingerprint, index, name hash, position and rotation only.");
         bool bounds = Target.Layout == ObjectEditLayout.TriggerVolume;
         if (bounds != (Kind == ObjectEditKind.TriggerBounds))
             throw new InvalidDataException("Object edit kind does not match its layout.");

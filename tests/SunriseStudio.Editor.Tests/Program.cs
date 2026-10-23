@@ -13,6 +13,7 @@ string root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "sunrise-editor-
 Directory.CreateDirectory(root);
 try
 {
+    if (args is ["--spawn-points"]) { SpawnPointWorkflowChecks.Run(root); return 0; }
     if (args is ["--weapon-scene", var weaponGame, var weaponKeys, var weaponProject, var weaponOutput])
     {
         WeaponSceneUiChecks.Run(weaponGame, weaponKeys, weaponProject, weaponOutput);
@@ -237,6 +238,7 @@ try
     ConfigBindingChecks.Run(root);
     StaticPropInspectionChecks.Run(root, workspace);
     ObjectEditWorkflowChecks.Run(root);
+    SpawnPointWorkflowChecks.Run(root);
     PlacementUpdateWorkflowChecks.Run(root);
     GroupTransformWorkflowChecks.Run(root);
     ReadinessChecks.Run(root);

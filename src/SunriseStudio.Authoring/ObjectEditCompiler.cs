@@ -49,6 +49,13 @@ public sealed partial class ObjectEditContext
         return working[tag] = start.ToArray();
     }
 
+    /** Replaces a resized spawn bank while retaining its raw baseline for the compile receipt. */
+    internal void ReplaceSpawnBank(uint tag, byte[] bytes)
+    {
+        Current(tag);
+        working[tag] = bytes;
+    }
+
     public uint ClassOf(uint tag) => Catalog.TryGetEntry(tag, out var entry)
         ? entry.Reference : throw new InvalidDataException($"Asset {tag:X8} is not installed.");
 
@@ -79,7 +86,7 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
 {
     /** Rules run in this order. Add a rule for a new kind of derived data here. */
     public static IReadOnlyList<IObjectEditRule> DefaultRules { get; } =
-        [new InstanceBoundsRule(), new OcclusionTomeRule(), new InstanceCullRule(), new StaticCollisionRule(), new DecoratorInstanceRule()];
+        [new InstanceBoundsRule(), new OcclusionTomeRule(), new InstanceCullRule(), new StaticCollisionRule(), new DecoratorInstanceRule(), new AddedSpawnPointRule()];
 
     public static ObjectEditCompiler Default { get; } = new(DefaultRules);
 
@@ -124,6 +131,7 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
 
     public ObjectEdit? Normalize(ObjectEdit edit, Func<uint, byte[]> readRaw, PackageCatalog catalog)
     {
+        if (edit.Target.Layout == ObjectEditLayout.AddedSpawnPoint) { edit.Validate(); return edit; }
         uint tag = edit.Target.SourceTag;
         var raw = new NativeRows(readRaw(tag));
         var original = new NativeRows(catalog.ReadOriginal(tag));
@@ -178,6 +186,8 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
     /** Writes the set fields exactly where the scene decoder reads them. */
     private static void WriteRow(ObjectEditContext context, ObjectEdit edit)
     {
+        edit.Validate();
+        if (edit.Target.Layout == ObjectEditLayout.AddedSpawnPoint) return;
         uint tag = edit.Target.SourceTag;
         byte[] bytes = context.Current(tag);
         var row = ObjectRows.Locate(context.Catalog, edit.Target, bytes);

@@ -16,11 +16,11 @@ public static class SceneEdits
     private sealed record Binding(ObjectEditTarget Target, byte[] Bytes, ObjectRow Row, string Space);
 
     /** Values come from the current project bytes, so they show every saved edit. */
-    public static SceneEditInfo Describe(PackageCatalog catalog, object target, WorldDocument? world = null)
+    public static SceneEditInfo Describe(PackageCatalog catalog, object target, WorldDocument? world = null, IReadOnlyList<ObjectEdit>? edits = null)
     {
         try
         {
-            var binding = Resolve(catalog, target, world);
+            var binding = Resolve(catalog, target, world, edits);
             var data = new NativeRows(binding.Bytes);
             var key = binding.Target;
             if (key.Layout == ObjectEditLayout.TriggerVolume)
@@ -52,9 +52,9 @@ public static class SceneEdits
      * @return Null when nothing changed.
      */
     public static ObjectEdit? CreateTransformEdit(PackageCatalog catalog, object target, Vector3 position,
-        Quaternion? rotation, float scale, WorldDocument? world = null, string? name = null)
+        Quaternion? rotation, float scale, WorldDocument? world = null, string? name = null, IReadOnlyList<ObjectEdit>? edits = null)
     {
-        var binding = Resolve(catalog, target, world);
+        var binding = Resolve(catalog, target, world, edits);
         if (binding.Target.Layout == ObjectEditLayout.TriggerVolume)
             throw new NotSupportedException("Trigger hull transforms are not editable.");
         if (!Finite(position) || rotation is { } turn && (!float.IsFinite(turn.LengthSquared()) || turn.LengthSquared() < 0.000001f)
@@ -79,6 +79,11 @@ public static class SceneEdits
             ? ObjectEditCompiler.Floats(unit) : null;
         float? scaled = binding.Row.Scale && scale != data.F32(at + 28) ? scale : null;
         if (moved is null && turned is null && scaled is null) return null;
+        if (binding.Target.Layout == ObjectEditLayout.AddedSpawnPoint)
+            return new(ObjectEditKind.PlacementTransform, binding.Target, name,
+                moved ?? ObjectEditCompiler.Floats(data.V3(at + 16)),
+                turned ?? ObjectEditCompiler.Floats(data.Q4(at)))
+            { SpawnRole = "arrival" };
         return new(ObjectEditKind.PlacementTransform, binding.Target, name, moved, turned, scaled);
     }
 
@@ -121,11 +126,13 @@ public static class SceneEdits
             DecoratorQuantization.Read(read(tags.Quantization)));
     }
 
-    private static Binding Resolve(PackageCatalog catalog, object target, WorldDocument? world)
+    private static Binding Resolve(PackageCatalog catalog, object target, WorldDocument? world, IReadOnlyList<ObjectEdit>? edits = null)
     {
         if (target is ISceneSelectionProxy proxy) target = proxy.Key;
         if (target is string id && world?.Find(id) is { } byId) target = byId.Source;
         if (target is WorldObject wrapper) target = wrapper.Source;
+        if (target is SceneMarker marker && edits is not null && SpawnPointAuthoring.Find(catalog, marker, edits) is { } added)
+            return new(added.Target, catalog.Read(marker.SourceTag), new(marker.SourceOffset, false), "World");
         var (key, space) = Select(catalog, target, world);
         byte[] bytes = catalog.Read(key.SourceTag);
         var row = ObjectRows.Locate(catalog, key, bytes);

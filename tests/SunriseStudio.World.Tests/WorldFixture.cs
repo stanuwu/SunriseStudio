@@ -71,6 +71,7 @@ internal static class WorldFixture
             Entry(14 + i, 0x80809462, obj, $"test:object:{i}");
             var spawn = new Bytes(24); int point = spawn.Array(8, 0x80809164, 48, 1);
             spawn.Qts(point, new(10 + i, 5, 0), 1); spawn.U32(point + 32, (uint)(500 + i));
+            spawn.U64(0, (ulong)(point + 48));
             Entry(17 + i, 0x80809162, spawn);
         }
         // The instance table names its bounds table at +0x18 and holds the aggregate box at +0x80 and +0x90.

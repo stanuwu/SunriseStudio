@@ -82,6 +82,7 @@ public sealed partial class StudioForm
                 or SceneMarker { PreviewPose: not null });
             DrawObservedPlacement(observed, holding); ImGui.SeparatorText("Authored placement");
         }
+        DrawSpawnPointActions(selectedObject as SceneMarker);
         DrawPlacementEditor();
         if (selectedObject is SceneMarker { Effect: not null } effectMarker && workspace.World?.Scene is { } effectScene)
             DrawEffectControls(effectScene, effectMarker);
@@ -140,7 +141,7 @@ public sealed partial class StudioForm
         {
             // The catalog shows compiled project bytes, so these start from the current edited state.
             editTarget = selectedObject;
-            sceneEditInfo = SceneEdits.Describe(catalog, selectedObject, inspectionWorld);
+            sceneEditInfo = SceneEdits.Describe(catalog, selectedObject, inspectionWorld, workspace.Project?.ObjectEdits);
             editPosition = sceneEditInfo.Position;
             editRotation = editRotationBase = QuaternionToDegrees(sceneEditInfo.Rotation);
             editScale = sceneEditInfo.Scale;
@@ -165,7 +166,7 @@ public sealed partial class StudioForm
             if (ImGui.Button("Apply transform", new(-1, 0))) workspace.Run(() =>
                 workspace.ApplyObjectEdit(SceneEdits.CreateTransformEdit(catalog, selectedObject, editPosition,
                     editRotation == editRotationBase ? null : DegreesToQuaternion(editRotation), editScale, inspectionWorld,
-                    objectInspection?.Object.Name)));
+                    objectInspection?.Object.Name, workspace.Project?.ObjectEdits)));
         }
         if (info.CanBounds)
         {
@@ -178,7 +179,7 @@ public sealed partial class StudioForm
         if (info.Target is { } target && workspace.Project?.FindObjectEdit(target.Key) is { } saved)
         {
             ImGui.TextColored(StudioTheme.Accent, $"Edited: {saved.Summary()}");
-            if (ImGui.Button("Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
+            if (ImGui.Button(saved.Target.Layout == ObjectEditLayout.AddedSpawnPoint ? "Remove added spawn point" : "Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
         }
         ImGui.EndDisabled();
         if (workspace.Project is null) ImGui.TextDisabled("Create a project to edit");
@@ -207,6 +208,8 @@ public sealed partial class StudioForm
                 item.InstanceSourceTag == target.SourceTag && item.InstanceSourceIndex == target.Index),
             ObjectEditLayout.Light => world.Objects.FirstOrDefault(row => row.Source is WorldLight light
                 && light.Owner.Table.TagHash == target.SourceTag && light.Row.TransformOffset == target.Offset)?.Source,
+            ObjectEditLayout.AddedSpawnPoint => scene.Markers.FirstOrDefault(marker => marker.SourceTag == target.SourceTag
+                && marker.SourceOffset == SpawnPointAuthoring.Offset(workspace.Catalog!, target, workspace.Project!.ObjectEdits)),
             ObjectEditLayout.CollisionInstance => null,
             ObjectEditLayout.DecoratorInstance => scene.Instances.FirstOrDefault(item =>
                 item.ObjectPlacement?.SourceTag == target.Identity && item.ObjectPlacement.SourceIndex == target.Index),

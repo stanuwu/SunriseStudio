@@ -253,6 +253,7 @@ public sealed partial class StudioForm
                         }
                     }
                     if (ImGui.IsItemHovered()) ImGui.SetTooltip(node.Name);
+                    DrawSpawnTreeMenu(node.Authored);
                     if (dimmed) ImGui.PopStyleColor();
                     ImGui.TableNextColumn();
                     bool ownHidden = node.Live is not null ? liveInspection.IsHidden(node.Id) : sceneTree.IsHidden(node.Id);

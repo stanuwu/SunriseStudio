@@ -131,6 +131,7 @@ public sealed partial class StudioForm
                         foreach (var group in missionGroups.GetValueOrDefault(stateKey, []))
                             if (ImGui.TreeNodeEx($"{group.Name} ({group.Rows.Length:N0})###{group.Name}"))
                             {
+                                if (group.Name == "Spawns") StudioUi.Wip(StudioUi.MayNotWork, sameLine: false);
                                 DrawMissionObjects(group.Rows);
                                 ImGui.TreePop();
                             }
@@ -168,6 +169,11 @@ public sealed partial class StudioForm
                     { viewport.FocusSelection(); focusWorldScene = true; }
                 }
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip($"{row.BubbleName}\n{row.AssetTag:X8}");
+                if (row.Source is SceneMarker { Layer: SceneLayer.Spawns } spawn && ImGui.BeginPopupContextItem("spawn-actions"))
+                {
+                    DrawSpawnPointActions(spawn);
+                    ImGui.EndPopup();
+                }
                 ImGui.PopID();
             }
         clipper.End(); clipper.Destroy();

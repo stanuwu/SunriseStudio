@@ -8,6 +8,7 @@ using SunriseStudio.Scene;
 string temporary = Path.Combine(Path.GetTempPath(), "sunrise-world-tests-" + Guid.NewGuid().ToString("N"));
 try
 {
+    SpawnPointChecks.Run(temporary);
     string installation = Path.Combine(temporary, "fixture");
     WorldFixture.Create(installation);
     using var catalog = PackageCatalog.Open(installation);
