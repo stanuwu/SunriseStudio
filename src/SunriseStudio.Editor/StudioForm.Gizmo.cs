@@ -29,6 +29,16 @@ public sealed partial class StudioForm
             view.GizmoPivot = null; view.GizmoUnavailableReason = "";
             return;
         }
+        // A crossing exit box moves and scales per axis about its centre; it never turns.
+        if (group is null && workspace.FindCrossingExit(selectedObject) is { } exit)
+        {
+            view.AxisScale = true;
+            string refusal = !workspace.CanEdit ? "Create a project to edit"
+                : view.Tool == TransformTool.Rotate ? "Exit boxes stay axis-aligned." : "";
+            view.GizmoUnavailableReason = refusal;
+            view.GizmoPivot = refusal.Length == 0 ? exit.Marker.Position : null;
+            return;
+        }
         bool same = group is not null ? gizmoTarget as string == group : ReferenceEquals(gizmoTarget, selectedObject);
         if (!view.GizmoDragging && (!same || gizmoRevision != workspace.ProjectRevision
             || !ReferenceEquals(gizmoWorld, inspectionWorld) || !ReferenceEquals(gizmoCollision, view.Collision)))
@@ -52,6 +62,11 @@ public sealed partial class StudioForm
 
     private void CommitGizmo(TransformChange change)
     {
+        if (selectedGroupId is null && workspace.FindCrossingExit(selectedObject) is { } exit)
+        {
+            workspace.Run(() => workspace.EditCrossingExit(exit, change));
+            return;
+        }
         if (selectedGroupId is { } group)
         {
             if (groupFrame is { } members && gizmoTarget as string == group) ApplyGroupChange(group, change, members);

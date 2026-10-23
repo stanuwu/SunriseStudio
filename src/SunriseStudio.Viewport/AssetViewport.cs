@@ -413,6 +413,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         itemDecorators = []; anyItemDecorators = false;
         itemKinds = [];
         markerLineStarts = []; markerLines = [];
+        transitionLines.Clear(); transitionScene = null;
         renderIndexDirty = true;
         sceneGrid = null;
         selection.SetScene(new SceneDocument());
@@ -1381,6 +1382,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         DrawVolumes(view);
         RecordOverlayPhase(5, ref phase);
         if (Scene is not null) DrawMarkers(view);
+        DrawTransitions(view);
         RecordOverlayPhase(6, ref phase);
         DrawPointProxies(view);
         RecordOverlayPhase(7, ref phase);

@@ -173,6 +173,8 @@ public sealed partial class StudioForm
         if (ImGui.BeginCombo("##bubbleVisibility", "Bubbles", ImGuiComboFlags.HeightLarge))
         {
             if (ImGui.Selectable("Show all")) hiddenBubbles.Clear();
+            if (world.MissionTag is null && ImGui.Selectable("Connect bubbles...")) BeginCrossings();
+            if (world.MissionTag is null) StudioUi.Tip("Add a walk-across crossing between two bubbles. " + StudioUi.MayNotWork);
             foreach (var bubble in world.Scene.Bubbles.GroupBy(bubble => world.CanonicalBubble(bubble.TagHash)).Select(group => group.First()))
             {
                 uint canonical = world.CanonicalBubble(bubble.TagHash);

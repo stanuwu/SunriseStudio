@@ -46,7 +46,7 @@ $studioChecks = [ordered]@{
     'Animation.Tests' = 'net9.0'; 'MaterialInterchange.Tests' = 'net9.0'; 'Interchange.Tests' = 'net9.0-windows'
     'MeshAuthoring.Tests' = 'net9.0-windows'; 'AssetSurface.Tests' = 'net9.0-windows'; 'Shading.Tests' = 'net9.0-windows'
     'PackageReplacement.Tests' = 'net9.0'; 'Editor.Tests' = 'net9.0-windows'; 'Creation.Tests' = 'net9.0-windows'
-    'OriginalAsset.Tests' = 'net9.0'; 'Shortcuts.Tests' = 'net9.0-windows'
+    'OriginalAsset.Tests' = 'net9.0'; 'Shortcuts.Tests' = 'net9.0-windows'; 'Crossing.Tests' = 'net9.0'
 }
 # The arguments each check takes with -Game; checks not listed take none.
 $gameArgs = @{
@@ -57,7 +57,7 @@ $gameArgs = @{
     'AssetSurface.Tests' = @('--game-root', $Game, '--output', (Join-Path $Output 'isolated-native-asset.png'))
 }
 foreach ($name in 'Projects', 'Formats', 'Missions', 'Cui', 'Audio', 'Authoring', 'AnimationAuthoring', 'MeshAuthoring',
-    'Names', 'World', 'Collision', 'Shading', 'PackageReplacement', 'Editor', 'OriginalAsset') {
+    'Names', 'World', 'Collision', 'Shading', 'PackageReplacement', 'Editor', 'OriginalAsset', 'Crossing') {
     $gameArgs["$name.Tests"] = @('--game-root', $Game)
 }
 # With -Blender, the Blender section runs the Interchange checks that read the installation.

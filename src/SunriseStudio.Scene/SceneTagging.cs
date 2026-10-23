@@ -268,6 +268,7 @@ public sealed partial class AssetSceneLoader
             SceneLayer.Volumes => IsKillName(marker) ? "Kill volume" : "Trigger volume",
             SceneLayer.Spawns => "Spawn point",
             SceneLayer.Squads => "Squad",
+            SceneLayer.Transitions => marker.Semantic.StartsWith("crossing", StringComparison.Ordinal) ? "Crossing" : "Visibility",
             SceneLayer.Objects => marker.Semantic switch
             {
                 "device sensor placement" => "Entity / Device",

@@ -199,6 +199,8 @@ public sealed class SceneDocument
     public List<NativeOcclusionOwner> OcclusionOwners { get; } = [];
     public List<PlacedAtmosphere> Atmospheres { get; } = [];
     public List<PlacedTimeOfDay> TimesOfDay { get; } = [];
+    /** Visibility owners with their decoded cells and zones; the Transitions layer draws them. */
+    public List<PlacedVisibility> Visibility { get; } = [];
     public List<PlacedLightTable> LightTables { get; } = [];
     public List<PlacedCubemap> Cubemaps { get; } = [];
     public List<MapLayerInfo> MapLayers { get; } = [];

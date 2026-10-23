@@ -458,6 +458,7 @@ public sealed partial class StudioForm : Form
                     if (workspace.World is not null)
                     {
                         viewport.Visibility.HiddenOverlayLayers.Add(SceneLayer.Transitions);
+                        viewport.Visibility.HiddenGeometryLayers.Add(SceneLayer.Transitions);
                         viewport.Visibility.HiddenOverlayLayers.Add(SceneLayer.Squads);
                         viewport.Visibility.HiddenOverlayLayers.Add(SceneLayer.Effects);
                         viewport.Visibility.HiddenOverlayLayers.Add(SceneLayer.Lights);
