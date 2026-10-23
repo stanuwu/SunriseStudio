@@ -79,7 +79,8 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
 {
     /** Rules run in this order. Add a rule for a new kind of derived data here. */
     public static IReadOnlyList<IObjectEditRule> DefaultRules { get; } =
-        [new InstanceBoundsRule(), new OcclusionTomeRule(), new InstanceCullRule(), new StaticCollisionRule(), new DecoratorInstanceRule()];
+        [new InstanceBoundsRule(), new OcclusionTomeRule(), new InstanceCullRule(), new StaticCollisionRule(), new DecoratorInstanceRule(),
+            new StaticPlacementRule()];
 
     public static ObjectEditCompiler Default { get; } = new(DefaultRules);
 
@@ -133,6 +134,12 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
         bool Held(Func<NativeRows, float[]> read, float[]? value) =>
             value is not null && read(raw).SequenceEqual(value) && read(original).SequenceEqual(value);
         ObjectEdit next;
+        // An added copy has no installed row that could already hold a value, so it keeps every value.
+        if (edit.Target.Layout == ObjectEditLayout.AddedStaticInstance)
+        {
+            edit.Validate();
+            return edit;
+        }
         if (edit.Target.Layout == ObjectEditLayout.CollisionInstance)
         {
             int at = row.Transform;
@@ -185,6 +192,8 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
         if (edit.Target.Layout == ObjectEditLayout.CollisionInstance) return;
         // DecoratorInstanceRule writes decorator records together, since one may re-quantize the block.
         if (edit.Target.Layout == ObjectEditLayout.DecoratorInstance) return;
+        // StaticPlacementRule writes added copies into generated tables; the source row stays as it is.
+        if (edit.Target.Layout == ObjectEditLayout.AddedStaticInstance) return;
         if (edit.Kind == ObjectEditKind.TriggerBounds)
         {
             var source = new NativeRows(bytes);

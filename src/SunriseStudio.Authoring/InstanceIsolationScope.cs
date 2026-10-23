@@ -102,7 +102,7 @@ internal sealed class InstanceIsolationScope
     }
 
     /** A copied class must construct only the one static component carried by its single context. */
-    private void ValidatePlacement(Placement placement)
+    internal void ValidatePlacement(Placement placement)
     {
         var source = Read(placement.List);
         int row = placement.Row, auxiliary = placement.Auxiliary;

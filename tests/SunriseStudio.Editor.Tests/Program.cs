@@ -34,6 +34,7 @@ try
         return 0;
     }
     if (args is ["--isolated-objects"]) { IsolatedObjectWorkflowChecks.Run(root); return 0; }
+    if (args is ["--added-placements"]) { AddedPlacementWorkflowChecks.Run(root); return 0; }
     if (args is ["--groups"]) { GroupTransformWorkflowChecks.Run(root); SceneSelectionUiChecks.Run(root); return 0; }
     if (args is ["--groups-owned", var groupGame]) { GroupTransformWorkflowChecks.Owned(groupGame, root); return 0; }
     if (args is ["--decorator-owned", var decoratorGame])
@@ -93,6 +94,7 @@ try
     }
     CanvasChecks.Run(root);
     LayoutChecks.Run(root);
+    AddedPlacementWorkflowChecks.Run(root);
     IsolatedObjectWorkflowChecks.Run(root);
     NoticesUiChecks.Run(root);
     const uint first = 0x80A00000, second = first + 1;

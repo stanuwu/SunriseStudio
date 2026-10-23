@@ -127,11 +127,11 @@ internal sealed class StaticCollisionRule : IObjectEditRule
         context.Catalog.TryGetEntry(tag, out var entry) ? entry.PackageId : throw new InvalidDataException("Placement source is missing.");
 
     /** An instance row: quaternion at +0x00, translation at +0x10, uniform scale at +0x1C. */
-    private static QsTransform Row(NativeRows data, int row) =>
+    internal static QsTransform Row(NativeRows data, int row) =>
         new(data.V3(row + 0x10), data.Q4(row), new Vector3(data.F32(row + 0x1C)));
 
     /** A placement row: quaternion at +0x10, translation at +0x20, uniform scale at +0x2C. */
-    private static QsTransform Placement(NativeRows data, int row) =>
+    internal static QsTransform Placement(NativeRows data, int row) =>
         new(data.V3(row + 0x20), data.Q4(row + 0x10), new Vector3(data.F32(row + 0x2C)));
 
     /** The renderer's composition: owner rotation on the left, owner scale on the translation. */
@@ -140,7 +140,7 @@ internal sealed class StaticCollisionRule : IObjectEditRule
             Multiply(owner.Rotation, row.Rotation), owner.Scale.X * row.Scale);
 
     /** Undoes the entity placement; the client applies only its rotation and translation. */
-    private static QsTransform ToLocal(QsTransform placement, QsTransform world)
+    internal static QsTransform ToLocal(QsTransform placement, QsTransform world)
     {
         var inverse = Quaternion.Conjugate(Quaternion.Normalize(placement.Rotation));
         return new(Rotate(inverse, world.Translation - placement.Translation),

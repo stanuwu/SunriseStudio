@@ -724,7 +724,7 @@ public sealed partial class StudioWorkspace : IDisposable
             {
                 Generated = true, GeneratedSourceTag = asset.SourceTag,
                 InstanceOrigins = asset.InstanceOrigins, PlacementOrigins = asset.PlacementOrigins,
-                Replaces = asset.Replaces
+                Replaces = asset.Replaces, AddedInstances = asset.AddedInstances
             });
         }
         catalog.SetOverlayEntries(rows);

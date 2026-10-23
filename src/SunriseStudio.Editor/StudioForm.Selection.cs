@@ -1,6 +1,7 @@
 using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Authoring;
+using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
 using SunriseStudio.Viewport;
@@ -15,6 +16,8 @@ public sealed partial class StudioForm
     private Vector3 editPosition, editRotation, editRotationBase, editMinimum, editMaximum;
     private float editScale = 1;
     private bool expandObjectDetails;
+    // The added copy to select once the reloaded world draws it.
+    private (uint Table, int Index, ulong Copy)? pendingCopy;
 
     /** Names the current Frame selection key, which the user can remap. */
     private static string FrameTooltip => ShortcutInput.Text(ShortcutActions.FrameSelection3D) is { Length: > 0 } key
@@ -175,13 +178,59 @@ public sealed partial class StudioForm
                 workspace.ApplyObjectEdit(SceneEdits.CreateBoundsEdit(catalog, selectedObject, editMinimum, editMaximum,
                     inspectionWorld, objectInspection?.Object.Name)));
         }
+        DrawStaticCopyControls(catalog, info);
         if (info.Target is { } target && workspace.Project?.FindObjectEdit(target.Key) is { } saved)
         {
+            bool added = saved.Kind == ObjectEditKind.AddedPlacement;
             ImGui.TextColored(StudioTheme.Accent, $"Edited: {saved.Summary()}");
-            if (ImGui.Button("Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
+            if (ImGui.Button(added ? "Remove copy" : "Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
         }
         ImGui.EndDisabled();
         if (workspace.Project is null) ImGui.TextDisabled("Create a project to edit");
+    }
+
+    /** Duplicate for a static instance, and the collision choice of an added copy. */
+    private void DrawStaticCopyControls(PackageCatalog catalog, SceneEditInfo info)
+    {
+        if (!info.CanTransform || selectedObject is not MeshInstance { InstanceSourceTag: not 0 } instance || workspace.World is null
+            || workspace.Project is not { } project) return;
+        if (ImGui.Button("Duplicate", new(ImGui.GetContentRegionAvail().X - ImGui.GetFrameHeight() * 1.6f, 0))) workspace.Run(() =>
+        {
+            var copy = StaticPlacements.Duplicate(catalog, instance, project.ObjectEdits, objectInspection?.Object.Name);
+            workspace.ApplyObjectEdit(copy, "Added static copy");
+            pendingCopy = (copy.Target.SourceTag, copy.Target.Index, copy.Target.Identity);
+        });
+        StudioUi.Wip($"{StudioUi.MayNotWork} Adds a copy of this instance, with its collision, to the map container that draws it.");
+        if (info.Target is not { Layout: ObjectEditLayout.AddedStaticInstance } target
+            || project.FindObjectEdit(target.Key) is not { Added: { } added } saved) return;
+        bool collision = added.Collision;
+        if (ImGui.Checkbox("Copy collision", ref collision)) workspace.Run(() =>
+            workspace.ApplyObjectEdit(saved with { Added = added with { Collision = collision } }, "Saved object edit"));
+        StudioUi.Tip("Adds an instance of the source's static collision at the copy. The game may not use it.");
+    }
+
+    /** Selects the added copy that the reloaded world draws, then forgets it. */
+    private void SelectPendingCopy()
+    {
+        if (pendingCopy is not { } wanted || workspace.World is not { } world || workspace.Catalog is not { } catalog) return;
+        foreach (var item in world.Scene.Instances)
+            if (catalog.TryGetAddedInstance(item.InstanceSourceTag, item.InstanceSourceIndex, out var copy)
+                && (copy.SourceTag, copy.SourceIndex, copy.Copy) == wanted && inspectionWorld?.Find(item) is { } row)
+            {
+                pendingCopy = null;
+                SelectWorldObject(row);
+                focusWorldScene = true;
+                return;
+            }
+    }
+
+    /** Places a copy of an instance of this static model at the 3D cursor. */
+    private void PlaceModel(uint model)
+    {
+        if (workspace.World is not { } world || workspace.Catalog is not { } catalog || workspace.Project is not { } project) return;
+        var copy = StaticPlacements.Place(catalog, world, model, viewport!.Camera.Pivot, project.ObjectEdits, workspace.DisplayName(model));
+        workspace.ApplyObjectEdit(copy, "Placed static model");
+        pendingCopy = (copy.Target.SourceTag, copy.Target.Index, copy.Target.Identity);
     }
 
     /** A Changes row selects its object in the open world; with no world, or no match, it opens the source asset. */
@@ -205,6 +254,9 @@ public sealed partial class StudioForm
         {
             ObjectEditLayout.StaticInstance => scene.Instances.FirstOrDefault(item =>
                 item.InstanceSourceTag == target.SourceTag && item.InstanceSourceIndex == target.Index),
+            ObjectEditLayout.AddedStaticInstance => scene.Instances.FirstOrDefault(item =>
+                workspace.Catalog!.TryGetAddedInstance(item.InstanceSourceTag, item.InstanceSourceIndex, out var copy)
+                && copy.SourceTag == target.SourceTag && copy.SourceIndex == target.Index && copy.Copy == target.Identity),
             ObjectEditLayout.Light => world.Objects.FirstOrDefault(row => row.Source is WorldLight light
                 && light.Owner.Table.TagHash == target.SourceTag && light.Row.TransformOffset == target.Offset)?.Source,
             ObjectEditLayout.CollisionInstance => null,

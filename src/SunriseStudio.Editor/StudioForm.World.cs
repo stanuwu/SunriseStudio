@@ -307,6 +307,7 @@ public sealed partial class StudioForm
         RebuildSceneTree();
         if (selectedWorldId is not null && inspectionWorld?.Objects.FirstOrDefault(row => row.Id == selectedWorldId) is { } selected)
         { selectedObject = selected.Source; objectInspection = inspectionWorld.Inspect(selected.Source); }
+        SelectPendingCopy();
     }
 
     /** Selects a world row and unhides the bubble, layer and map or mission it needs to show. */

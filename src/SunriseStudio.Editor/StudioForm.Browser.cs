@@ -346,6 +346,13 @@ public sealed partial class StudioForm
                     if (clone.Available && (!workspace.IsProjectTag(row.Entry.TagHash) || clone.ClonesProject))
                         CreationMenuItem("Clone", clone, () => StartCreation(clone, row.Entry.TagHash, row.Name));
                     if (ImGui.MenuItem("Copy tag")) ImGui.SetClipboardText($"{row.Entry.TagHash:X8}");
+                    if (row.Entry.Reference == 0x808071A7 && workspace.World is not null)
+                    {
+                        if (ImGui.MenuItem("Place in map", "", false, workspace.CanEdit))
+                            workspace.Run(() => PlaceModel(row.Entry.TagHash));
+                        StudioUi.Tip(workspace.CanEdit ? $"Places a copy of this model at the 3D cursor. {StudioUi.MayNotWork}"
+                            : "Open a project to edit.");
+                    }
                     ImGui.EndPopup();
                 }
                 ImGui.PopID();

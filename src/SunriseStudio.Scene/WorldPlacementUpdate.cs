@@ -105,9 +105,11 @@ public sealed class WorldPlacementUpdate
         var generated = catalog.GetOverlayEntries().Where(row => row.Generated).ToDictionary(row => row.Entry.TagHash);
         foreach (uint tag in changedTags)
         {
-            // A removed generated entry only drew rows that its source table draws again.
+            // A removed generated entry only drew rows that its source table draws again, unless it drew added copies.
             if (!catalog.TryGetEntry(tag, out var entry))
             {
+                if (IsGeneratedTag(tag) && SourceInstances().Any(item => item.InstanceSourceTag == tag))
+                    return $"Added placements of {tag:X8} were removed.";
                 if (IsGeneratedTag(tag)) continue;
                 return $"Asset {tag:X8} is not installed.";
             }
@@ -124,7 +126,8 @@ public sealed class WorldPlacementUpdate
             if (generated.TryGetValue(tag, out var made))
             {
                 if (made.Entry.Reference == PlacementList && UnmatchedReplacement(made) is { Length: > 0 } unmatched) return unmatched;
-                continue;
+                // An added copy has no source row that moves it; its own generated row moves it in place.
+                if (made.AddedInstances.Count == 0) continue;
             }
             if (Snapshot(tag) is not { } old) continue;
             byte[] bytes = catalog.Read(tag);

@@ -4,7 +4,7 @@ using SunriseStudio.Packages;
 
 namespace SunriseStudio.Projects;
 
-public enum ObjectEditKind { PlacementTransform, TriggerBounds }
+public enum ObjectEditKind { PlacementTransform, TriggerBounds, AddedPlacement }
 
 /** The typed row an object edit targets. */
 public enum ObjectEditLayout
@@ -30,7 +30,12 @@ public enum ObjectEditLayout
      * 16-byte record in a 0x80807173 decorator block; Identity is its 0x80807164 payload.
      * Values are payload space: position, rotation, and one scale.
      */
-    DecoratorInstance
+    DecoratorInstance,
+    /**
+     * A new 0x808071A3 row copied from this installed row of a 0x8080966D table. Identity numbers the copy,
+     * so one row can have several; values are the copy's table-space transform.
+     */
+    AddedStaticInstance
 }
 
 /**
@@ -41,7 +46,8 @@ public sealed record ObjectEditTarget(uint SourceTag, ObjectEditLayout Layout, i
     int Index, ulong Identity, string OriginalSha256)
 {
     /** Edits merge by this key, so one object has one entry. */
-    [JsonIgnore] public string Key => $"{SourceTag:X8}/{Layout}/{Offset:X}";
+    [JsonIgnore] public string Key => Layout == ObjectEditLayout.AddedStaticInstance
+        ? $"{SourceTag:X8}/{Layout}/{Offset:X}/{Identity:X}" : $"{SourceTag:X8}/{Layout}/{Offset:X}";
 
     /** Checks what the manifest can check without the row layouts. */
     public void Validate()
@@ -52,9 +58,13 @@ public sealed record ObjectEditTarget(uint SourceTag, ObjectEditLayout Layout, i
     }
 }
 
+/** Where an added static copy draws: the 0x80808A54 map container, and whether its collision is copied too. */
+public sealed record AddedPlacement(uint Container, bool Collision = true);
+
 /**
  * Only set values are written. An unset value keeps the stored bytes exactly.
  * Rotation is a unit quaternion x, y, z, w. Name is a display label only.
+ * An added placement sets every transform value and Added; it stores no game bytes.
  */
 public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name = null,
@@ -64,6 +74,9 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] float[]? Minimum = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] float[]? Maximum = null)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AddedPlacement? Added { get; init; }
+
     [JsonIgnore] public string Key => Target.Key;
 
     [JsonIgnore] public bool HasValues => Position is not null || Rotation is not null || Scale is not null
@@ -82,7 +95,8 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
             Rotation = later.Rotation ?? earlier.Rotation,
             Scale = later.Scale ?? earlier.Scale,
             Minimum = later.Minimum ?? earlier.Minimum,
-            Maximum = later.Maximum ?? earlier.Maximum
+            Maximum = later.Maximum ?? earlier.Maximum,
+            Added = later.Added ?? earlier.Added
         };
     }
 
@@ -90,6 +104,7 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
     public string Summary()
     {
         var parts = new List<string>();
+        if (Kind == ObjectEditKind.AddedPlacement) parts.Add(Added?.Collision == false ? "added without collision" : "added");
         if (Position is not null) parts.Add("position " + Join(Position));
         if (Rotation is not null) parts.Add("rotation");
         if (Scale is float scale) parts.Add("scale " + scale.ToString("0.####", CultureInfo.InvariantCulture));
@@ -106,8 +121,12 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
         if (Target is null || !Enum.IsDefined(Kind)) throw new InvalidDataException("Invalid object edit target.");
         Target.Validate();
         bool bounds = Target.Layout == ObjectEditLayout.TriggerVolume;
-        if (bounds != (Kind == ObjectEditKind.TriggerBounds))
+        bool added = Target.Layout == ObjectEditLayout.AddedStaticInstance;
+        if (bounds != (Kind == ObjectEditKind.TriggerBounds) || added != (Kind == ObjectEditKind.AddedPlacement))
             throw new InvalidDataException("Object edit kind does not match its layout.");
+        if (added != (Added is not null)) throw new InvalidDataException("Only an added placement names a container.");
+        if (added && (Position is null || Rotation is null || Scale is not float size || !(size > 0)))
+            throw new InvalidDataException("An added placement needs a position, a rotation and a positive scale.");
         if (bounds && (Minimum is null || Maximum is null || Position is not null || Rotation is not null || Scale is not null))
             throw new InvalidDataException("Trigger bounds edits need a minimum and a maximum only.");
         if (!bounds && (Minimum is not null || Maximum is not null))
@@ -161,6 +180,8 @@ public sealed record GeneratedObjectAsset(string Id, string Name, NativeAssetMet
     public IReadOnlyDictionary<int, PackageInstanceOrigin> InstanceOrigins { get; init; } = new Dictionary<int, PackageInstanceOrigin>();
     public IReadOnlyDictionary<int, PackagePlacementOrigin> PlacementOrigins { get; init; } = new Dictionary<int, PackagePlacementOrigin>();
     public IReadOnlyList<PackageInstanceReplacement> Replaces { get; init; } = [];
+    /** Rows that copy no installed row of this table: one per added placement it draws. */
+    public IReadOnlyDictionary<int, PackageAddedInstance> AddedInstances { get; init; } = new Dictionary<int, PackageAddedInstance>();
     public uint TagHash => checked(0x80800000U + ((uint)Native.PackageId << 13) + (uint)Native.EntryIndex!.Value);
 }
 

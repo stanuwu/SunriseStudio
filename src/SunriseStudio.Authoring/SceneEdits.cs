@@ -13,7 +13,8 @@ public sealed record SceneEditInfo(bool CanTransform, bool CanScale, bool CanBou
 /** Scene edits target only rows reached through the same typed rows as the scene decoder. */
 public static class SceneEdits
 {
-    private sealed record Binding(ObjectEditTarget Target, byte[] Bytes, ObjectRow Row, string Space);
+    /** Added is set for a project copy; its Bytes and Row are the generated table row that draws it. */
+    private sealed record Binding(ObjectEditTarget Target, byte[] Bytes, ObjectRow Row, string Space, AddedPlacement? Added = null);
 
     /** Values come from the current project bytes, so they show every saved edit. */
     public static SceneEditInfo Describe(PackageCatalog catalog, object target, WorldDocument? world = null)
@@ -73,6 +74,15 @@ public static class SceneEdits
         }
         var data = new NativeRows(binding.Bytes);
         int at = binding.Row.Transform;
+        if (binding.Added is { } added)
+        {
+            // An added copy saves its whole transform; the generated row holds the saved floats exactly.
+            float[] storedRotation = ObjectEditCompiler.Floats(data.Q4(at));
+            float[] nextRotation = rotation is { } value ? ObjectEditCompiler.Floats(Quaternion.Normalize(value)) : storedRotation;
+            if (position == data.V3(at + 16) && nextRotation.SequenceEqual(storedRotation) && scale == data.F32(at + 28)) return null;
+            return new(ObjectEditKind.AddedPlacement, binding.Target, name, ObjectEditCompiler.Floats(position), nextRotation, scale)
+            { Added = added };
+        }
         float[]? moved = position != data.V3(at + 16) ? ObjectEditCompiler.Floats(position) : null;
         // Re-encoding an unchanged rotation would add float noise or flip q to -q.
         float[]? turned = rotation is { } edited && Quaternion.Normalize(edited) is var unit && unit != data.Rotation(at)
@@ -126,6 +136,9 @@ public static class SceneEdits
         if (target is ISceneSelectionProxy proxy) target = proxy.Key;
         if (target is string id && world?.Find(id) is { } byId) target = byId.Source;
         if (target is WorldObject wrapper) target = wrapper.Source;
+        if (target is MeshInstance { InstanceSourceTag: not 0 } drawn
+            && catalog.TryGetAddedInstance(drawn.InstanceSourceTag, drawn.InstanceSourceIndex, out var copy))
+            return ResolveAdded(catalog, drawn, copy);
         var (key, space) = Select(catalog, target, world);
         byte[] bytes = catalog.Read(key.SourceTag);
         var row = ObjectRows.Locate(catalog, key, bytes);
@@ -135,6 +148,25 @@ public static class SceneEdits
         ObjectRows.Locate(catalog, key, original);
         key = key with { OriginalSha256 = BinaryDelta.Hash(original.AsSpan(key.Offset, key.Length)) };
         return new(key, bytes, row, space);
+    }
+
+    /** A project copy edits its saved placement; the source row it copies is the target and stays as it is. */
+    private static Binding ResolveAdded(PackageCatalog catalog, MeshInstance drawn, PackageAddedInstance copy)
+    {
+        var data = Read(catalog, drawn.InstanceSourceTag, 0x8080966D);
+        int[] rows = data.Rows(0x40, 0x808071A3, 48);
+        if (drawn.InstanceSourceIndex < 0 || drawn.InstanceSourceIndex >= rows.Length)
+            throw new InvalidDataException("The selected copy row is missing.");
+        int row = rows[drawn.InstanceSourceIndex];
+        if (drawn.NativeInstanceData.Length != 48 || !data.Bytes.AsSpan(row, 48).SequenceEqual(drawn.NativeInstanceData.Span))
+            throw new InvalidDataException("The selected copy changed. Reload the world.");
+        byte[] original = catalog.ReadOriginal(copy.SourceTag);
+        var source = new NativeRows(original).Rows(0x40, 0x808071A3, 48);
+        if (copy.SourceIndex >= source.Length) throw new InvalidDataException("The copied instance row is missing.");
+        var key = Target(copy.SourceTag, ObjectEditLayout.AddedStaticInstance, source[copy.SourceIndex], copy.SourceIndex, copy.Copy);
+        ObjectRows.Locate(catalog, key, original);
+        key = key with { OriginalSha256 = BinaryDelta.Hash(original.AsSpan(key.Offset, key.Length)) };
+        return new(key, data.Bytes, new(row, true), "Local", new(copy.Container, copy.Collision));
     }
 
     /** Maps a selection to its row. The row checks themselves run in ObjectRows.Locate. */

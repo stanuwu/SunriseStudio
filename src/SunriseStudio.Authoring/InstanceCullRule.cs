@@ -8,7 +8,7 @@ namespace SunriseStudio.Authoring;
 internal sealed class InstanceCullRule : IObjectEditRule
 {
     /** Added graph payloads are not part of the installed-only ownership index. */
-    private static readonly HashSet<uint> GraphClasses =
+    internal static readonly HashSet<uint> GraphClasses =
     [
         0x808091DE, 0x80807DAE, 0x808091E0, 0x80808A54, 0x808099D6, 0x80806EF4, 0x80807320,
         0x8080925B, 0x8080925E, 0x80809994, 0x80809462, 0x80809468, 0x80809B14, 0x80809C36,

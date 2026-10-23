@@ -16,7 +16,7 @@ internal static class ObjectRows
     internal static int Length(ObjectEditLayout layout) => layout switch
     {
         ObjectEditLayout.Placement or ObjectEditLayout.SlotPlacement => 144,
-        ObjectEditLayout.StaticInstance or ObjectEditLayout.SpawnPoint => 48,
+        ObjectEditLayout.StaticInstance or ObjectEditLayout.AddedStaticInstance or ObjectEditLayout.SpawnPoint => 48,
         ObjectEditLayout.Light => 32,
         ObjectEditLayout.TriggerVolume => 0x120,
         ObjectEditLayout.CollisionInstance => StaticCompoundShape.InstanceSize,
@@ -47,7 +47,7 @@ internal static class ObjectRows
                 RequireIdentity(source, offset, target.Identity);
                 RequirePlacementTransform(source, offset);
                 return new(offset + 16, true);
-            case ObjectEditLayout.StaticInstance:
+            case ObjectEditLayout.StaticInstance or ObjectEditLayout.AddedStaticInstance:
             {
                 RequireClass(entry, 0x8080966D);
                 int[] rows = source.Rows(0x40, 0x808071A3, 48);

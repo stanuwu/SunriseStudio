@@ -9,5 +9,6 @@
     <Compile Include="../SunriseStudio.World.Tests/WorldFixture.cs" Link="WorldFixture.cs" />
     <Compile Include="../SunriseStudio.World.Tests/WorldFingerprint.cs" Link="WorldFingerprint.cs" />
     <Compile Include="../Fixtures/StaticIsolationFixture.cs" Link="StaticIsolationFixture.cs" />
+    <Compile Include="../Fixtures/StaticPlacementFixture.cs" Link="StaticPlacementFixture.cs" />
   </ItemGroup>
 </Project>

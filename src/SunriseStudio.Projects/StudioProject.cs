@@ -9,7 +9,7 @@ public sealed partial class StudioProject
 {
     public const string ProjectFileName = "sunrise.project.json";
     // The newest manifest version this build reads and writes.
-    public const int ManifestVersion = 7;
+    public const int ManifestVersion = 8;
     private const int MaximumManifestBytes = 16 * 1024 * 1024;
     private ProjectManifest manifest;
     public string DirectoryPath { get; }
@@ -52,13 +52,18 @@ public sealed partial class StudioProject
         string path = Path.Combine(folder, ProjectFileName);
         ProjectPaths.RejectLinks(path);
         if (new FileInfo(path).Length > MaximumManifestBytes) throw new InvalidDataException("Project manifest is too large.");
-        var data = JsonSerializer.Deserialize<ProjectManifest>(File.ReadAllBytes(path), ProjectJson.Options)
+        byte[] json = File.ReadAllBytes(path);
+        RequireKnownFeatures(json);
+        var data = JsonSerializer.Deserialize<ProjectManifest>(json, ProjectJson.Options)
             ?? throw new InvalidDataException("Project manifest is empty.");
         if (data.Version > ManifestVersion) throw new InvalidDataException("This project needs a newer Sunrise Studio.");
         if (data.Version < 1 || string.IsNullOrWhiteSpace(data.Name) || data.Changes is null || data.AddedAssets is null
             || data.Version == 1 && data.ObjectEdits is not null || data.Version == 2 && data.ObjectEdits is null)
             throw new InvalidDataException("Unsupported project manifest.");
+        RequireFeatures(data);
         foreach (var edit in data.ObjectEdits ?? []) edit.Validate();
+        if (!data.HasFeature(ProjectFeatures.AddedPlacements) && (data.ObjectEdits ?? []).Any(edit => edit.Kind == ObjectEditKind.AddedPlacement))
+            throw new InvalidDataException("Added placements require project manifest version 8.");
         if ((data.ObjectEdits ?? []).Select(edit => edit.Key).Distinct().Count() != (data.ObjectEdits?.Count ?? 0))
             throw new InvalidDataException("Project contains two edits of one object.");
         if (data.Changes.Select(x => x.TagHash).Distinct().Count() != data.Changes.Count
@@ -309,14 +314,38 @@ public sealed partial class StudioProject
         bool names = value.ObjectNames is { Count: > 0 };
         bool groups = value.ObjectGroups is { Count: > 0 };
         bool parts = groups && value.ObjectGroups!.Any(group => group.CollisionParts is not null);
-        int version = parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
-        if (value.Version == version && ReferenceEquals(assets, value.AddedAssets)
+        bool added = objects && value.ObjectEdits!.Any(edit => edit.Kind == ObjectEditKind.AddedPlacement);
+        var features = new List<string>();
+        if (added) features.Add(ProjectFeatures.AddedPlacements);
+        features.Sort(StringComparer.Ordinal);
+        int version = features.Count > 0 ? 8 : parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
+        if (value.Version == version && ReferenceEquals(assets, value.AddedAssets) && (value.Features ?? []).SequenceEqual(features)
             && (objects || value.ObjectEdits is null) && (bindings || value.ConfigBindings is null)
             && (names || value.ObjectNames is null) && (groups || value.ObjectGroups is null)) return value;
-        return value with { Version = version, AddedAssets = assets,
+        return value with { Version = version, Features = features.Count == 0 ? null : features.AsReadOnly(), AddedAssets = assets,
             ObjectEdits = objects ? value.ObjectEdits : null,
             ConfigBindings = bindings ? value.ConfigBindings : null, ObjectNames = names ? value.ObjectNames : null,
             ObjectGroups = groups ? value.ObjectGroups : null };
+    }
+
+    /** A manifest naming a feature this build does not know is refused before its fields are read. */
+    private static void RequireKnownFeatures(byte[] json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind == JsonValueKind.Object
+            && document.RootElement.TryGetProperty("features", out var features) && features.ValueKind == JsonValueKind.Array
+            && features.EnumerateArray().Any(name => name.ValueKind == JsonValueKind.String
+                && !ProjectFeatures.Known.Contains(name.GetString()!, StringComparer.Ordinal)))
+            throw new InvalidDataException("This project needs a newer Sunrise Studio.");
+    }
+
+    /** Features belong to version 8, each named once. */
+    private static void RequireFeatures(ProjectManifest data)
+    {
+        if (data.Features is null) return;
+        if (data.Version < 8) throw new InvalidDataException("Named features require project manifest version 8.");
+        if (data.Features.Any(name => name is null) || data.Features.Distinct(StringComparer.Ordinal).Count() != data.Features.Count)
+            throw new InvalidDataException("Unsupported project manifest.");
     }
 
     private static byte[] SerializeManifest(ProjectManifest value)

@@ -46,7 +46,7 @@ $studioChecks = [ordered]@{
     'Animation.Tests' = 'net9.0'; 'MaterialInterchange.Tests' = 'net9.0'; 'Interchange.Tests' = 'net9.0-windows'
     'MeshAuthoring.Tests' = 'net9.0-windows'; 'AssetSurface.Tests' = 'net9.0-windows'; 'Shading.Tests' = 'net9.0-windows'
     'PackageReplacement.Tests' = 'net9.0'; 'Editor.Tests' = 'net9.0-windows'; 'Creation.Tests' = 'net9.0-windows'
-    'OriginalAsset.Tests' = 'net9.0'; 'Shortcuts.Tests' = 'net9.0-windows'
+    'OriginalAsset.Tests' = 'net9.0'; 'Shortcuts.Tests' = 'net9.0-windows'; 'Placement.Tests' = 'net9.0'
 }
 # The arguments each check takes with -Game; checks not listed take none.
 $gameArgs = @{
