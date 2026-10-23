@@ -177,7 +177,7 @@ public static class PngInterchange
         return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
     }
 
-    private static void Chunk(Stream stream, string name, ReadOnlySpan<byte> data)
+    internal static void Chunk(Stream stream, string name, ReadOnlySpan<byte> data)
     {
         var record = new byte[checked(data.Length + 12)];
         BinaryPrimitives.WriteUInt32BigEndian(record, (uint)data.Length);
@@ -187,7 +187,7 @@ public static class PngInterchange
         stream.Write(record);
     }
 
-    private static uint Crc(ReadOnlySpan<byte> bytes)
+    internal static uint Crc(ReadOnlySpan<byte> bytes)
     {
         uint crc = uint.MaxValue;
         foreach (byte value in bytes)

@@ -116,6 +116,12 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     public SceneBackdrop Backdrop { get; } = new();
     public bool AutoAtmosphere { get; set; } = true;
     public Action<string, int, int>? PreparationProgress { get; set; }
+    /**
+     * A scene tool that takes the left button before selection: given the pointer pixel, the image size and
+     * whether the button is down, it returns true when it used the input. Each frame clears it; a tool sets it
+     * again while it is active.
+     */
+    public Func<Vector2, Vector2, bool, bool>? ToolInput { get; set; }
     public bool MeasureFrameTimes { get; set; }
     /** Draws static parts at DetailLevel at any distance, with no far cull; off follows the game's distance rule. */
     public bool FullDetail { get; set; }
@@ -859,13 +865,16 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         var io = ImGui.GetIO();
         bool image = textureData is not null;
         var view = image ? ShortcutSection.View2D : ShortcutSection.View3D;
+        var tool = ToolInput;
+        ToolInput = null;
         if (hovered)
         {
             hoverFrame = ShortcutInput.Frame;
             ShortcutInput.Hover(view);
+            bool toolInput = !image && tool?.Invoke(io.MousePos - origin, size, ImGui.IsMouseDown(ImGuiMouseButton.Left)) == true;
             foreach (var button in ShortcutInput.Buttons)
             {
-                if (!ImGui.IsMouseClicked((ImGuiMouseButton)button)) continue;
+                if (!ImGui.IsMouseClicked((ImGuiMouseButton)button) || toolInput && button == ShortcutButton.Left) continue;
                 var actions = ShortcutInput.Mouse(view, button);
                 if (actions.FirstOrDefault(IsDragAction) is { } drag) { dragButton = (int)button; dragAction = drag; }
                 if (actions.Contains(ShortcutActions.Select3D))

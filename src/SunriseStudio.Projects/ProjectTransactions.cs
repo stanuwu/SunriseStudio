@@ -47,7 +47,7 @@ public sealed partial class StudioProject
                 || snapshot.Asset.Sha256 != BinaryDelta.Hash(snapshot.Data))
                 throw new InvalidDataException("The saved added-asset state changed.");
             var restored = StageAddition(new(snapshot.Asset.Name, snapshot.Data, snapshot.Asset.Native,
-                snapshot.Asset.BaseTagHash), id, assets, catalog);
+                snapshot.Asset.BaseTagHash) { Ground = snapshot.Asset.Ground }, id, assets, catalog);
             if (restored.Asset.OriginalSha256 != snapshot.Asset.OriginalSha256
                 || restored.Asset.OriginalSize != snapshot.Asset.OriginalSize)
                 throw new InvalidDataException("The saved added asset belongs to a different original.");
@@ -132,8 +132,9 @@ public sealed partial class StudioProject
             stored = JsonSerializer.SerializeToUtf8Bytes(delta, ProjectJson.Options);
             relative = $"deltas/added-{id}-{BinaryDelta.Hash(stored)}.json";
         }
+        if (addition.Ground is { } ground && !ValidGround(ground)) throw new InvalidDataException("Invalid ground id.");
         return (new(id, name, relative, hash, addition.Data.Length, metadata,
-            addition.BaseTagHash, baseHash, baseLength), stored);
+            addition.BaseTagHash, baseHash, baseLength) { Ground = addition.Ground }, stored);
     }
 
     /** Failed publication removes only newly staged files and leaves the saved manifest unchanged. */

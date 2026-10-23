@@ -15,6 +15,9 @@ public readonly record struct PlacedPayload(uint ListTag, int Row, uint Marker, 
 /** The 0x80808A15 tag of a collision entity: its compound and the tags its imports name. */
 public sealed record StaticCollisionOwner(uint Tag, uint CompoundTag, IReadOnlyList<uint> ImportTags)
 {
+    /** Carrier tags (class 0x808092DB) at owner +0x18; an import `tK` is the payload carrier K names at +0x14. */
+    public IReadOnlyList<uint> CarrierTags { get; init; } = [];
+
     /** The tag an import `iN` resolves to. */
     public uint ImportTag(int index) => index >= 0 && index < ImportTags.Count
         ? ImportTags[index] : throw new InvalidDataException("Compound import is outside its owner's tag list.");
@@ -121,17 +124,23 @@ public sealed class StaticCollisionReader(PackageCatalog catalog)
     public static StaticCollisionOwner ReadOwner(uint tag, byte[] owner)
     {
         var data = new TagData(owner);
-        long count = data.I64(0x48), relative = data.I64(0x50);
-        var imports = new List<uint>();
+        return new(tag, data.U32(0x58), TagList(data, 0x48)) { CarrierTags = TagList(data, 0x18) };
+    }
+
+    /** The u32 tags of the owner array whose descriptor sits at field. */
+    private static List<uint> TagList(TagData data, int field)
+    {
+        long count = data.I64(field), relative = data.I64(field + 8);
+        var tags = new List<uint>();
         if (count != 0 || relative != 0)
         {
-            long header = 0x50 + relative;
+            long header = field + 8 + relative;
             if (count is < 0 or > 1_000_000 || header < 4 || header + 16 + 4 * count > data.Length
                 || data.U32((int)header - 4) != ArrayMarker || data.I64((int)header) != count)
                 throw new InvalidDataException("Collision owner import list is invalid.");
-            for (int i = 0; i < count; i++) imports.Add(data.U32((int)header + 16 + 4 * i));
+            for (int i = 0; i < count; i++) tags.Add(data.U32((int)header + 16 + 4 * i));
         }
-        return new(tag, data.U32(0x58), imports);
+        return tags;
     }
 
     /** Object lists under the map's bubbles and containers, whatever their layer mask. */
@@ -227,8 +236,9 @@ public sealed class StaticCollisionReader(PackageCatalog catalog)
         if (instance.ChildObject is int local) offset = local;
         else
         {
-            int index = instance.ImportIndex;
-            tag = index >= 0 && index < owner.ImportTags.Count ? owner.ImportTags[index] : uint.MaxValue;
+            int index = instance.ImportIndex, carrier = instance.CarrierIndex;
+            tag = index >= 0 && index < owner.ImportTags.Count ? owner.ImportTags[index]
+                : carrier >= 0 && carrier < owner.CarrierTags.Count ? CarrierPayload(owner.CarrierTags[carrier]) : uint.MaxValue;
             file = tag == uint.MaxValue ? null : Packfile(tag);
             if (file is null)
             {
@@ -247,6 +257,14 @@ public sealed class StaticCollisionReader(PackageCatalog catalog)
             if (shape.Undecoded is { } missing) set.Count(missing, shape.UndecodedCustomPrimitives > 0 ? shape.UndecodedCustomPrimitives : 1);
         }
         return (tag, offset, shape);
+    }
+
+    /** The payload tag at carrier +0x14, or 0xFFFFFFFF when the carrier is missing. */
+    private uint CarrierPayload(uint carrier)
+    {
+        if (!catalog.TryGetEntry(carrier, out _)) return uint.MaxValue;
+        var data = new TagData(Read(carrier));
+        return data.Has(0x14, 4) ? data.U32(0x14) : uint.MaxValue;
     }
 
     private HavokPackfile? Packfile(uint tag)

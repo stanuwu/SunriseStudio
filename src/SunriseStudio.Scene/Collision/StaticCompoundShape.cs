@@ -12,12 +12,14 @@ public readonly record struct QsTransform(Vector3 Translation, Quaternion Rotati
         * Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(Rotation)) * Matrix4x4.CreateTranslation(Translation);
 }
 
-/** One compound instance. The child is an in-file object offset or an import name `iN`. */
+/** One compound instance. The child is an in-file object offset or an import name `iN` or `tK`. */
 public readonly record struct CompoundInstance(int Index, int Offset, QsTransform Transform, uint Flags,
     int? ChildObject, string? ChildImport)
 {
     /** Index into the owning tag's import list, or -1 for an in-file child. */
     public int ImportIndex => ChildImport is ['i', .. var digits] && int.TryParse(digits, out int n) ? n : -1;
+    /** Index into the owning tag's carrier list for an import `tK`, or -1. */
+    public int CarrierIndex => ChildImport is ['t', .. var digits] && int.TryParse(digits, out int n) ? n : -1;
     /** Instance +0x38 collision filter info; 0 leaves the child's own filter. */
     public uint FilterInfo { get; init; }
 }
