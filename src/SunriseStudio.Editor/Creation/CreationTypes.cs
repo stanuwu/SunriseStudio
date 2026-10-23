@@ -36,7 +36,6 @@ public static partial class CreationTypes
     /** Types with no key: nothing in Studio writes them. */
     public static IReadOnlyList<CreationType> Blocked { get; } =
     [
-        new("Activity", "", "Activity creation is not supported yet."),
         new("Map", "", "Map creation is not supported yet."),
         new("Animation", "", AnimationBlocker)
     ];
@@ -49,6 +48,7 @@ public static partial class CreationTypes
         AddVendorTypes();
         AddContentTypes();
         AddEntityTypes();
+        AddActivityTypes();
         Add(OtherKey, CreationMode.New, new("Asset", "", "Use Add asset for raw files."));
         Add(OtherKey, CreationMode.Clone, new(Duplicate, "A copy of this asset in a new package. May not work in game.", ""));
     }
@@ -77,6 +77,7 @@ public static partial class CreationTypes
 
     private static string KeyOf(PackageEntry entry) => entry switch
     {
+        { Reference: 0x80808AAE, Type: 8 or 16 } => ActivityKey,
         { Type: 32, SubType: >= 1 and <= 3 } => TextureKey,
         { Reference: 0x808071E8 } => MaterialKey,
         { Reference: 0x808071A7 } => StaticPropKey,
@@ -104,4 +105,5 @@ public static partial class CreationTypes
     static partial void AddVendorTypes();
     static partial void AddContentTypes();
     static partial void AddEntityTypes();
+    static partial void AddActivityTypes();
 }

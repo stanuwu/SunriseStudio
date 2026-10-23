@@ -14,9 +14,11 @@ public sealed partial class StudioWorkspace
         var previous = new Dictionary<uint, byte[]>();
         var previousAdded = new Dictionary<string, AddedAssetSnapshot?>(StringComparer.Ordinal);
         IReadOnlyList<AddedProjectAsset> created = [];
+        IReadOnlyList<AddedActivity>? previousActivities = null;
         MutateProject(() => created = project.ApplyTransaction(additions, allocated =>
         {
             var proposed = editFactory(allocated);
+            if (proposed.AddedActivities is not null) previousActivities = project.AddedActivities.ToArray();
             var changed = new Dictionary<uint, byte[]>();
             foreach (var (tag, proposedBytes) in proposed.Assets)
             {
@@ -36,11 +38,12 @@ public sealed partial class StudioWorkspace
                 previousAdded.Add(id, prior);
             }
             foreach (var asset in allocated) previousAdded.Add(asset.Id, null);
-            return new(split.Assets, addedEdits);
+            return new(split.Assets, addedEdits) { AddedActivities = proposed.AddedActivities };
         }, catalog));
         if (previous.Count == 0 && previousAdded.Count == 0) { Status = "No changes"; return created; }
         ProjectRevision++;
-        PushUndo(new(document.Entry.TagHash, previous, document.AddedAssetId, document.OpenContext, previousAdded));
+        PushUndo(new(document.Entry.TagHash, previous, document.AddedAssetId, document.OpenContext, previousAdded)
+        { ActivityStates = previousActivities });
         if (World is not null) RefreshWorld();
         else if (document.AddedAssetId is { } selectedId) SelectAdded(selectedId, document.OpenContext);
         else Select(document.Entry.TagHash, true, context: document.OpenContext);

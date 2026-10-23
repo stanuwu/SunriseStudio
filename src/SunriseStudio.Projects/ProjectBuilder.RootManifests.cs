@@ -13,7 +13,7 @@ public static partial class ProjectBuilder
     /** Cloned roots retain their source dependencies and add their new asset closure. */
     private static IReadOnlyList<RootManifestAsset> PlanRootManifests(PackageCatalog catalog,
         IReadOnlyList<RootManifestInput> inputs, IReadOnlyList<AddedEntry> added,
-        IReadOnlyDictionary<uint, byte[]> edited)
+        IReadOnlyDictionary<uint, byte[]> edited, IReadOnlyList<AddedActivity> activities)
     {
         var supplied = inputs.Where(input => input.Asset.Native!.Reference == PackageManifest.ClassId
                 && input.Data.Length >= 16)
@@ -32,6 +32,8 @@ public static partial class ProjectBuilder
                 { TypeInfo = native.TypeInfo };
         }
         var edges = PointerEdges(added.Select(asset => (asset.Tag, asset.Data)), added).ToHashSet();
+        foreach (var activity in activities)
+            edges.Add((activity.Tag(), activity.MapRootTag));
         foreach (var asset in added)
             if (authored.ContainsKey(asset.Class) && asset.Class != asset.Tag)
                 edges.Add((asset.Tag, asset.Class));

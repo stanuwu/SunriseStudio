@@ -38,6 +38,7 @@ if ($Game -and -not $SkipBuild) {
 
 # Each check program and its target framework, in run order.
 $studioChecks = [ordered]@{
+    'Activity.Tests' = 'net9.0-windows'
     'Projects.Tests' = 'net9.0'; 'Formats.Tests' = 'net9.0'; 'Missions.Tests' = 'net9.0'; 'Cui.Tests' = 'net9.0'
     'Cui.Gpu.Tests' = 'net9.0-windows'; 'Investment.Tests' = 'net9.0-windows'; 'Live.Tests' = 'net9.0-windows'
     'LiveBinding.Tests' = 'net9.0-windows'; 'LivePose.Tests' = 'net9.0-windows'; 'Audio.Tests' = 'net9.0-windows'
@@ -50,6 +51,7 @@ $studioChecks = [ordered]@{
 }
 # The arguments each check takes with -Game; checks not listed take none.
 $gameArgs = @{
+    'Activity.Tests' = @('--game-root', $Game)
     'Cui.Gpu.Tests' = @('--game-root', $Game, '--output', (Join-Path $Output 'cui-fonts'))
     'Investment.Tests' = @('--game-root', $Game, '--ui', (Join-Path $Output 'features/investment-stat-authoring.png'))
     'LivePose.Tests' = @('--game', $Game); 'Animation.Tests' = @('--game', $Game)

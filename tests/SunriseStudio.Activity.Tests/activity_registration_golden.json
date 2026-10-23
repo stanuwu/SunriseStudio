@@ -1,0 +1,45 @@
+{
+  "source": {
+    "image_sha256": "58323a5e77bc1d77b7c10817e30a1a91361b9794b49ef43073de273d6c46cf90",
+    "investment_table_sha256": "e0e4228aecd327a7ccb721891bf014286d9a9200e921f30b6a13ef7959ec6edf",
+    "client_table_sha256": "a26e90af58ddafa9093c5954bd93d68b1bd92a05e34b3468aa881ae4b6e667c8",
+    "evidence": "Pinned native reflection in docs/schema_registry.json and installed 0593 table bodies; body hashes were captured before constructor implementation."
+  },
+  "children": {
+    "matchmaking": {
+      "class": "8080773D", "size": 72,
+      "program_rva": "3B90658",
+      "program_sha256": "e476ed10ef90c4e7c04426802c611891e835bff42f2b07cc94661dacf248c5de",
+      "body_sha256": "5ccba55c27586f16d3f399271aa0cfe09910e7eb03c2e4cb7a0b0d56871df903",
+      "precedent_count": 652
+    },
+    "investment_generic": {
+      "class": "8080773A", "size": 16,
+      "program_rva": "3B24B68",
+      "program_sha256": "249e06162585afdba9d6becfe2700c11bcfc4656b80ed1e1099058cc969bdb5d",
+      "body_sha256": "374708fff7719dd5979ec875d56cd2286f6d3cf7ec317a3b25632aab28ec37bb",
+      "precedent_count": 1170
+    },
+    "client_generic": {
+      "class": "80805E21", "size": 40,
+      "program_rva": "3B3C988",
+      "program_sha256": "63f0b2a119d084af62b6133941cb0533b94c8d6f97946da3369e97ebf1b9b849",
+      "body_sha256": "366ca2bdc0f4d02cc7313fbcf92554389be996f5aebc1201b81647b45690f662",
+      "precedent_count": 873
+    },
+    "client_sidecar": {
+      "class": "80805EB9", "size": 48,
+      "program_rva": "3B29968",
+      "program_sha256": "edba4606df30f456202c69341955214952213728f1a3fe357e1da0842f73dbe3",
+      "body_sha256": "17b0761f87b081d5cf10757ccc89f12be355c70e2e29df288b65b30710dcbcd1",
+      "precedent_count": 950
+    },
+    "empty_display": {
+      "class": "80805E23", "size": 36,
+      "program_rva": "3B62910",
+      "program_sha256": "69bb0e2acc3ca876b4a758691cfd166a5f0a84f94b859e7a24ea444457dd8c8e",
+      "body_sha256": "0be65a6d215a414f977d7f578193eb49a6e89dfdcc0e945fa77b4f726ee877cb",
+      "precedent_count": 6
+    }
+  }
+}

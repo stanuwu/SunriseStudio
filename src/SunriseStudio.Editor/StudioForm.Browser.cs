@@ -218,6 +218,8 @@ public sealed partial class StudioForm
         CreationMenuItem("Clone material", CreationTypes.For(CreationTypes.MaterialKey, CreationMode.Clone),
             () => StartClone(CreationTypes.MaterialKey));
         ImGui.Separator();
+        var activity = CreationTypes.For(CreationTypes.ActivityKey, CreationMode.New);
+        CreationMenuItem("Activity", activity, () => StartCreation(activity));
         foreach (var type in CreationTypes.Blocked) CreationMenuItem(type.Name, type, () => { });
         ImGui.EndPopup();
     }
