@@ -88,6 +88,25 @@ public static class PackageNativeDependencies
         if (type is 8 or 16 && reference == EntityClass)
             foreach (int row in Rows(data, 0x10, ConstructionRowClass, 12))
                 Link(U32(data, row), entry => entry.Reference == ConfigClass, "entity config");
+        // Navigation children and the placement entity must load even in a previously nav-less manifest.
+        if (type is 8 or 16 && reference == 0x80808CB6) // navigation root
+        {
+            if (data.Length != 48) throw new InvalidDataException("A navigation root is not 48 bytes.");
+            Link(U32(data, 8), entry => entry.Reference == 0x80808CB8, "navigation mesh");
+            Link(U32(data, 12), entry => entry.Reference == 0x80808CBA, "navigation point graph");
+        }
+        if (type is 8 or 16 && reference == 0x808099D6) // map placements
+            foreach (int row in Rows(data, 8, 0x808099D8, 144))
+            {
+                long relative = I64(data, row + 0x78);
+                if (relative == 0) continue;
+                long record = checked(row + 0x78L + relative);
+                if (record < 4 || record > data.Length - 4) throw new InvalidDataException("A placement record leaves its table.");
+                if (U32(data, (int)record - 4) != 0x80808C76) continue;
+                if (record > data.Length - 32) throw new InvalidDataException("A navigation placement is truncated.");
+                Link(U32(data, row), entry => entry.Reference == EntityClass, "navigation entity");
+                Link(U32(data, (int)record + 0x18), entry => entry.Reference == 0x80808CB6, "navigation root");
+            }
         // A config's schema is resident wherever the config is.
         if (type is 8 or 16 && reference == ConfigClass)
         {

@@ -160,6 +160,7 @@ public sealed class WorldLoader(PackageCatalog catalog, StudioNameIndex? names =
             combined.OcclusionOwners.AddRange(source.OcclusionOwners);
             combined.Atmospheres.AddRange(source.Atmospheres);
             combined.TimesOfDay.AddRange(source.TimesOfDay);
+            combined.Navigation.AddRange(source.Navigation.Where(x => Visible(x.BubbleHash)));
             combined.MapContainers.AddRange(source.MapContainers.Where(x => combined.MapContainers.All(y => y.TagHash != x.TagHash)));
             combined.MapLayers.AddRange(source.MapLayers.Where(x => combined.MapLayers.All(y => y.DefinitionTag != x.DefinitionTag || y.Index != x.Index)));
             combined.DecodeErrorCount += source.DecodeErrorCount;

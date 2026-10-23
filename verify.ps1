@@ -42,7 +42,7 @@ $studioChecks = [ordered]@{
     'Cui.Gpu.Tests' = 'net9.0-windows'; 'Investment.Tests' = 'net9.0-windows'; 'Live.Tests' = 'net9.0-windows'
     'LiveBinding.Tests' = 'net9.0-windows'; 'LivePose.Tests' = 'net9.0-windows'; 'Audio.Tests' = 'net9.0-windows'
     'Authoring.Tests' = 'net9.0'; 'Overlay.Tests' = 'net9.0'; 'Names.Tests' = 'net9.0'; 'World.Tests' = 'net9.0'
-    'Collision.Tests' = 'net9.0'; 'CollisionView.Tests' = 'net9.0-windows'; 'AnimationAuthoring.Tests' = 'net9.0'
+    'Collision.Tests' = 'net9.0'; 'Navigation.Tests' = 'net9.0'; 'CollisionView.Tests' = 'net9.0-windows'; 'AnimationAuthoring.Tests' = 'net9.0'
     'Animation.Tests' = 'net9.0'; 'MaterialInterchange.Tests' = 'net9.0'; 'Interchange.Tests' = 'net9.0-windows'
     'MeshAuthoring.Tests' = 'net9.0-windows'; 'AssetSurface.Tests' = 'net9.0-windows'; 'Shading.Tests' = 'net9.0-windows'
     'PackageReplacement.Tests' = 'net9.0'; 'Editor.Tests' = 'net9.0-windows'; 'Creation.Tests' = 'net9.0-windows'
@@ -57,7 +57,7 @@ $gameArgs = @{
     'AssetSurface.Tests' = @('--game-root', $Game, '--output', (Join-Path $Output 'isolated-native-asset.png'))
 }
 foreach ($name in 'Projects', 'Formats', 'Missions', 'Cui', 'Audio', 'Authoring', 'AnimationAuthoring', 'MeshAuthoring',
-    'Names', 'World', 'Collision', 'Shading', 'PackageReplacement', 'Editor', 'OriginalAsset') {
+    'Names', 'World', 'Collision', 'Navigation', 'Shading', 'PackageReplacement', 'Editor', 'OriginalAsset') {
     $gameArgs["$name.Tests"] = @('--game-root', $Game)
 }
 # With -Blender, the Blender section runs the Interchange checks that read the installation.

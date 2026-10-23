@@ -18,7 +18,8 @@ internal static class Program
             {
                 ["--emitter-census"] = 1, ["--guardians"] = 1, ["--guardian-class-items"] = 1, ["--fog-reference"] = 1,
                 ["--wind-reference"] = 1, ["--package-stress"] = 2, ["--shadows"] = 1, ["--lights"] = 1, ["--decorators"] = 1,
-                ["--ocean"] = 1, ["--time-of-day"] = 1, ["--game"] = 1, ["--output"] = 1, ["--animation-only"] = 0
+                ["--ocean"] = 1, ["--time-of-day"] = 1, ["--game"] = 1, ["--output"] = 1, ["--animation-only"] = 0,
+                ["--navigation-only"] = 0
             };
             for (int at = 0; at < args.Length; at += flags[args[at]] + 1)
             {
@@ -30,6 +31,10 @@ internal static class Program
             string? Value(string flag) { int at = Array.IndexOf(args, flag); return at < 0 ? null : args[at + 1]; }
             string output = Path.GetFullPath(Value("--output") ?? Path.Combine(Path.GetTempPath(), "SunriseStudio-viewport"));
             string? game = Value("--game");
+            if (args.Contains("--navigation-only"))
+            {
+                Directory.CreateDirectory(output); NavigationOverlayChecks.Run(output); return 0;
+            }
             if (Value("--emitter-census") is { } census)
             {
                 EmitterChecks.Run(census, true);
@@ -98,6 +103,7 @@ internal static class Program
             {
                 Run(false, output);
                 Run(true, output);
+                NavigationOverlayChecks.Run(output);
                 AlphaCutout();
                 PartStates();
                 PaletteChecks.Forms();

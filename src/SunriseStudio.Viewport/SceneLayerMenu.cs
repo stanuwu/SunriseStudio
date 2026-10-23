@@ -13,7 +13,8 @@ public static class SceneLayerMenu
         (SceneLayer.Geometry, false, true), (SceneLayer.Terrain, false, true), (SceneLayer.Objects, true, true),
         (SceneLayer.Skybox, false, true), (SceneLayer.Distant, false, true), (SceneLayer.Volumes, true, true),
         (SceneLayer.Effects, true, true), (SceneLayer.Spawns, true, false), (SceneLayer.Squads, true, false),
-        (SceneLayer.Lights, true, false), (SceneLayer.Transitions, true, false), (SceneLayer.Collision, true, true)
+        (SceneLayer.Lights, true, false), (SceneLayer.Transitions, true, false), (SceneLayer.Collision, true, true),
+        (SceneLayer.Navigation, true, true)
     ];
 
     /**
@@ -51,6 +52,11 @@ public static class SceneLayerMenu
         if (ImGui.Checkbox("Inactive parts", ref inactiveParts)) visibility.ShowInactiveParts = inactiveParts;
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Show parts that start hidden or have no material");
         if (collision is not null && (present is null || present.Contains(SceneLayer.Collision))) DrawCollisionOptions(collision);
+        if (collision is not null && (present is null || present.Contains(SceneLayer.Navigation)))
+        {
+            int agent = collision.NavigationAgent;
+            if (ImGui.Combo("Navigation radius", ref agent, "0.5 m\01.5 m\03 m\0")) collision.NavigationAgent = agent;
+        }
     }
 
     /** Edge and solid switches, and what the collision layer holds or why it is empty. */
@@ -93,6 +99,7 @@ public static class SceneLayerMenu
         var layers = new HashSet<SceneLayer>();
         foreach (var instance in scene.Instances) layers.Add(instance.Layer);
         foreach (var marker in scene.Markers) layers.Add(marker.Layer);
+        if (scene.Navigation.Count > 0) layers.Add(SceneLayer.Navigation);
         return layers;
     }
 

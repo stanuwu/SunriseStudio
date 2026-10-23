@@ -183,6 +183,15 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
             var data = Read(tag);
             switch (entry.Reference)
             {
+                case 0x80808CB6: // navigation root
+                    Navigation(tag, data, bubble, transform);
+                    break;
+                case 0x80808CB8: // standalone mesh inspection validates every array
+                    _ = NavigationDecoder.DecodeMesh(data.Bytes);
+                    break;
+                case 0x80808CBA: // agent and point graph
+                    _ = NavigationDecoder.DecodeGraph(data.Bytes);
+                    break;
                 case 0x808091DE:
                     foreach (var row in data.Rows(0x10, 0x80807D53, 16))
                         VisitReference(tag, data, row, 0, transform, depth + 1);
@@ -340,6 +349,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
     /** A row whose resource names decoded content visits it; any other row becomes a marker. */
     internal bool VisitsChild(TagData data, int resource, uint resourceClass) => resourceClass switch
     {
+        0x80808C76 => data.Has(resource, 0x20), // navigation instance record
         0x808071B3 or 0x80809160 or 0x80806F91 => data.Has(resource, 0x14),
         0x8080714B => data.Has(resource, 0x20),
         // A placed model with a physics shape at +0x40; Farm and other maps place their water this way.
@@ -476,7 +486,11 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                     throw new InvalidDataException("Placed AO resource has the wrong map class.");
                 scene.OcclusionOwners.Add(new NativeOcclusionOwner(bubble, tag, row, map));
             }
-            if (VisitsChild(data, resource, resourceClass) && resourceClass == 0x8080714B)
+            if (VisitsChild(data, resource, resourceClass) && resourceClass == 0x80808C76)
+            {
+                Visit(data.U32(resource + 0x18), bubble, transform, depth + 1);
+            }
+            else if (VisitsChild(data, resource, resourceClass) && resourceClass == 0x8080714B)
             {
                 terrainResource = data.Bytes.AsMemory(resource, 0x20);
                 try { Visit(data.U32(resource + 0x18), bubble, transform, depth + 1); }
