@@ -62,7 +62,7 @@ cd SunriseStudio
 
 2. Build Studio
 ```powershell
-.\publish.ps1                   # writes publish\Sunrise Studio.exe
+.\publish.ps1
 ```
 
 On first start, choose your Sunrise installation; Studio remembers it. `Sunrise Studio.exe --help`
