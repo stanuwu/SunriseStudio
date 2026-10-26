@@ -18,27 +18,6 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
   </PropertyGroup>
-  <!-- Owner builds (RELEASING.md). SolforgeRelay=true compiles in the owner-only features (the viewport and screen relay,
-       the phone remote and its MCP tool) from a private folder outside this repository and defines SOLFORGE_RELAY.
-       The default, false, is the public build: none of that code exists in it. Only publish.ps1 (without -Public)
-       turns it on. SolforgeRelayDir defaults to ..\09-solforge-private\relay beside the repository. -->
-  <PropertyGroup>
-    <SolforgeRelay Condition="'$(SolforgeRelay)' == ''">false</SolforgeRelay>
-    <SolforgeRelayDir Condition="'$(SolforgeRelayDir)' == ''">$(MSBuildThisFileDirectory)..\09-solforge-private\relay</SolforgeRelayDir>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(SolforgeRelay)' == 'true'">
-    <DefineConstants>$(DefineConstants);SOLFORGE_RELAY</DefineConstants>
-  </PropertyGroup>
-  <ItemGroup Condition="'$(SolforgeRelay)' == 'true'">
-    <Compile Include="$(SolforgeRelayDir)\Mcp\**\*.cs" Condition="'$(MSBuildProjectName)' == 'Solforge.Mcp'" />
-    <Compile Include="$(SolforgeRelayDir)\Editor\**\*.cs" Condition="'$(MSBuildProjectName)' == 'SunriseStudio.Editor'" />
-    <Compile Include="$(SolforgeRelayDir)\Tests\Mcp\**\*.cs" Condition="'$(MSBuildProjectName)' == 'SunriseStudio.Mcp.Tests'" />
-    <Compile Include="$(SolforgeRelayDir)\Tests\Editor\**\*.cs" Condition="'$(MSBuildProjectName)' == 'SunriseStudio.Editor.Tests'" />
-  </ItemGroup>
-  <Target Name="SolforgeRelayCheck" BeforeTargets="BeforeBuild" Condition="'$(SolforgeRelay)' == 'true'">
-    <Error Condition="!Exists('$(SolforgeRelayDir)\Mcp\RelayTools.cs') Or !Exists('$(SolforgeRelayDir)\Editor\StudioForm.Relay.cs')"
-      Text="SolforgeRelay=true needs the private relay sources, but $(SolforgeRelayDir) does not hold them (Mcp\RelayTools.cs, Editor\StudioForm.Relay.cs). Set SolforgeRelayDir, or build the public configuration (SolforgeRelay=false)." />
-  </Target>
   <!-- CI builds map source paths too, so the same commit gives byte-identical assemblies anywhere. -->
   <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>

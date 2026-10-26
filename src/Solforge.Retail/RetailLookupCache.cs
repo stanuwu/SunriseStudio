@@ -20,6 +20,8 @@ public sealed class RetailLookupCache
     private readonly Dictionary<ulong, uint> tag64;
     private readonly Dictionary<uint, ulong> tag32;
     private readonly Dictionary<uint, RetailNamedTag> namedByTag;
+    private readonly Lazy<Dictionary<uint, List<RetailNamedTag>>> namedByClass;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<uint, Dictionary<string, uint>> firstByName = new();
 
     public IReadOnlyList<RetailNamedTag> Named { get; }
     public int Tag64Count => tag64.Count;
@@ -29,6 +31,32 @@ public sealed class RetailLookupCache
         this.tag64 = tag64; this.tag32 = tag32; Named = named;
         namedByTag = new();
         foreach (var row in named) namedByTag.TryAdd(row.Tag, row);
+        namedByClass = new(() =>
+        {
+            var result = new Dictionary<uint, List<RetailNamedTag>>();
+            foreach (var row in named)
+            {
+                if (!result.TryGetValue(row.Class, out var list)) result[row.Class] = list = [];
+                list.Add(row);
+            }
+            return result;
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
+    /** Named tags of one class, in file order (an index built once, so lookups do not scan every named tag). */
+    public IReadOnlyList<RetailNamedTag> NamedOfClass(uint type) =>
+        namedByClass.Value.TryGetValue(type, out var list) ? list : [];
+
+    /** The first named tag of a class with exactly this name (ordinal, as the destination activity lists spell them), or null. */
+    public uint? FindNamed(uint type, string name)
+    {
+        var names = firstByName.GetOrAdd(type, key =>
+        {
+            var map = new Dictionary<string, uint>(StringComparer.Ordinal);
+            foreach (var row in NamedOfClass(key)) map.TryAdd(row.Name, row.Tag);
+            return map;
+        });
+        return names.TryGetValue(name, out uint tag) ? tag : null;
     }
 
     /** An empty cache (no file): 64-bit hashes stay unresolved. */

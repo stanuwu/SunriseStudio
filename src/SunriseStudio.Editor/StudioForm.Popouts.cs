@@ -27,21 +27,15 @@ public sealed partial class StudioForm
         RememberPopouts();
     }
 
-    /** Once per settings file: a saved layout with no AI area and no AI window gets the panel on the right. */
-    private void OfferAiPanel()
-    {
-        if (options.Smoke || settings.AiPanelOffered) return;
-        settings.AiPanelOffered = true;
-        if (layout.Find(StudioPanelKind.AI) is null && !IsPoppedOut(StudioPanelKind.AI) && layout.AddAiRight()) layoutDirty = true;
-        layoutDirty = true;
-    }
 
     /** The area closes and its editor moves to a new window; the last area stays, empty. */
     private void PopOut(StudioLayoutNode node)
     {
         var kind = node.Panel;
         if (kind == StudioPanelKind.Empty || IsPoppedOut(kind)) return;
-        if (node == layout.Root) node.Panel = StudioPanelKind.Empty;
+        // A tab leaves its area (the other tabs stay); a lone panel closes its area.
+        if (node.Members.Count > 1) layout.CloseTab(node.Id, kind);
+        else if (node == layout.Root) node.Panel = StudioPanelKind.Empty;
         else layout.Close(node.Id);
         maximizedPanel = null;
         layoutDirty = true;
@@ -51,7 +45,7 @@ public sealed partial class StudioForm
     private void OpenPopout(StudioPanelKind kind, Rectangle? bounds)
     {
         kind = StudioLayout.Canonical(kind);
-        var popout = new StudioPopout(kind, PanelTitle(kind), studioIcon, bounds);
+        var popout = new StudioPopout(kind, DisplayTitle(kind), studioIcon, bounds, scale);
         popout.Show(this);
         try { popout.Attach(renderer!, gui!, scale); }
         catch { popout.Dispose(); throw; }
@@ -111,14 +105,18 @@ public sealed partial class StudioForm
             try
             {
                 popout.Gui.NewFrame(delta);
+                // Each pop-out has its own ImGui context and so its own UiMotion states (hook H2).
+                UiMotion.BeginFrame();
                 ShortcutInput.BeginFrame(popout.Gui.IsInputActive && EditorReady && !workspace.IsBusy);
+                popoutDrawing = popout;
                 // Solforge: busy or loading, a popped-out editor stays drawn; DrawPanelContent holds the editing ones.
                 if (EditorReady && !workspace.IsBusy) { HandleShortcuts(); DrawPopoutContent(popout, size); HandleViewShortcuts(); }
                 else if (EditorReady || LoadOverlay) DrawPopoutContent(popout, size);
                 popout.Chrome.EndFrame();
+                UiMotion.EndFrame();
                 popout.Gui.Render();
             }
-            finally { renderer.EndWindowFrame(popout.Target); }
+            finally { popoutDrawing = null; renderer.EndWindowFrame(popout.Target); }
         }
         // Code after the frame expects the main window's context.
         gui?.MakeCurrent();
@@ -127,27 +125,49 @@ public sealed partial class StudioForm
     private void DrawPopoutContent(StudioPopout popout, Size client)
     {
         var size = new Vector2(client.Width, client.Height);
-        float header = ImGui.GetFrameHeight() + 8 * scale;
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(4 * scale));
+        // UE5 style: a 30 px Header strip with the panel as one active tab, Pop in and the window buttons.
+        float header = MathF.Round(30 * scale);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(SolTheme.Space3, 0));
         ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, Vector2.One);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, SolTheme.Header);
         BeginPanel("popout-header", Vector2.Zero, new(size.X, header), ImGuiWindowFlags.NoScrollbar);
+        ImGui.PopStyleColor();
         // The header is the caption wherever no control sits; its close button docks the editor.
         popout.Chrome.Scale = scale;
         popout.Chrome.CaptionHeight = header;
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextUnformatted(PanelTitle(popout.Panel));
-        float titleEnd = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + ImGui.GetStyle().ItemSpacing.X;
+        var draw = ImGui.GetWindowDrawList();
+        var origin = ImGui.GetWindowPos();
+        draw.AddRectFilled(origin, origin + new Vector2(size.X, header), SolTheme.U32(SolTheme.Header));
+        draw.AddLine(origin + new Vector2(0, header - .5f), origin + new Vector2(size.X, header - .5f), SolTheme.U32(SolTheme.Border), 1);
+        string title = DisplayTitle(popout.Panel);
+        bool labelFont = SolTheme.PushFont(SolTheme.LabelFont);
+        float iconSize = MathF.Round(12 * scale);
+        float tabWidth = ImGui.CalcTextSize(title).X + iconSize + SolTheme.Space2 + SolTheme.Space4 * 2;
+        var tabMin = origin + new Vector2(SolTheme.Space3, 6 * scale);
+        var tabMax = new Vector2(tabMin.X + tabWidth, origin.Y + header);
+        SolTheme.PanelTab(draw, tabMin, tabMax, "", true);
+        float midY = (tabMin.Y + tabMax.Y) / 2;
+        ImGuiIcons.Draw(draw, PanelIcon(popout.Panel), new(tabMin.X + SolTheme.Space4, midY - iconSize / 2), iconSize,
+            SolTheme.U32(popout.Panel == StudioPanelKind.AI ? SolTheme.Brand : SolTheme.TextStrong));
+        draw.AddText(new(tabMin.X + SolTheme.Space4 + iconSize + SolTheme.Space2, midY - ImGui.GetTextLineHeight() / 2),
+            SolTheme.U32(SolTheme.TextStrong), title);
+        if (labelFont) ImGui.PopFont();
         string label = "Pop in";
         float width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2;
         float buttons = 3 * 46 * scale;
-        ImGui.SameLine(MathF.Max(titleEnd, size.X - buttons - width - 8 * scale));
+        ImGui.SetCursorPos(new(MathF.Max(tabMax.X - origin.X + SolTheme.Space4, size.X - buttons - width - 8 * scale),
+            (header - ImGui.GetFrameHeight()) / 2));
         if (UiAuto.Button(label)) popout.RequestPopIn();
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Put this editor back into the main window");
         popout.Chrome.DrawButtons(header, popout.RequestPopIn);
         ImGui.End();
         ImGui.PopStyleVar(2);
+        // A new window's content fades in (decoration only; input works from the first frame).
+        float alpha = UiMotion.FadeIn(UiMotion.Id("popout-content-fade"));
+        bool faded = alpha < .999f;
+        if (faded) ImGui.PushStyleVar(ImGuiStyleVar.Alpha, Math.Max(.05f, alpha) * ImGui.GetStyle().Alpha);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, Vector2.One);
-        DrawPanelContent(popout.Panel, 0, new(0, header), new(size.X, MathF.Max(1, size.Y - header)));
-        ImGui.PopStyleVar();
+        try { DrawPanelContent(popout.Panel, 0, new(0, header), new(size.X, MathF.Max(1, size.Y - header))); }
+        finally { ImGui.PopStyleVar(faded ? 2 : 1); }
     }
 }

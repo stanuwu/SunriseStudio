@@ -1,10 +1,15 @@
 /**
  * File: Compact in-memory index of every retail tag (8.6M rows): reference/class, file type, subtype and size by tag,
  * O(1) through the tag arithmetic. Built once from the extraction's tags.tsv + tags_extra.tsv and cached as a binary
- * file (about 90 MB) that loads in a second or two.
+ * file (about 90 MB) that loads in a second or two. The build reads the TSVs in parallel chunks of raw bytes (no
+ * per-line strings): a first pass counts the rows so progress is "rows done of total", the second parses them.
  */
+using System.Buffers;
+using System.Buffers.Text;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace Solforge.Retail;
 
@@ -17,11 +22,27 @@ public readonly record struct RetailEntry(uint Tag, uint Reference, byte Type, b
     public uint Class => IsStruct ? Reference : 0;
 }
 
+/** Index build progress: Phase is "counting" (Done/Total are bytes) or "parsing" (Done/Total are rows). */
+public readonly record struct RetailIndexProgress(string Phase, long Done, long Total)
+{
+    /** "Indexing retail tags: 4,100,000 of 8,647,344 rows (47%)" or "Counting retail index rows: 38% of 481 MB". */
+    public override string ToString()
+    {
+        var invariant = CultureInfo.InvariantCulture;
+        int percent = Total > 0 ? (int)Math.Min(100, Done * 100 / Total) : 0;
+        return Phase == "counting"
+            ? $"Counting retail index rows: {percent}% of {(Total >> 20).ToString("N0", invariant)} MB read"
+            : $"Indexing retail tags: {Done.ToString("N0", invariant)} of {Total.ToString("N0", invariant)} rows ({percent}%)";
+    }
+}
+
 /** The whole retail tag index; thread-safe for reads once built. */
 public sealed class RetailIndex
 {
     private const uint Magic = 0x58495253; // "SRIX"
     private const int Version = 1;
+    /** Bytes per parse chunk (internal so the checks can force many small chunks). */
+    internal static int ChunkBytes = 8 << 20;
 
     private sealed class Table(string name, int count)
     {
@@ -40,7 +61,10 @@ public sealed class RetailIndex
     private RetailIndex(Dictionary<ushort, Table> tables)
     {
         this.tables = tables;
-        Count = tables.Values.Sum(table => table.Present.Count(flag => flag != 0));
+        long count = 0;
+        foreach (var table in tables.Values)
+            foreach (byte flag in table.Present) count += flag;
+        Count = count;
         classCounts = new(CountClasses);
     }
 
@@ -63,7 +87,12 @@ public sealed class RetailIndex
     }
 
     /** Whether the tag is indexed. */
-    public bool Contains(uint tag) => Find(tag) is not null;
+    public bool Contains(uint tag)
+    {
+        if (!RetailTag.Plausible(tag) || !tables.TryGetValue(RetailTag.Package(tag), out var table)) return false;
+        int index = RetailTag.Index(tag);
+        return index < table.Present.Length && table.Present[index] != 0;
+    }
 
     /** The class of a struct tag (types 8 and 16), else 0. */
     public uint ClassOf(uint tag) => Find(tag) is { IsStruct: true } entry ? entry.Reference : 0;
@@ -103,72 +132,228 @@ public sealed class RetailIndex
     public static IReadOnlyList<string> SourceFiles(string root) =>
         new[] { Path.Combine(root, "index", "tags.tsv"), Path.Combine(root, "index", "tags_extra.tsv") }.Where(File.Exists).ToList();
 
+    /** The binary cache file for a cache folder. */
+    public static string CachePath(string cacheFolder) => Path.Combine(cacheFolder, "retail_index_" + RetailOptions.Build + ".bin");
+
     /**
      * Loads the cached index when it matches the TSVs (same sizes and times), else builds it from them and writes the
-     * cache (best effort: an unwritable cache folder only costs the rebuild next time). progress gets rows parsed.
+     * cache (best effort: an unwritable cache folder only costs the rebuild next time). progress hears the build.
      */
-    public static RetailIndex Open(string root, string cacheFolder, Action<long>? progress = null)
+    public static RetailIndex Open(string root, string cacheFolder, Action<RetailIndexProgress>? progress = null, CancellationToken cancel = default)
     {
         var sources = SourceFiles(root);
         if (sources.Count == 0) throw new FileNotFoundException($"No index\\tags.tsv under {root}.");
         string signature = Signature(sources);
-        string cache = Path.Combine(cacheFolder, "retail_index_" + RetailOptions.Build + ".bin");
+        string cache = CachePath(cacheFolder);
         if (File.Exists(cache))
         {
             try { if (Load(cache, signature) is { } loaded) return loaded; }
             catch (Exception error) when (error is IOException or EndOfStreamException or InvalidDataException or UnauthorizedAccessException) { }
         }
-        var index = Build(sources, progress);
+        var index = Build(sources, progress, cancel);
         try { Directory.CreateDirectory(cacheFolder); index.Save(cache, signature); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         return index;
     }
 
-    /** Builds an index from TSV files with the columns tag, reference, file_type, subtype, size, package. */
-    public static RetailIndex Build(IEnumerable<string> files, Action<long>? progress = null)
+    /** One parsed row of a chunk. */
+    private readonly record struct Row(uint Tag, uint Reference, byte Type, byte Subtype, uint Size);
+
+    /** A byte range of one file, starting at a line start and ending after a newline (or at the end of the file). */
+    private sealed record Chunk(int File, long Start, long End, bool Header)
     {
-        var rows = new Dictionary<ushort, List<(int Index, uint Reference, byte Type, byte Subtype, uint Size)>>();
-        var names = new Dictionary<ushort, string>();
-        long parsed = 0;
-        foreach (string file in files)
-        {
-            using var reader = new StreamReader(file, Encoding.UTF8, false, 1 << 20);
-            string? line = reader.ReadLine(); // header
-            while ((line = reader.ReadLine()) is not null)
-            {
-                if (!TryParse(line.AsSpan().TrimEnd('\r'), out uint tag, out uint reference, out byte type, out byte subtype, out uint size, out var package)) continue;
-                ushort id = RetailTag.Package(tag);
-                if (!rows.TryGetValue(id, out var list)) { rows[id] = list = []; names[id] = package.ToString(); }
-                list.Add((RetailTag.Index(tag), reference, type, subtype, size));
-                if (++parsed % 500_000 == 0) progress?.Invoke(parsed);
-            }
-        }
-        var tables = new Dictionary<ushort, Table>();
-        foreach (var (id, list) in rows)
-        {
-            var table = new Table(names[id], list.Max(row => row.Index) + 1);
-            foreach (var row in list)
-            {
-                table.Reference[row.Index] = row.Reference; table.Type[row.Index] = row.Type; table.Subtype[row.Index] = row.Subtype;
-                table.Size[row.Index] = row.Size; table.Present[row.Index] = 1;
-            }
-            tables[id] = table;
-        }
-        progress?.Invoke(parsed);
-        return new RetailIndex(tables);
+        public List<Row> Rows = [];
+        public Dictionary<ushort, string> Names = [];
     }
 
-    private static bool TryParse(ReadOnlySpan<char> line, out uint tag, out uint reference, out byte type, out byte subtype, out uint size, out ReadOnlySpan<char> package)
+    /**
+     * Builds an index from TSV files with the columns tag, reference, file_type, subtype, size, package (later files
+     * win for a tag listed twice). Chunks are counted, then parsed, in parallel.
+     */
+    public static RetailIndex Build(IEnumerable<string> files, Action<RetailIndexProgress>? progress = null, CancellationToken cancel = default)
     {
-        tag = reference = size = 0; type = subtype = 0; package = default;
-        Span<Range> parts = stackalloc Range[7];
-        if (line.Split(parts, '\t') < 6) return false;
-        return uint.TryParse(line[parts[0]], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out tag) && RetailTag.Plausible(tag)
-            && uint.TryParse(line[parts[1]], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out reference)
-            && byte.TryParse(line[parts[2]], NumberStyles.Integer, CultureInfo.InvariantCulture, out type)
-            && byte.TryParse(line[parts[3]], NumberStyles.Integer, CultureInfo.InvariantCulture, out subtype)
-            && uint.TryParse(line[parts[4]], NumberStyles.Integer, CultureInfo.InvariantCulture, out size)
-            && (package = line[parts[5]].Trim()).Length > 0;
+        var paths = files.ToList();
+        var handles = paths.Select(path => File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, FileOptions.RandomAccess)).ToList();
+        try
+        {
+            var chunks = new List<Chunk>();
+            for (int f = 0; f < handles.Count; f++) chunks.AddRange(Split(handles[f], f));
+            long totalBytes = chunks.Sum(chunk => chunk.End - chunk.Start), bytesDone = 0, rowsTotal = 0, rowsDone = 0;
+            var options = new ParallelOptions { CancellationToken = cancel, MaxDegreeOfParallelism = Math.Max(1, Math.Min(Environment.ProcessorCount, 8)) };
+            // Workers finish out of order; reports go through one lock and never move backwards.
+            var gate = new object();
+            var last = new RetailIndexProgress("", -1, 0);
+            void Report(RetailIndexProgress step)
+            {
+                if (progress is null) return;
+                lock (gate)
+                {
+                    if (step.Phase == last.Phase && step.Done <= last.Done) return;
+                    last = step;
+                    progress(step);
+                }
+            }
+            Report(new RetailIndexProgress("counting", 0, totalBytes));
+            Parallel.ForEach(chunks, options, chunk =>
+            {
+                long lines = WithBytes(handles[chunk.File], chunk, bytes => CountLines(bytes, chunk.Header));
+                Interlocked.Add(ref rowsTotal, lines);
+                Report(new RetailIndexProgress("counting", Interlocked.Add(ref bytesDone, chunk.End - chunk.Start), totalBytes));
+            });
+            Report(new RetailIndexProgress("parsing", 0, rowsTotal));
+            Parallel.ForEach(chunks, options, chunk =>
+            {
+                long lines = WithBytes(handles[chunk.File], chunk, bytes => ParseChunk(bytes, chunk));
+                Report(new RetailIndexProgress("parsing", Interlocked.Add(ref rowsDone, lines), rowsTotal));
+            });
+            cancel.ThrowIfCancellationRequested();
+            // Tables sized by the highest index per package, filled in file and chunk order so later rows win.
+            var highest = new Dictionary<ushort, int>();
+            var names = new Dictionary<ushort, string>();
+            foreach (var chunk in chunks)
+            {
+                foreach (var (id, name) in chunk.Names) names.TryAdd(id, name);
+                foreach (var row in chunk.Rows)
+                {
+                    ushort id = RetailTag.Package(row.Tag);
+                    int index = RetailTag.Index(row.Tag);
+                    if (!highest.TryGetValue(id, out int max) || index > max) highest[id] = index;
+                }
+            }
+            var tables = highest.ToDictionary(pair => pair.Key, pair => new Table(names[pair.Key], pair.Value + 1));
+            foreach (var chunk in chunks)
+            {
+                foreach (var row in chunk.Rows)
+                {
+                    var table = tables[RetailTag.Package(row.Tag)];
+                    int index = RetailTag.Index(row.Tag);
+                    table.Reference[index] = row.Reference; table.Type[index] = row.Type; table.Subtype[index] = row.Subtype;
+                    table.Size[index] = row.Size; table.Present[index] = 1;
+                }
+                chunk.Rows = [];
+            }
+            Report(new RetailIndexProgress("parsing", rowsTotal, rowsTotal));
+            return new RetailIndex(tables);
+        }
+        finally
+        {
+            foreach (var handle in handles) handle.Dispose();
+        }
+    }
+
+    /** Splits a file into chunks of about ChunkBytes that start at line starts; the first carries the header line. */
+    private static List<Chunk> Split(SafeFileHandle handle, int file)
+    {
+        long length = RandomAccess.GetLength(handle);
+        var result = new List<Chunk>();
+        long start = 0;
+        Span<byte> probe = stackalloc byte[4096];
+        while (start < length)
+        {
+            long end = Math.Min(length, start + ChunkBytes);
+            // Move end past the next newline so every chunk holds whole lines.
+            while (end < length)
+            {
+                int read = RandomAccess.Read(handle, probe, end);
+                if (read <= 0) { end = length; break; }
+                int newline = probe[..read].IndexOf((byte)'\n');
+                if (newline >= 0) { end += newline + 1; break; }
+                end += read;
+            }
+            result.Add(new Chunk(file, start, end, start == 0));
+            start = end;
+        }
+        return result;
+    }
+
+    private static T WithBytes<T>(SafeFileHandle handle, Chunk chunk, Func<ReadOnlyMemory<byte>, T> use)
+    {
+        int length = checked((int)(chunk.End - chunk.Start));
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            int have = 0;
+            while (have < length)
+            {
+                int read = RandomAccess.Read(handle, buffer.AsSpan(have, length - have), chunk.Start + have);
+                if (read <= 0) break;
+                have += read;
+            }
+            return use(buffer.AsMemory(0, have));
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
+    }
+
+    /** Data lines in a chunk: newlines plus an unterminated last line, minus the header line of a file's first chunk. */
+    private static long CountLines(ReadOnlyMemory<byte> memory, bool header)
+    {
+        var bytes = memory.Span;
+        long lines = bytes.Count((byte)'\n');
+        if (bytes.Length > 0 && bytes[^1] != (byte)'\n') lines++;
+        return header && lines > 0 ? lines - 1 : lines;
+    }
+
+    /** Parses a chunk's lines into chunk.Rows; returns the lines seen (parsed or skipped) for progress. */
+    private static long ParseChunk(ReadOnlyMemory<byte> memory, Chunk chunk)
+    {
+        var bytes = memory.Span;
+        long lines = 0;
+        bool skip = chunk.Header;
+        var rows = new List<Row>(bytes.Length / 48);
+        while (bytes.Length > 0)
+        {
+            int newline = bytes.IndexOf((byte)'\n');
+            var line = newline < 0 ? bytes : bytes[..newline];
+            bytes = newline < 0 ? default : bytes[(newline + 1)..];
+            if (skip) { skip = false; continue; }
+            lines++;
+            if (TryParse(line, out var row, out var package))
+            {
+                rows.Add(row);
+                ushort id = RetailTag.Package(row.Tag);
+                if (!chunk.Names.ContainsKey(id)) chunk.Names[id] = Encoding.UTF8.GetString(package);
+            }
+        }
+        chunk.Rows = rows;
+        return lines;
+    }
+
+    /** One TSV line: tag (hex), reference (hex), file_type, subtype, size, package[, ...]. */
+    private static bool TryParse(ReadOnlySpan<byte> line, out Row row, out ReadOnlySpan<byte> package)
+    {
+        row = default; package = default;
+        if (line.Length > 0 && line[^1] == (byte)'\r') line = line[..^1];
+        if (!Field(ref line, out var tagText) || !Field(ref line, out var referenceText) || !Field(ref line, out var typeText)
+            || !Field(ref line, out var subtypeText) || !Field(ref line, out var sizeText)) return false;
+        int tab = line.IndexOf((byte)'\t');
+        package = (tab < 0 ? line : line[..tab]).Trim((byte)' ');
+        if (package.Length == 0 || !Hex(tagText, out uint tag) || !RetailTag.Plausible(tag) || !Hex(referenceText, out uint reference)
+            || !Number(typeText, out uint type) || type > 255 || !Number(subtypeText, out uint subtype) || subtype > 255
+            || !Number(sizeText, out uint size)) return false;
+        row = new Row(tag, reference, (byte)type, (byte)subtype, size);
+        return true;
+    }
+
+    /** Takes the text up to the next tab off line; false when there is no tab (too few columns). */
+    private static bool Field(ref ReadOnlySpan<byte> line, out ReadOnlySpan<byte> field)
+    {
+        int tab = line.IndexOf((byte)'\t');
+        if (tab < 0) { field = default; return false; }
+        field = line[..tab];
+        line = line[(tab + 1)..];
+        return true;
+    }
+
+    private static bool Hex(ReadOnlySpan<byte> text, out uint value)
+    {
+        text = text.Trim((byte)' ');
+        return Utf8Parser.TryParse(text, out value, out int used, 'X') && used == text.Length && text.Length > 0;
+    }
+
+    private static bool Number(ReadOnlySpan<byte> text, out uint value)
+    {
+        text = text.Trim((byte)' ');
+        return Utf8Parser.TryParse(text, out value, out int used) && used == text.Length && text.Length > 0;
     }
 
     private static string Signature(IEnumerable<string> files) =>
@@ -184,9 +369,10 @@ public sealed class RetailIndex
             foreach (var (id, table) in tables)
             {
                 writer.Write(id); writer.Write(table.Name); writer.Write(table.Reference.Length);
-                foreach (uint value in table.Reference) writer.Write(value);
+                // Little-endian u32 arrays, the same bytes BinaryWriter.Write(uint) produces one by one.
+                writer.Write(MemoryMarshal.AsBytes(table.Reference.AsSpan()));
                 writer.Write(table.Type); writer.Write(table.Subtype);
-                foreach (uint value in table.Size) writer.Write(value);
+                writer.Write(MemoryMarshal.AsBytes(table.Size.AsSpan()));
                 writer.Write(table.Present);
             }
         }
@@ -195,10 +381,12 @@ public sealed class RetailIndex
 
     private static RetailIndex? Load(string path, string signature)
     {
+        if (!BitConverter.IsLittleEndian) throw new InvalidDataException("The retail index cache is little-endian.");
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20);
         using var reader = new BinaryReader(stream, Encoding.UTF8);
         if (reader.ReadUInt32() != Magic || reader.ReadInt32() != Version || reader.ReadString() != signature) return null;
         int count = reader.ReadInt32();
+        if (count is < 0 or > 0x10000) throw new InvalidDataException("Bad retail index cache.");
         var tables = new Dictionary<ushort, Table>(count);
         for (int t = 0; t < count; t++)
         {
@@ -207,21 +395,21 @@ public sealed class RetailIndex
             int rows = reader.ReadInt32();
             if (rows is < 0 or > 8192) throw new InvalidDataException("Bad retail index cache.");
             var table = new Table(name, rows);
-            for (int i = 0; i < rows; i++) table.Reference[i] = reader.ReadUInt32();
+            Fill(reader, MemoryMarshal.AsBytes(table.Reference.AsSpan()));
             Fill(reader, table.Type); Fill(reader, table.Subtype);
-            for (int i = 0; i < rows; i++) table.Size[i] = reader.ReadUInt32();
+            Fill(reader, MemoryMarshal.AsBytes(table.Size.AsSpan()));
             Fill(reader, table.Present);
             tables[id] = table;
         }
         return new RetailIndex(tables);
     }
 
-    private static void Fill(BinaryReader reader, byte[] target)
+    private static void Fill(BinaryReader reader, Span<byte> target)
     {
         int read = 0;
         while (read < target.Length)
         {
-            int got = reader.Read(target, read, target.Length - read);
+            int got = reader.Read(target[read..]);
             if (got <= 0) throw new EndOfStreamException();
             read += got;
         }

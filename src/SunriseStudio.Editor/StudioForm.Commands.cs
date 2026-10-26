@@ -18,424 +18,11 @@ public sealed partial class StudioForm
     private int addKind, addType = 8, addSubType;
     private StudioDocument? cloneSource;
 
-    /**
-     * Title bar groups in bar order. The menus come first; groups that do not fit at the window's width move into
-     * the "»" menu from the right end, so nothing on the row ever overlaps.
-     */
-    internal enum TitleGroup
-    {
-        File, Edit, Assets, Build, View, Window, Help,
-        Owner, Navigation, Project, Render, Shaders, Quality, Detail, Lighting, Settings
-    }
-
-    // Owner is only on the row in owner builds (RELEASING.md); public builds leave it out, so it leaves no gap.
-    private static readonly TitleGroup[] TitleGroups =
-        [.. Enum.GetValues<TitleGroup>().Where(group => group != TitleGroup.Owner || HasOwnerTitleGroup())];
-    // The first control group after the menus starts a section (it gets the lead and the hairline).
-    private static readonly TitleGroup FirstToolGroup = TitleGroups.First(group => !IsMenu(group));
-
-    // Width each group took when last drawn on the row (0 until then), used to decide what fits; indexed by group.
-    private readonly float[] titleWidths = new float[Enum.GetValues<TitleGroup>().Length];
-
-    private static bool HasOwnerTitleGroup()
-    {
-        bool present = false;
-        OwnerTitleGroup(ref present);
-        return present;
-    }
-
-    /** Owner builds only: whether they add the Owner title bar group; public builds do not. */
-    static partial void OwnerTitleGroup(ref bool present);
-    /** Owner builds only: the Owner group on the title bar row. */
-    partial void DrawOwnerTitleGroup(float row);
-    /** Owner builds only: the Owner group inside the "»" menu. */
-    partial void DrawOwnerTitleOverflow();
-    /** Owner builds only: extra View menu items. */
-    partial void DrawOwnerViewMenuItems();
-    /** Owner builds only: extra windows, drawn with the dialogs. */
-    partial void DrawOwnerWindows();
-    private readonly HashSet<string> titleReachable = [];
-    private readonly List<string> titleOverflow = [];
-
-    /** Groups (and "WindowButtons") the last frame offered, on the row or in the "»" menu. */
-    internal IReadOnlyCollection<string> TitleBarReachable => titleReachable;
-
-    /** Groups the last frame moved into the "»" menu. */
-    internal IReadOnlyList<string> TitleBarOverflow => titleOverflow;
-
-    /** One title bar group (or "Overflow") as last drawn, window-relative: its x span, and its last item's y span. */
-    internal readonly record struct TitleRect(string Name, bool Menu, Vector2 Min, Vector2 Max);
-    private readonly List<TitleRect> titleRects = [];
-
-    /** Where each group on the row and the "»" button were last drawn. */
-    internal IReadOnlyList<TitleRect> TitleBarRects => titleRects;
-
-    /** The title bar's height and its controls' frame height, as last drawn. */
-    internal float TitleBarHeight { get; private set; }
-    internal float TitleBarFrameHeight { get; private set; }
-
-    /** Minimize, maximize and close as last drawn, window-relative. */
-    internal IReadOnlyList<(Vector2 Min, Vector2 Max)> TitleBarButtonRects => chrome.ButtonRects;
-
-    /**
-     * The title bar: brand, the menus, the toolbar and the window buttons on one row, all in one window's menu bar
-     * (no overlay window). Wherever no control sits it is the window's caption.
-     */
-    private void DrawTitleBar(float height)
-    {
-        var style = ImGui.GetStyle();
-        float normalPad = style.FramePadding.Y;
-        // The menu bar is as tall as the frame padding at Begin and BeginMenuBar makes it; controls use the normal padding.
-        float barPad = Math.Max(normalPad, (height - ImGui.GetFontSize()) / 2);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, Vector2.One);
-        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(style.FramePadding.X, barPad));
-        ImGui.PushStyleColor(ImGuiCol.MenuBarBg, Vector4.Zero);
-        // The site's scrolled top bar: flat #121212 over a --line hairline (BeginPanel skips the panel gradient).
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, SolTheme.Bar);
-        BeginPanel("Toolbar", Vector2.Zero, new(ClientSize.Width, height),
-            ImGuiWindowFlags.MenuBar | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
-        // A frame whose bar fails to open offers nothing, so the layout checks see it.
-        titleReachable.Clear();
-        titleOverflow.Clear();
-        titleRects.Clear();
-        bool bar = ImGui.BeginMenuBar();
-        ImGui.PopStyleVar();
-        if (!bar)
-        {
-            ImGui.End(); ImGui.PopStyleColor(2); ImGui.PopStyleVar();
-            return;
-        }
-        // BeginMenuBar aligns the row's text to the bar padding; text items start this much higher to sit centred.
-        float row = (height - ImGui.GetFrameHeight()) / 2;
-        float textTop = row + normalPad - barPad;
-        TitleBarHeight = height;
-        TitleBarFrameHeight = ImGui.GetFrameHeight();
-        var barMin = ImGui.GetWindowPos();
-        ImGui.GetWindowDrawList().AddLine(barMin + new Vector2(0, height - 1), barMin + new Vector2(ClientSize.Width, height - 1),
-            SolTheme.U32(SolTheme.Line), 1);
-        float x = DrawTitleBrand(height);
-        float right = ClientSize.Width - chrome.ButtonsWidth - 8 * scale;
-        // Where "Working" may go: after the last group, or between Build and the view controls when those sit right.
-        float busyX = -1, busyRight = right;
-
-        // Which groups fit, from last frame's widths; the rest go to the "»" menu, the right-most first.
-        float overflowWidth = ImGui.CalcTextSize("»").X + style.FramePadding.X * 2 + style.ItemSpacing.X;
-        int fit = TitleGroups.Length;
-        if (x + TitleGroups.Sum(TitleWidth) > right)
-        {
-            float used = x + overflowWidth;
-            fit = 0;
-            while (fit < TitleGroups.Length && used + TitleWidth(TitleGroups[fit]) <= right) used += TitleWidth(TitleGroups[fit++]);
-        }
-        for (int i = 0; i < fit; i++)
-        {
-            var group = TitleGroups[i];
-            // With everything on the row, the view controls sit against the window buttons; the gap between
-            // Build and them is caption.
-            if (group == TitleGroup.Render && fit == TitleGroups.Length)
-            {
-                busyX = x;
-                x = Math.Max(x, right - TitleGroups.Where(g => g >= TitleGroup.Render).Sum(TitleWidth));
-                busyRight = x;
-            }
-            float start = x;
-            x += TitleLead(group);
-            if (TitleLead(group) > 0) TitleDivider(start + TitleLead(group) / 2 - style.ItemSpacing.X / 2, row);
-            ImGui.SetCursorPos(new(x, IsMenu(group) ? textTop : row));
-            DrawTitleGroup(group, row, textTop);
-            // On a menu bar row each item's ItemSize steps the cursor past it (and the item spacing).
-            x = ImGui.GetCursorPosX();
-            titleWidths[(int)group] = x - start;
-            titleReachable.Add(group.ToString());
-            RecordTitleRect(group.ToString(), IsMenu(group), start + TitleLead(group), barMin);
-        }
-        if (fit < TitleGroups.Length)
-        {
-            // A frame-height button on the control row, like the toolbar; its popup lists the folded groups.
-            ImGui.SetCursorPos(new(x, row));
-            if (UiAuto.Button("»##title-overflow")) ImGui.OpenPopup("title-overflow");
-            Vector2 overflowMin = ImGui.GetItemRectMin();
-            RecordTitleRect("Overflow", false, x, barMin);
-            x = ImGui.GetCursorPosX();
-            ImGui.SetNextWindowPos(new(overflowMin.X, barMin.Y + height));
-            if (ImGui.BeginPopup("title-overflow"))
-            {
-                for (int i = fit; i < TitleGroups.Length; i++) DrawTitleOverflowItem(TitleGroups[i]);
-                ImGui.EndPopup();
-            }
-            for (int i = fit; i < TitleGroups.Length; i++)
-            {
-                titleReachable.Add(TitleGroups[i].ToString());
-                titleOverflow.Add(TitleGroups[i].ToString());
-            }
-        }
-        if (busyX >= 0) x = busyX;
-        if (workspace.IsBusy && x + ImGui.CalcTextSize("Working").X <= busyRight)
-        {
-            ImGui.SetCursorPos(new(x, textTop));
-            ImGui.TextDisabled("Working");
-        }
-        chrome.DrawButtons(height);
-        titleReachable.Add("WindowButtons");
-        ImGui.EndMenuBar();
-        ImGui.End(); ImGui.PopStyleColor(2); ImGui.PopStyleVar();
-    }
-
-    private static bool IsMenu(TitleGroup group) => group <= TitleGroup.Help;
-
-    /** Records a group from its first x to its last item, window-relative, for the layout checks. */
-    private void RecordTitleRect(string name, bool menu, float startX, Vector2 barMin)
-    {
-        Vector2 min = ImGui.GetItemRectMin() - barMin, max = ImGui.GetItemRectMax() - barMin;
-        titleRects.Add(new(name, menu, new(Math.Min(startX, min.X), min.Y), max));
-    }
-
-    // Extra room before a section, with a hairline in it: menus | (owner and) navigation | project | view controls.
-    // Controls inside a section are ItemSpacing.X apart.
-    private float TitleLead(TitleGroup group) => group == FirstToolGroup || group is TitleGroup.Project or TitleGroup.Render ? 16 * scale : 0;
-
-    /** A --line hairline one control tall, centred at x between two title bar sections. */
-    private static void TitleDivider(float x, float row)
-    {
-        var origin = ImGui.GetWindowPos();
-        float top = row + ImGui.GetFrameHeight() * .2f, bottom = row + ImGui.GetFrameHeight() * .8f;
-        x = MathF.Round(x) + .5f;
-        ImGui.GetWindowDrawList().AddLine(origin + new Vector2(x, top), origin + new Vector2(x, bottom), SolTheme.U32(SolTheme.Line2), 1);
-    }
-
-    /** A group's width when last drawn, or a guess before its first frame on the row. */
-    private float TitleWidth(TitleGroup group)
-    {
-        float width = titleWidths[(int)group];
-        if (width > 0) return width;
-        var style = ImGui.GetStyle();
-        return IsMenu(group) ? ImGui.CalcTextSize(group.ToString()).X + style.ItemSpacing.X * 2
-            : group is TitleGroup.Quality or TitleGroup.Lighting ? 150 * scale
-            : group is TitleGroup.Project ? 200 * scale
-            : ImGui.GetFrameHeight() * 2 + style.ItemSpacing.X + TitleLead(group);
-    }
-
-    /** Logo, SOLFORGE and the version, drawn without clickable items so the brand stays part of the drag caption. */
-    private float DrawTitleBrand(float height)
-    {
-        var draw = ImGui.GetWindowDrawList();
-        Vector2 origin = ImGui.GetWindowPos();
-        float x = ImGui.GetStyle().WindowPadding.X;
-        ImGui.PushFont(gui!.TitleFont);
-        int mark = (int)MathF.Round(ImGui.GetTextLineHeight() * 1.2f);
-        if (toolbarLogo?.Width != mark && renderer is not null)
-        {
-            toolbarLogo?.Dispose();
-            toolbarLogo = StudioBrand.CreateTexture(renderer, mark);
-        }
-        if (toolbarLogo is { } logo)
-        {
-            // Whole pixels keep the 1:1 logo from being resampled again.
-            ImGui.SetCursorScreenPos(Vector2.Round(origin + new Vector2(x, (height - mark) / 2)));
-            ImGui.Image(logo.ImGuiId, new(mark));
-            x += mark + 8 * scale;
-        }
-        float titleTop = (height - ImGui.GetTextLineHeight()) / 2;
-        float baseline = titleTop + FontAscent();
-        // The site's .logo: Chakra Petch 700, letter-spacing .16em, the first word in the brand colour.
-        float tracking = ImGui.GetFontSize() * .16f;
-        x += SolTheme.TrackedText(draw, origin + new Vector2(x, titleTop), ImGui.GetColorU32(StudioTheme.Accent), "SOL", tracking) + tracking;
-        x += SolTheme.TrackedText(draw, origin + new Vector2(x, titleTop), ImGui.GetColorU32(ImGuiCol.Text), "FORGE", tracking);
-        ImGui.PopFont();
-        x += 6 * scale;
-        var version = ImGui.CalcTextSize(StudioVersion.Text);
-        ImGui.SetCursorPos(new(x, baseline - FontAscent()));
-        ImGui.Dummy(version);
-        draw.AddText(ImGui.GetItemRectMin(), ImGui.GetColorU32(ImGuiCol.TextDisabled), StudioVersion.Text);
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(AboutCredit);
-        return x + version.X + 10 * scale;
-    }
-
-    /** One group on the row; the cursor is at its start, its top at row (textTop for text). */
-    private void DrawTitleGroup(TitleGroup group, float row, float textTop)
-    {
-        switch (group)
-        {
-            case TitleGroup.File: DrawFileMenu(); break;
-            case TitleGroup.Edit: DrawEditMenu(); break;
-            case TitleGroup.Assets: DrawAssetsMenu(); break;
-            case TitleGroup.Build: DrawBuildMenu(); break;
-            case TitleGroup.View: DrawViewMenu(); break;
-            case TitleGroup.Window: DrawWindowMenu(); break;
-            case TitleGroup.Help: DrawHelpMenu(); break;
-            case TitleGroup.Owner: DrawOwnerTitleGroup(row); break;
-            case TitleGroup.Navigation: DrawNavigationButtons(row); break;
-            case TitleGroup.Project:
-                ImGui.SetCursorPosY(textTop);
-                ImGui.TextUnformatted(workspace.Project?.Name ?? "View only");
-                ToolbarNext(row);
-                if (workspace.Project is null)
-                {
-                    if (ImGuiIcons.Button("tb-new", StudioIcon.Plus, "New project")) projectDialog = true;
-                }
-                else
-                {
-                    ImGui.BeginDisabled(!workspace.CanEdit);
-                    if (ImGuiIcons.Button("tb-add", StudioIcon.Plus, "Add asset")) addDialog = true;
-                    ToolbarNext(row);
-                    string build = ShortcutInput.Text(ShortcutActions.BuildPackages);
-                    // Solforge: the primary action uses the sun-grad button (SolTheme).
-                    if (SolTheme.PrimaryButton("Build##tb-build")) workspace.Run(() => workspace.Build());
-                    StudioUi.Tip(build.Length == 0 ? "Build packages" : $"Build packages ({build})");
-                    ImGui.EndDisabled();
-                }
-                break;
-            case TitleGroup.Render: DrawRenderingToolbarButton(); break;
-            case TitleGroup.Shaders:
-            {
-                bool shading = settings.GameShaders;
-                string? shaderProblem = GameShaderProblem();
-                if (ImGuiIcons.Toggle("tb-shaders", StudioIcon.Shader,
-                    "Game shaders: the game's materials and lighting (Quality High or Full)" + (shaderProblem is null ? "" : "\n" + shaderProblem),
-                    ref shading))
-                    SetGameShaders(shading);
-                break;
-            }
-            case TitleGroup.Quality: DrawQualityToolbarCombo(); break;
-            case TitleGroup.Detail:
-            {
-                bool fullDetail = settings.FullDetail;
-                if (ImGuiIcons.Toggle("tb-detail", StudioIcon.Detail,
-                    "Full detail: draw static objects at full detail at every distance, with no far cull.\nOff switches detail and culls with distance, as the game does."
-                    + "\nIn the map viewport this applies at Quality High; Full always draws full detail, Low and Medium never do.",
-                    ref fullDetail))
-                    SetFullDetail(fullDetail);
-                break;
-            }
-            case TitleGroup.Lighting:
-            {
-                int lighting = Math.Clamp((int)settings.LightingMode, 0, LightingNames.Length - 1);
-                // The preview names the setting so a bare "Studio" doesn't read as the app or layout name.
-                ImGui.SetNextItemWidth(ImGui.CalcTextSize("Lighting: Ambient").X + ImGui.GetFrameHeight() + ImGui.GetStyle().FramePadding.X * 2);
-                if (UiAuto.BeginCombo("##lighting", "Lighting: " + LightingNames[lighting]))
-                {
-                    for (int i = 0; i < LightingNames.Length; i++)
-                        if (UiAuto.Selectable(LightingNames[i], i == lighting) && i != lighting) SetLighting(i);
-                    UiAuto.EndCombo();
-                }
-                string? shaderProblem = GameShaderProblem();
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip((lighting == 1
-                    ? "Lighting: atmosphere preview\nLocal probes and shadows are not drawn"
-                    : "Lighting: editor lights with game materials") + (shaderProblem is null ? "" : "\n" + shaderProblem));
-                break;
-            }
-            case TitleGroup.Settings:
-            {
-                string settingsKeys = ShortcutInput.Text(ShortcutActions.OpenSettings);
-                if (ImGuiIcons.Button("tb-settings", StudioIcon.Gear, settingsKeys.Length > 0 ? $"Settings ({settingsKeys})" : "Settings"))
-                    preferencesOpen = true;
-                break;
-            }
-        }
-    }
-
-    /** One group inside the "»" menu: menus become submenus, buttons become menu items. */
-    private void DrawTitleOverflowItem(TitleGroup group)
-    {
-        switch (group)
-        {
-            case TitleGroup.File: DrawFileMenu(); break;
-            case TitleGroup.Edit: DrawEditMenu(); break;
-            case TitleGroup.Assets: DrawAssetsMenu(); break;
-            case TitleGroup.Build: DrawBuildMenu(); break;
-            case TitleGroup.View: DrawViewMenu(); break;
-            case TitleGroup.Window: DrawWindowMenu(); break;
-            case TitleGroup.Help: DrawHelpMenu(); break;
-            case TitleGroup.Owner: DrawOwnerTitleOverflow(); break;
-            case TitleGroup.Navigation:
-                if (UiAuto.MenuItem("Back", ShortcutInput.Text(ShortcutActions.NavigateBack), false, workspace.CanNavigateBack)) NavigateBack();
-                if (UiAuto.MenuItem("Forward", ShortcutInput.Text(ShortcutActions.NavigateForward), false, workspace.CanNavigateForward))
-                    NavigateForward();
-                break;
-            case TitleGroup.Project:
-                ImGui.Separator();
-                ImGui.TextDisabled(workspace.Project?.Name ?? "View only");
-                if (workspace.Project is null)
-                {
-                    if (UiAuto.MenuItem("New project")) projectDialog = true;
-                }
-                else
-                {
-                    if (UiAuto.MenuItem("Add asset", "", false, workspace.CanEdit)) addDialog = true;
-                    if (UiAuto.MenuItem("Build packages", ShortcutInput.Text(ShortcutActions.BuildPackages), false, workspace.CanEdit))
-                        workspace.Run(() => workspace.Build());
-                }
-                break;
-            case TitleGroup.Render: DrawRenderingMenuItem(); break;
-            case TitleGroup.Shaders:
-            {
-                bool shading = settings.GameShaders;
-                if (UiAuto.MenuItem("Game shaders", "", ref shading)) SetGameShaders(shading);
-                break;
-            }
-            case TitleGroup.Quality:
-                if (UiAuto.BeginMenu("Quality"))
-                {
-                    for (int i = 0; i < QualityNames.Length; i++)
-                        if (UiAuto.MenuItem(QualityNames[i], "", i == (int)settings.ViewportQuality)) SetViewportQuality((ViewportQuality)i);
-                    UiAuto.EndMenu();
-                }
-                break;
-            case TitleGroup.Detail:
-            {
-                bool fullDetail = settings.FullDetail;
-                if (UiAuto.MenuItem("Full detail", "", ref fullDetail)) SetFullDetail(fullDetail);
-                break;
-            }
-            case TitleGroup.Lighting:
-                if (UiAuto.BeginMenu("Lighting"))
-                {
-                    int lighting = Math.Clamp((int)settings.LightingMode, 0, LightingNames.Length - 1);
-                    for (int i = 0; i < LightingNames.Length; i++)
-                        if (UiAuto.MenuItem(LightingNames[i], "", i == lighting) && i != lighting) SetLighting(i);
-                    UiAuto.EndMenu();
-                }
-                break;
-            case TitleGroup.Settings:
-                if (UiAuto.MenuItem("Settings...", ShortcutInput.Text(ShortcutActions.OpenSettings))) preferencesOpen = true;
-                break;
-        }
-    }
-
-    private void SetFullDetail(bool fullDetail)
-    {
-        settings.FullDetail = fullDetail;
-        if (viewport is not null) viewport.FullDetail = fullDetail;
-        if (assetViewport is not null) assetViewport.FullDetail = fullDetail;
-        if (fullDetail && settings.ViewportQuality < ViewportQuality.High) SetViewportQuality(ViewportQuality.High);
-        else SaveSettings();
-    }
-
-    private void SetLighting(int lighting)
-    {
-        settings.LightingMode = (SunriseStudio.Rendering.NativeLightingMode)lighting;
-        if (viewport?.NativeRenderer is { } scene) scene.LightingMode = settings.LightingMode;
-        if (assetViewport?.NativeRenderer is { } asset) asset.LightingMode = settings.LightingMode;
-        // Lighting is part of game shading; picking a mode turns it on so the choice shows.
-        if (!settings.GameShaders || settings.ViewportQuality < ViewportQuality.High) SetGameShaders(true);
-        else SaveSettings();
-    }
-
-    /** Pixels from a text line's top to its baseline in the current font. */
-    private static float FontAscent() => ImGui.GetFont().Ascent * ImGui.GetFontSize() / ImGui.GetFont().FontSize;
-
-    /** The next toolbar control on this row, its top at row (the centre line less half a frame). */
-    private static void ToolbarNext(float row)
-    {
-        ImGui.SameLine();
-        ImGui.SetCursorPosY(row);
-    }
-
-    // The title bar menus; each item is disabled while its command cannot run. The » menu reuses them as submenus.
+    // The menu bar's menus (StudioForm.MenuBar.cs); each item is disabled while its command cannot run. The » menu reuses them as submenus.
 
     private void DrawFileMenu()
     {
-        if (!UiAuto.BeginMenu("File")) return;
+        if (!UiAuto.BeginMenu("File")) return; SolTheme.PopupShadow();
         if (UiAuto.MenuItem("New project", ShortcutInput.Text(ShortcutActions.NewProject), false, !workspace.IsBusy)) projectDialog = true;
         if (UiAuto.MenuItem("Open project...", ShortcutInput.Text(ShortcutActions.OpenProject), false, !workspace.IsBusy)) OpenProjectDialog();
         if (UiAuto.BeginMenu("Recent projects", settings.RecentProjects.Count != 0 && !workspace.IsBusy))
@@ -472,7 +59,7 @@ public sealed partial class StudioForm
 
     private void DrawEditMenu()
     {
-        if (!UiAuto.BeginMenu("Edit")) return;
+        if (!UiAuto.BeginMenu("Edit")) return; SolTheme.PopupShadow();
         if (UiAuto.MenuItem("Undo", ShortcutInput.Text(ShortcutActions.Undo), false, CanUndoActive)) UndoActive();
         if (UiAuto.MenuItem("Redo", ShortcutInput.Text(ShortcutActions.Redo), false, CanRedoActive)) RedoActive();
         ImGui.Separator();
@@ -487,7 +74,7 @@ public sealed partial class StudioForm
 
     private void DrawAssetsMenu()
     {
-        if (!UiAuto.BeginMenu("Assets")) return;
+        if (!UiAuto.BeginMenu("Assets")) return; SolTheme.PopupShadow();
         if (UiAuto.MenuItem("Export full asset to Blender...", "", false, CanExportBundle)) ExportFullAsset();
         MapBundleTooltip();
         if (UiAuto.MenuItem("Export world to Blender...", "", false,
@@ -518,7 +105,7 @@ public sealed partial class StudioForm
 
     private void DrawBuildMenu()
     {
-        if (!UiAuto.BeginMenu("Build")) return;
+        if (!UiAuto.BeginMenu("Build")) return; SolTheme.PopupShadow();
         if (UiAuto.MenuItem("Build packages", ShortcutInput.Text(ShortcutActions.BuildPackages), false, workspace.CanEdit))
             workspace.Run(() => workspace.Build());
         if (UiAuto.MenuItem("Build and install", ShortcutInput.Text(ShortcutActions.BuildAndInstall), false, workspace.CanEdit)) InstallMod();
@@ -534,7 +121,7 @@ public sealed partial class StudioForm
 
     private void DrawViewMenu()
     {
-        if (!UiAuto.BeginMenu("View")) return;
+        if (!UiAuto.BeginMenu("View")) return; SolTheme.PopupShadow();
         if (UiAuto.MenuItem("Graph")) focusMissionGraph = true;
         if (UiAuto.MenuItem("Live")) focusLive = true;
         if (UiAuto.MenuItem("Local Server")) focusLocalServer = true;
@@ -552,13 +139,12 @@ public sealed partial class StudioForm
         if (UiAuto.MenuItem("Grid", "", ref grid)) viewport!.ShowGrid = grid;
         ImGui.Separator();
         DrawRenderingMenuItem();
-        DrawOwnerViewMenuItems();
         UiAuto.EndMenu();
     }
 
     private void DrawHelpMenu()
     {
-        if (!UiAuto.BeginMenu("Help")) return;
+        if (!UiAuto.BeginMenu("Help")) return; SolTheme.PopupShadow();
         DrawHelpMenuItems();
         if (UiAuto.MenuItem("Third-party notices")) noticesDialog = true;
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Licenses of the libraries and code Studio includes");
@@ -586,7 +172,7 @@ public sealed partial class StudioForm
         if (shortcutsDialog) { ImGui.OpenPopup("Shortcuts"); shortcutsDialog = false; }
         if (noticesDialog) { ImGui.OpenPopup("Third-party notices"); noticesDialog = false; }
         DrawLocationDialog(); DrawProjectDialog(); DrawAddDialog(); DrawCacheDialog(); DrawBundleDialogs(); DrawModDialog();
-        DrawShortcutsDialog(); DrawNoticesDialog(); DrawHelpDialog(); DrawPreferences(); DrawDataExplorer(); DrawRetailWorkspace(); DrawOwnerWindows();
+        DrawShortcutsDialog(); DrawNoticesDialog(); DrawHelpDialog(); DrawPreferences(); DrawDataExplorer(); DrawRetailWorkspace();
         DrawContentEditors();
         DrawCreation();
     }

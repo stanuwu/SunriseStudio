@@ -1,7 +1,8 @@
 /**
- * File: Main editor window (WinForms host + ImGui frame loop). StudioForm is split in partials: .Commands (menus,
- * dialogs, project open), .Ai* (AI workspace/MCP host), .NodeGraph, .Player (live player tracking), .Preferences,
- * .Layout and others; per-page UI lives in the *Page.cs files.
+ * File: Main editor window (WinForms host + ImGui frame loop). StudioForm is split in partials: .MenuBar and .Toolbar
+ * (the two top rows), .Commands (menus, dialogs, project open), .Ai* (the MCP host and the Solforge AI panel; the
+ * in-editor console is gone, Solforge AI is a separate app), .Layout/.PanelTabs (tabbed areas), .NodeGraph, .Player
+ * (live player tracking), .Preferences and others; per-page UI lives in the *Page.cs files.
  */
 using System.Diagnostics;
 using System.Numerics;
@@ -117,18 +118,14 @@ public sealed partial class StudioForm : Form
         Text = $"Solforge {StudioVersion.Text}";
         chrome = new(this);
         Icon = studioIcon = StudioBrand.CreateIcon();
-        ClientSize = new Size(1540, 960);
-        MinimumSize = new Size(1100, 720);
+        var start = StartupWindowSize(settings.UiScale);
+        ClientSize = start.Client;
+        MinimumSize = start.Minimum;
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
         SetStyle(ControlStyles.Opaque | ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint, true);
         if (options.Smoke) ShowInTaskbar = false;
         timer.Tick += (_, _) => TickFrame();
-        aiAllowTimer.Tick += (_, _) =>
-        {
-            try { AutoAllowAi(); } catch (InvalidOperationException) { } catch (IOException) { }
-            try { AutomaticTickAi(); } catch (InvalidOperationException) { } catch (IOException) { }
-        };
         workspace.BeforeAssetMutation += () =>
         {
             livePage.CancelPreparation();
@@ -137,6 +134,18 @@ public sealed partial class StudioForm : Form
             viewport?.CancelCollisionLoad();
             assetViewport?.CancelCollisionLoad();
         };
+    }
+
+    /** Startup bounds follow Interface size, capped to the current screen so a large scale never opens off-screen. */
+    private static (Size Client, Size Minimum) StartupWindowSize(float uiScale)
+    {
+        float factor = Math.Clamp(float.IsFinite(uiScale) ? uiScale : 1, .5f, 1.5f);
+        Size work = Screen.PrimaryScreen?.WorkingArea.Size ?? new Size(1920, 1080);
+        int width = Math.Max(480, Math.Min((int)Math.Round(1540 * factor), (int)(work.Width * .9)));
+        int height = Math.Max(360, Math.Min((int)Math.Round(960 * factor), (int)(work.Height * .9)));
+        int minimumWidth = Math.Max(480, Math.Min(width, (int)Math.Round(1100 * factor)));
+        int minimumHeight = Math.Max(360, Math.Min(height, (int)Math.Round(720 * factor)));
+        return (new Size(width, height), new Size(minimumWidth, minimumHeight));
     }
 
     /** Painting is done by the ImGui renderer, so WinForms paints nothing. */
@@ -223,7 +232,6 @@ public sealed partial class StudioForm : Form
             assetViewport.PreparationProgress = ReportPreparation;
             viewport.SelectionChanged += OnViewportSelection;
             RestorePopouts();
-            OfferAiPanel();
             assetViewport.SelectionMode = SceneSelectionMode.MeshPart;
             assetViewport.SelectionChanged += value =>
             {
@@ -240,9 +248,14 @@ public sealed partial class StudioForm : Form
                 try { workspace.OpenInstallation(location, keySource); }
                 catch (Exception error) { workspace.Error = error.Message; setup = true; }
             }
+            // Hook H8 (docs/UI-UE5.md §4.4): the MCP server runs from the start, with or without a project or the AI
+            // panel, so a standalone solforge-mcp and Solforge AI attach as soon as the editor is up. Launches nothing.
+            if (settings.AiMcpEnabled) EnsureAiService();
+            SolforgeAiStartup();
             lastFrame = clock.Elapsed.TotalSeconds;
             timer.Start();
-            aiAllowTimer.Start();
+            // Hook H2: vsync-paced frames while the UI animates (StudioForm.FramePacing.cs); also applies Reduce motion.
+            StartFramePacing();
         }
         catch (Exception error) { Failure = error.ToString(); Close(); }
     }
@@ -340,6 +353,7 @@ public sealed partial class StudioForm : Form
             shownPage = null;
             float frameDelta = (float)Math.Clamp(now - lastFrame, 0.001, 0.1);
             gui.NewFrame(frameDelta);
+            UiMotion.BeginFrame();
             ShortcutInput.BeginFrame(gui.IsInputActive && EditorReady && !workspace.IsBusy);
             lastFrame = now;
             renderer.BeginFrame(StudioTheme.Canvas);
@@ -348,10 +362,11 @@ public sealed partial class StudioForm : Form
             // Solforge: work and loads keep the docked layout in view and usable (commands still wait through
             // workspace.Run/IsBusy and shortcuts stay off); a corner toast shows progress. The full-screen card is
             // only for the first load, before the editor has been shown.
-            if (EditorReady && !workspace.IsBusy) { HandleShortcuts(); DrawEditor(); HandleViewShortcuts(); }
-            else if (EditorReady || LoadOverlay) { DrawEditor(); DrawLoadToast(); }
+            if (EditorReady && !workspace.IsBusy) { HandleShortcuts(); DrawEditor(); HandleViewShortcuts(); DrawLoadToast(visible: false); }
+            else if (EditorReady || LoadOverlay) { DrawEditor(); DrawLoadToast(visible: true); }
             else DrawLoading();
             chrome.EndFrame();
+            UiMotion.EndFrame();
             long submitStart = Stopwatch.GetTimestamp();
             gui.Render();
             if (EditorReady && options.ProfileFrames is not null)
@@ -621,7 +636,6 @@ public sealed partial class StudioForm : Form
     /** Menu shortcuts work anywhere; text input and the Shortcuts window suppress them. */
     private void HandleShortcuts()
     {
-        ClaimAiKeyboard();
         if (ShortcutInput.Pressed(ShortcutActions.NewProject)) projectDialog = true;
         if (ShortcutInput.Pressed(ShortcutActions.OpenProject)) OpenProjectDialog();
         if (ShortcutInput.Pressed(ShortcutActions.Undo)) UndoActive();
@@ -687,21 +701,33 @@ public sealed partial class StudioForm : Form
         finally { if (!requested) target.UseGameShaders = false; }
     }
 
-    /** Area layout is local; projects keep no window or machine preferences. */
+    /** The status bar's height (24 px at 100 %); the load toast sits above it. */
+    private float StatusBarHeight => MathF.Round(24 * scale);
+
+    /**
+     * Area layout is local; projects keep no window or machine preferences. UE5 chrome: a 30 px menu bar (brand,
+     * menus, project name, window buttons; the caption is its empty part), a 40 px main toolbar, the areas and a
+     * 24 px status bar.
+     */
     private void DrawEditor()
     {
-        float status = 27 * scale, toolbar = 42 * scale;
+        float status = StatusBarHeight, menu = MathF.Round(30 * scale), toolbar = MathF.Round(40 * scale);
         float width = ClientSize.Width, height = ClientSize.Height;
-        // One title bar row: brand, menus, toolbar and window buttons; it is the caption wherever no control sits.
+        PollOutputLog();
         chrome.Scale = scale;
-        chrome.CaptionHeight = toolbar;
-        DrawTitleBar(toolbar);
-        float top = toolbar;
+        chrome.CaptionHeight = menu;
+        DrawTitleBar(menu);
+        DrawMainToolbar(menu, toolbar);
+        float top = menu + toolbar;
         float contentHeight = Math.Max(100, height - top - status);
         DrawLayout(new(0, top), new(width, contentHeight));
         DrawStatus(new(0, height - status), new(width, status));
+        DrawApprovalToast();
         UiAuto.SetWindow("Dialogs");
         DrawDialogs();
+        // Hook H10: the reviewed-edit diff and the model workflow confirm (each returns at once when nothing waits).
+        DrawDiffReviewModal();
+        DrawStartWorkflowDialog();
     }
 
     // Panels tile the window; a clicked panel must not rise above its neighbours.
@@ -721,7 +747,10 @@ public sealed partial class StudioForm : Form
         return open;
     }
 
-    /** Draws a draggable splitter and reports the drag delta. */
+    /**
+     * Draws a draggable splitter and reports the drag delta. The hit area stays 5 px; it draws a 1 px Border line that
+     * eases to a 2 px Accent line at 60 % while hovered or dragged (docs/UI-UE5.md §2.2).
+     */
     private static void Splitter(string id, Vector2 position, Vector2 size, Action<Vector2> drag)
     {
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
@@ -731,9 +760,19 @@ public sealed partial class StudioForm : Form
         ImGui.PushStyleColor(ImGuiCol.WindowBg, StudioTheme.Canvas);
         BeginPanel($"split-{id}", position, size, ImGuiWindowFlags.NoScrollbar);
         ImGui.InvisibleButton($"##{id}", size);
-        if (ImGui.IsItemActive()) drag(ImGui.GetIO().MouseDelta);
-        if (ImGui.IsItemHovered() || ImGui.IsItemActive())
+        bool active = ImGui.IsItemActive(), hovered = ImGui.IsItemHovered();
+        if (active) drag(ImGui.GetIO().MouseDelta);
+        if (hovered || active)
             ImGui.SetMouseCursor(size.X < size.Y ? ImGuiMouseCursor.ResizeEW : ImGuiMouseCursor.ResizeNS);
+        float t = UiMotion.Ease(ImGui.GetItemID(), hovered || active ? 1 : 0, 24f);
+        var draw = ImGui.GetWindowDrawList();
+        bool vertical = size.X < size.Y;
+        float thickness = 1 + t * SolTheme.Scale;
+        var color = Vector4.Lerp(SolTheme.Border, SolTheme.Alpha(SolTheme.Accent, .6f), t);
+        var centre = position + size / 2;
+        var lineMin = vertical ? new Vector2(centre.X - thickness / 2, position.Y) : new Vector2(position.X, centre.Y - thickness / 2);
+        var lineMax = vertical ? new Vector2(centre.X + thickness / 2, position.Y + size.Y) : new Vector2(position.X + size.X, centre.Y + thickness / 2);
+        draw.AddRectFilled(lineMin, lineMax, SolTheme.U32(color));
         ImGui.End(); ImGui.PopStyleColor(); ImGui.PopStyleVar(3);
     }
 
@@ -779,7 +818,7 @@ public sealed partial class StudioForm : Form
                 ImGui.SetCursorPosX(28 * scale);
             }
             ImGui.PushFont(gui!.TitleFont);
-            ImGui.TextColored(StudioTheme.Accent, "SOLFORGE");
+            ImGui.TextColored(SolTheme.Brand, "SOLFORGE");
             ImGui.PopFont();
             ImGui.SetCursorPosX(28 * scale); ImGui.TextDisabled("Select an asset to begin");
             ImGui.Spacing();
@@ -883,54 +922,73 @@ public sealed partial class StudioForm : Form
     {
         bool focus = string.Equals(focusDocumentPage, page.Id, StringComparison.OrdinalIgnoreCase)
             || string.Equals(focusDocumentPage, page.Title, StringComparison.OrdinalIgnoreCase);
-        bool open = BeginEditorTab($"{page.Title}##{page.Id}", focus);
+        bool open = BeginEditorTab($"{page.Title}##{page.Id}", focus, listButton: true);
         if (focus && open) focusDocumentPage = null;
         return open;
     }
 
-    /** Background progress first, then the notice, then the error or status text. */
+    /**
+     * The 24 px status bar: background progress first (its stage over a thin 3 px Accent line), then the notice with
+     * Dismiss, then the error or status text; the facts sit right (DrawStatusFacts, with the MCP fact).
+     */
+    private WorkNotice? lastNotice;
+
     private void DrawStatus(Vector2 position, Vector2 size)
     {
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(12, 5) * scale);
-        BeginPanel("Status", position, size, ImGuiWindowFlags.NoScrollbar);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(SolTheme.Space4, Math.Max(0, (size.Y - ImGui.GetTextLineHeight()) / 2)));
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(SolTheme.Space3, 0));
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, SolTheme.Bar);
+        BeginPanel("Status", position, size, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
+        ImGui.PopStyleColor();
         SolTheme.StatusBackground();
-        if (workspace.IsBusy && !workspace.IsBlocking)
+        try
         {
-            // A background command shows its stage and a moving bar in place of the status text.
-            var progress = workspace.LoadingProgress;
-            ImGui.TextColored(StudioTheme.Accent, $"{workspace.Status}: {progress.Stage}");
-            ImGui.SameLine();
-            DrawProgressBar(progress, 160 * scale, ImGui.GetTextLineHeight() * .5f);
-            DrawStatusFacts();
-            ImGui.End(); ImGui.PopStyleVar();
-            return;
-        }
-        if (workspace.Notice is { } notice)
-        {
-            ImGui.TextColored(notice.Failed ? SolTheme.Bad : StudioTheme.Accent, notice.Text);
-            StudioUi.Tip(notice.Details ?? notice.Text);
-            if (notice.Folder is { } folder && StatusFolderExists(folder))
+            if (workspace.IsBusy && !workspace.IsBlocking)
             {
-                ImGui.SameLine();
-                if (ImGuiIcons.Button("status-folder", StudioIcon.Folder, "Open folder", size: ImGui.GetTextLineHeight()))
-                    Process.Start(new ProcessStartInfo(folder) { UseShellExecute = true });
+                // A background command shows its stage and a moving line in place of the status text (the old "Working").
+                var progress = workspace.LoadingProgress;
+                string busy = $"{workspace.Status}: {progress.Stage}";
+                ImGui.TextColored(SolTheme.Text, busy);
+                StudioUi.Tip(busy);
+                ImGui.SameLine(0, SolTheme.Space4);
+                DrawProgressBar(progress, 140 * scale, 3 * scale);
+                DrawStatusFacts();
+                return;
             }
-            ImGui.SameLine();
-            if (UiAuto.SmallButton("Dismiss")) workspace.DismissNotice();
+            bool noticeVisible = workspace.Notice is not null;
+            var (alpha, rise) = UiMotion.Toast(UiMotion.Id("status-notice"), noticeVisible);
+            if (workspace.Notice is { } current) lastNotice = current;
+            // A dismissed or expired notice keeps drawing (inert) while it fades out, like the approval toast (UI-UE5 §3.2).
+            if ((noticeVisible ? workspace.Notice : alpha > .01f ? lastNotice : null) is { } notice)
+            {
+                ImGui.SetCursorPosY(ImGui.GetCursorPosY() + rise * .5f);
+                ImGui.PushStyleVar(ImGuiStyleVar.Alpha, Math.Max(.05f, alpha) * ImGui.GetStyle().Alpha);
+                ImGui.TextColored(notice.Failed ? SolTheme.Bad : SolTheme.TextStrong, notice.Text);
+                if (noticeVisible) StudioUi.Tip(notice.Details ?? notice.Text);
+                ImGui.BeginDisabled(!noticeVisible);
+                if (notice.Folder is { } folder && StatusFolderExists(folder))
+                {
+                    ImGui.SameLine();
+                    if (ImGuiIcons.Button("status-folder", StudioIcon.Folder, "Open folder", size: ImGui.GetTextLineHeight()) && noticeVisible)
+                        Process.Start(new ProcessStartInfo(folder) { UseShellExecute = true });
+                }
+                ImGui.SameLine();
+                if (UiAuto.SmallButton("Dismiss") && noticeVisible) workspace.DismissNotice();
+                ImGui.EndDisabled();
+                ImGui.PopStyleVar();
+                DrawStatusFacts();
+                return;
+            }
+            lastNotice = null;
+            string message = workspace.Error.Length != 0 ? workspace.Error : workspace.Status;
+            if (workspace.Error.Length == 0 && workspace.BackgroundStatus.Length != 0)
+                message += "  |  " + workspace.BackgroundStatus;
+            ImGui.TextColored(workspace.Error.Length != 0 ? SolTheme.Bad : SolTheme.Muted, message);
+            StudioUi.Tip(message);
             DrawStatusFacts();
-            ImGui.End(); ImGui.PopStyleVar();
-            return;
         }
-        string message = workspace.Error.Length != 0 ? workspace.Error : workspace.Status;
-        if (workspace.Error.Length == 0 && workspace.BackgroundStatus.Length != 0)
-            message += "  |  " + workspace.BackgroundStatus;
-        ImGui.TextColored(workspace.Error.Length != 0 ? SolTheme.Bad
-            : StudioTheme.Muted, message);
-        StudioUi.Tip(message);
-        DrawStatusFacts();
-        ImGui.End(); ImGui.PopStyleVar();
+        finally { ImGui.End(); ImGui.PopStyleVar(2); }
     }
-
     /** Closing a tool cannot silently discard an unsaved Lua draft. */
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
@@ -946,8 +1004,14 @@ public sealed partial class StudioForm : Form
         try { WriteFrameProfile(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         { Failure ??= error.Message; }
+        // Hook H2: the idle-loop pacing ends before the timer and the renderer go.
+        StopFramePacing();
         timer.Stop(); timer.Dispose();
-        aiAllowTimer.Stop(); aiAllowTimer.Dispose();
+        // Hook H12: a Solforge AI this editor started gets quit-force (25 s, then a tree kill of that process only),
+        // before the MCP service it talks to stops. The console's FormClosed hook used to stop the service; it is here now.
+        try { ShutdownSolforgeAi(); }
+        catch (Exception error) when (error is InvalidOperationException or IOException or System.ComponentModel.Win32Exception) { }
+        StopAiService();
         filterCancellation?.Cancel(); filterCancellation?.Dispose();
         RememberPopouts();
         foreach (var popout in popouts) popout.Dispose();

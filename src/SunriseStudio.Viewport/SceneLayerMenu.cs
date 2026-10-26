@@ -56,7 +56,8 @@ public static class SceneLayerMenu
     /** Edge and solid switches, and what the collision layer holds or why it is empty. */
     private static void DrawCollisionOptions(AssetViewport viewport)
     {
-        ImGui.Separator();
+        // UE5 style: a labelled group header instead of a bare separator.
+        SolTheme.SectionHeader("Collision");
         bool edges = viewport.CollisionEdges, solid = viewport.CollisionSolid;
         if (UiAuto.Checkbox("Collision edges", ref edges)) viewport.CollisionEdges = edges;
         if (UiAuto.Checkbox("Solid collision", ref solid)) viewport.CollisionSolid = solid;

@@ -11,11 +11,16 @@ public sealed partial class StudioLayout
     public const string ClassicPreset = "Solforge (classic)";
     public const string SunrisePreset = "Sunrise Studio";
     public const string AiPreset = "Solforge (AI)";
-    public static IReadOnlyList<string> PresetNames { get; } = [SolforgePreset, AiPreset, ScenePreset, ClassicPreset, SunrisePreset];
+    /** The UE5-style layout (docs/UI-UE5.md §1.1): the first-run layout and what Reset layout restores. */
+    public const string Ue5Preset = "Solforge (UE5)";
+    /** The preset a first run and Reset layout use. The upstream Default() stays the fallback for a corrupt saved layout. */
+    public const string DefaultPreset = Ue5Preset;
+    public static IReadOnlyList<string> PresetNames { get; } = [Ue5Preset, SolforgePreset, AiPreset, ScenePreset, ClassicPreset, SunrisePreset];
 
     /** An unknown name gives the upstream Sunrise Studio layout. */
     public static StudioLayout Preset(string name) => name switch
     {
+        Ue5Preset => Ue5(),
         SolforgePreset => Solforge(),
         AiPreset => Ai(),
         ScenePreset => Scene(),
@@ -23,7 +28,37 @@ public sealed partial class StudioLayout
         _ => Default()
     };
 
-    /** Solforge's default (Seth's, 2026-10-15): Asset browser, Workspace and AI, over Local Server and the Graph panel (mission scripts and node graphs). */
+    /**
+     * UE5 style: Place on the left, the viewport (Workspace) in the middle, Outliner over Details on the right, and a
+     * tabbed bottom dock (Content Browser, Output Log, Project changes, Solforge AI) that the Ctrl+Space drawer folds.
+     */
+    private static StudioLayout Ue5() => new(new()
+    {
+        Id = 1, Axis = StudioSplitAxis.Rows, Ratio = .74f,
+        First = new()
+        {
+            Id = 2, Axis = StudioSplitAxis.Columns, Ratio = .80f,
+            First = new()
+            {
+                Id = 3, Axis = StudioSplitAxis.Columns, Ratio = .18f,
+                First = new() { Id = 4, Panel = StudioPanelKind.Place },
+                Second = new() { Id = 5, Panel = StudioPanelKind.Workspace }
+            },
+            Second = new()
+            {
+                Id = 6, Axis = StudioSplitAxis.Rows, Ratio = .42f,
+                First = new() { Id = 7, Panel = StudioPanelKind.ObjectTree },
+                Second = new() { Id = 8, Panel = StudioPanelKind.Inspector }
+            }
+        },
+        Second = new()
+        {
+            Id = 9, Panel = StudioPanelKind.Browser, Collapsed = false,
+            Tabs = [StudioPanelKind.Browser, StudioPanelKind.Output, StudioPanelKind.Changes, StudioPanelKind.AI]
+        }
+    });
+
+    /** Solforge's default before the UE5 layout (Seth's, 2026-10-15): Asset browser, Workspace and AI, over Local Server and the Graph panel (mission scripts and node graphs). */
     private static StudioLayout Solforge() => new(new()
     {
         Id = 1, Axis = StudioSplitAxis.Rows, Ratio = .74f,
@@ -46,7 +81,7 @@ public sealed partial class StudioLayout
         }
     });
 
-    /** AI first: the AI workspace in the middle, the Asset browser and Mission Graph as side panels that fold away while empty. */
+    /** AI first: the Solforge AI panel in the middle, the Asset browser and Mission Graph as side panels that fold away while empty. */
     private static StudioLayout Ai() => new(new()
     {
         Id = 1, Axis = StudioSplitAxis.Columns, Ratio = .2f,
@@ -130,12 +165,15 @@ public sealed partial class StudioLayout
 
     /**
      * Takes an area out and lets its neighbour fill the space.
-     * @return Where it was, or null when the editor is not docked or is the only area.
+     * @return Where it was, or null when the editor is not docked, is the only area, or was a tab (only the tab closes).
      */
     public StudioLayoutSlot? Remove(StudioPanelKind kind)
     {
         kind = Canonical(kind);
-        if (kind == StudioPanelKind.Empty || Find(kind) is not { } node || node == Root) return null;
+        if (kind == StudioPanelKind.Empty || Find(kind) is not { } node) return null;
+        // A tab leaves its area, which stays for its other tabs; there is no slot to go back to (Show docks it again).
+        if (node.Members.Count > 1) { RemoveMember(node, kind); return null; }
+        if (node == Root) return null;
         var parent = Nodes(Root).First(item => item.First == node || item.Second == node);
         var sibling = parent.First == node ? parent.Second! : parent.First!;
         var slot = new StudioLayoutSlot(sibling.Id, parent.Axis, parent.First == node, parent.Ratio);

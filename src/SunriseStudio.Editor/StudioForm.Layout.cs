@@ -4,7 +4,10 @@ using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
-/** StudioForm part: panel layout drawing, maximizing and reset. */
+/**
+ * StudioForm part: panel layout drawing, maximizing and reset. Areas draw a compact tabbed header
+ * (StudioForm.PanelTabs.cs) over their content; content fades in on first show and on a tab switch (UiMotion).
+ */
 public sealed partial class StudioForm
 {
     private StudioLayout layout;
@@ -12,10 +15,16 @@ public sealed partial class StudioForm
     private Action? pendingLayoutChange;
     private bool layoutDirty;
     public StudioLayout EditorLayout => layout;
+    /** The panel each area showed last frame, so a tab switch restarts the content fade. */
+    private readonly Dictionary<int, StudioPanelKind> shownAreaPanels = [];
 
-    // Solforge: Reset layout uses the Solforge preset; Window > Layouts keeps the classic and upstream ones.
-    public void ResetLayout() => ApplyLayoutPreset(StudioLayout.SolforgePreset);
+    // UE5 layout: Reset layout uses the default preset (Solforge (UE5)); Window > Layouts keeps every older one.
+    public void ResetLayout() => ApplyLayoutPreset(StudioLayout.DefaultPreset);
 
+    /**
+     * The panel's persisted, MCP-facing name (window.panel, run_command and the old menus name panels by it).
+     * The UI shows DisplayTitle.
+     */
     private static string PanelTitle(StudioPanelKind kind) => kind switch
     {
         StudioPanelKind.Browser => "Asset browser",
@@ -28,6 +37,35 @@ public sealed partial class StudioForm
         _ => kind.ToString()
     };
 
+    /** The UE5-style title an area tab, the Panels menu and a pop-out window show (docs/UI-UE5.md §1.1). */
+    private static string DisplayTitle(StudioPanelKind kind) => kind switch
+    {
+        StudioPanelKind.Workspace => "Viewport",
+        StudioPanelKind.Browser => "Content Browser",
+        StudioPanelKind.ObjectTree => "Outliner",
+        StudioPanelKind.Inspector => "Details",
+        StudioPanelKind.AI => "Solforge AI",
+        StudioPanelKind.Output => "Output Log",
+        _ => PanelTitle(kind)
+    };
+
+    /** The icon an area tab shows beside its title. */
+    private static StudioIcon PanelIcon(StudioPanelKind kind) => kind switch
+    {
+        StudioPanelKind.Workspace => StudioIcon.Cube,
+        StudioPanelKind.Browser => StudioIcon.ContentBrowser,
+        StudioPanelKind.ObjectTree => StudioIcon.Outliner,
+        StudioPanelKind.Inspector => StudioIcon.Details,
+        StudioPanelKind.Changes => StudioIcon.Edit,
+        StudioPanelKind.AI => StudioIcon.Sparkle,
+        StudioPanelKind.Output => StudioIcon.OutputLog,
+        StudioPanelKind.Place => StudioIcon.Place,
+        StudioPanelKind.LocalServer => StudioIcon.Play,
+        StudioPanelKind.Workflows => StudioIcon.Loop,
+        StudioPanelKind.Graph or StudioPanelKind.MissionGraph or StudioPanelKind.NodeGraph => StudioIcon.Group,
+        _ => StudioIcon.Plus
+    };
+
     private void DrawLayout(Vector2 position, Vector2 size)
     {
         UseProjectLayout();
@@ -37,7 +75,7 @@ public sealed partial class StudioForm
         if ((focusAssets || focusLive || focusAssetPage || focusWorldScene || focusMissionPage)
             && !ShowPopout(StudioPanelKind.Workspace))
         {
-            // Solforge: an open docks the editor only when it is missing and never moves a maximized area (the AI's).
+            // Solforge: an open docks the editor only when it is missing and never moves a maximized area.
             bool absent = layout.Find(StudioPanelKind.Workspace) is null;
             layout.Show(StudioPanelKind.Workspace);
             layoutDirty |= absent;
@@ -58,15 +96,24 @@ public sealed partial class StudioForm
         if (focusHierarchy && !ShowPopout(StudioPanelKind.Browser))
         {
             bool absent = layout.Find(StudioPanelKind.Browser) is null;
-            layout.Show(StudioPanelKind.Browser);
+            var browser = layout.Show(StudioPanelKind.Browser);
+            if (browser.Collapsed == true) browser.Collapsed = false;
             layoutDirty |= absent;
             maximizedPanel = null;
+        }
+        if (focusAssetBrowser && !ShowPopout(StudioPanelKind.Browser) && layout.Find(StudioPanelKind.Browser) is { } shown)
+        {
+            StudioLayout.Select(shown, StudioPanelKind.Browser);
+            if (shown.Collapsed == true) OpenFoldedArea(shown);
         }
         var root = maximizedPanel is { } id ? layout.Find(id) : null;
         if (root is not { IsLeaf: true }) { root = layout.Root; maximizedPanel = null; }
         if (layout.Find(StudioPanelKind.Graph) is null && !IsPoppedOut(StudioPanelKind.Graph))
             missionGraphActive = nodeGraphActive = false;
+        drawerSeen = false;
         DrawLayoutNode(root, position, size);
+        FinishDrawerFrame();
+        DrawPanelDrops();
         if (pendingLayoutChange is { } change)
         {
             pendingLayoutChange = null;
@@ -79,7 +126,27 @@ public sealed partial class StudioForm
     /** Split bounds shrink proportionally when the window cannot fit every area's minimum. */
     private void DrawLayoutNode(StudioLayoutNode node, Vector2 position, Vector2 size)
     {
-        if (node.IsLeaf) { DrawLayoutPanel(node, position, size); return; }
+        if (node.IsLeaf)
+        {
+            // A lone folded area has no splitter to size its strip; keep a real strip at the top instead of
+            // stretching the fold over the whole document area.
+            if (node == layout.Root && IsFolded(node) && maximizedPanel != node.Id)
+            {
+                float strip = Math.Min(size.Y, FoldStrip(true));
+                DrawLayoutPanel(node, position, new(size.X, strip));
+                if (size.Y > strip)
+                {
+                    ImGui.SetNextWindowPos(position + new Vector2(0, strip));
+                    ImGui.SetNextWindowSize(new(size.X, size.Y - strip));
+                    BeginPanel($"area-{node.Id}-folded-rest", position + new Vector2(0, strip),
+                        new(size.X, size.Y - strip), ImGuiWindowFlags.NoScrollbar);
+                    ImGui.End();
+                }
+                return;
+            }
+            DrawLayoutPanel(node, position, size);
+            return;
+        }
         bool columns = node.Axis == StudioSplitAxis.Columns;
         float divider = Math.Min(5 * scale, columns ? size.X : size.Y);
         float span = Math.Max(0, (columns ? size.X : size.Y) - divider);
@@ -100,6 +167,8 @@ public sealed partial class StudioForm
             DrawLayoutNode(node.Second!, position + rest, Vector2.Max(Vector2.One, size - rest));
             return;
         }
+        // The Content Browser drawer slides its area in and out (UiMotion spring); the layout only changes at the end.
+        cut = DrawerCut(node, cut, span);
         var firstSize = columns ? new Vector2(cut, size.Y) : new Vector2(size.X, cut);
         var offset = columns ? new Vector2(cut, 0) : new Vector2(0, cut);
         var splitterSize = columns ? new Vector2(divider, size.Y) : new Vector2(size.X, divider);
@@ -117,76 +186,29 @@ public sealed partial class StudioForm
     private void DrawLayoutPanel(StudioLayoutNode node, Vector2 position, Vector2 size)
     {
         if (IsFolded(node) && maximizedPanel != node.Id) { DrawFoldedPanel(node, position, size); return; }
-        float header = Math.Min(size.Y, ImGui.GetFrameHeight() + 8 * scale);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(4 * scale));
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, Vector2.One);
-        BeginPanel($"area-{node.Id}-header", position, new(size.X, header), ImGuiWindowFlags.NoScrollbar);
-        if (node.Panel != StudioPanelKind.Empty) TrackAreaFocus(StudioLayout.Canonical(node.Panel) == StudioPanelKind.Graph);
-        float button = ImGui.GetFrameHeight();
-        // Solforge: Sol panel header (notch + uppercase title); the combo keeps its id and behaviour.
-        float titleWidth = Math.Max(button, size.X - button - 16 * scale - SolTheme.HeaderIndent);
-        SolTheme.PanelHeader(PanelTitle(node.Panel), titleWidth);
-        if (node.Panel == StudioPanelKind.LocalServer) DrawLocalServerDot(titleWidth);
-        ImGui.SetNextItemWidth(titleWidth);
-        SolTheme.PushHeaderCombo();
-        if (UiAuto.BeginCombo("##editor-type", ""))
-        {
-            foreach (var kind in StudioLayout.Pickable)
-            {
-                if (UiAuto.Selectable(PanelTitle(kind), node.Panel == kind))
-                    pendingLayoutChange = () => { ClosePopout(kind); layout.SetPanel(node.Id, kind); };
-                if (kind != node.Panel && kind != StudioPanelKind.Empty && ImGui.IsItemHovered())
-                {
-                    if (layout.Find(kind) is not null) ImGui.SetTooltip("Swap with the open editor");
-                    else if (IsPoppedOut(kind)) ImGui.SetTooltip("Bring back from its own window");
-                }
-            }
-            UiAuto.EndCombo();
-        }
-        ImGui.PopStyleColor(3);
-        ImGui.SameLine(0, 4 * scale);
-        if (UiAuto.Button("...", new(button, 0))) ImGui.OpenPopup("Area");
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Area options");
-        if (ImGui.BeginPopup("Area"))
-        {
-            bool canSplit = layout.Panels.Count < StudioLayout.MaximumPanels;
-            if (UiAuto.MenuItem("Split left / right", "", false, canSplit && size.X >= 280 * scale))
-                pendingLayoutChange = () => { layout.Split(node.Id, StudioSplitAxis.Columns); maximizedPanel = null; };
-            if (UiAuto.MenuItem("Split top / bottom", "", false, canSplit && size.Y >= 220 * scale))
-                pendingLayoutChange = () => { layout.Split(node.Id, StudioSplitAxis.Rows); maximizedPanel = null; };
-            ImGui.Separator();
-            if (UiAuto.MenuItem(maximizedPanel is null ? "Maximize area" : "Restore areas"))
-                pendingLayoutChange = () => maximizedPanel = maximizedPanel is null ? node.Id : null;
-            if (UiAuto.MenuItem("Pop out window", "", false, node.Panel != StudioPanelKind.Empty && renderer is not null))
-                pendingLayoutChange = () => PopOut(node);
-            if (StudioLayoutNode.Collapsible(node.Panel))
-            {
-                ImGui.Separator();
-                if (UiAuto.MenuItem("Collapse to a strip", "", node.Collapsed == true))
-                    pendingLayoutChange = () => node.Collapsed = node.Collapsed == true ? false : true;
-                if (UiAuto.MenuItem("Collapse while empty", "", node.Collapsed is null))
-                    pendingLayoutChange = () => node.Collapsed = node.Collapsed is null ? false : null;
-            }
-            if (UiAuto.MenuItem("Close area", "", false, node != layout.Root))
-                pendingLayoutChange = () => { layout.Close(node.Id); maximizedPanel = null; };
-            ImGui.EndPopup();
-        }
-        ImGui.End();
-        ImGui.PopStyleVar(2);
+        float header = Math.Min(size.Y, AreaHeaderHeight);
+        DrawAreaHeader(node, position, size, header);
         position.Y += header;
         size.Y = Math.Max(1, size.Y - header);
+        RecordDropArea(node.Id, position, position + size, header: false);
+        // Content fades in on first show and when the area switches to another tab (decoration only).
+        bool switched = shownAreaPanels.TryGetValue(node.Id, out var last) && last != node.Panel;
+        shownAreaPanels[node.Id] = node.Panel;
+        float alpha = UiMotion.FadeIn(unchecked(0x51A0_0000u + (uint)node.Id), switched);
+        bool faded = alpha < .999f;
+        if (faded) ImGui.PushStyleVar(ImGuiStyleVar.Alpha, Math.Max(.05f, alpha) * ImGui.GetStyle().Alpha);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, Vector2.One);
-        DrawPanelContent(node.Panel, node.Id, position, size);
-        ImGui.PopStyleVar();
+        try { DrawPanelContent(node.Panel, node.Id, position, size); }
+        finally { ImGui.PopStyleVar(faded ? 2 : 1); }
     }
 
     /** Draws one editor below its header; a docked area and a popped-out window share it. */
     private void DrawPanelContent(StudioPanelKind panel, int area, Vector2 position, Vector2 size)
     {
-        // Solforge: while work runs, browsing, the object tree and the AI stay live; editors that change the project
-        // wait (their workspace calls would throw "Wait for the current operation"). A load swaps the document for a spinner.
+        // Solforge: while work runs, browsing, the object tree, the logs and the AI stay live; editors that change the
+        // project wait (their workspace calls would throw "Wait for the current operation"). A load swaps the document for a spinner.
         bool hold = workspace.IsBusy && panel is not (StudioPanelKind.AI or StudioPanelKind.Browser
-            or StudioPanelKind.ObjectTree or StudioPanelKind.Empty);
+            or StudioPanelKind.ObjectTree or StudioPanelKind.Empty or StudioPanelKind.Output or StudioPanelKind.Workflows);
         if (hold) ImGui.BeginDisabled();
         try { DrawPanelArea(panel, area, position, size); }
         finally { if (hold) ImGui.EndDisabled(); }
@@ -204,7 +226,8 @@ public sealed partial class StudioForm
             case StudioPanelKind.Browser: DrawBrowser(position, size); break;
             case StudioPanelKind.Inspector: DrawInspector(position, size); break;
             case StudioPanelKind.Changes: DrawChanges(position, size); break;
-            case StudioPanelKind.AI: DrawAiWorkspace(position, size); break;
+            // The AI panel no longer holds a console: Solforge AI's status card, requests, edits, presence and context.
+            case StudioPanelKind.AI: DrawSolforgeAiPanel(position, size); break;
             case StudioPanelKind.LocalServer: DrawLocalServerPanel(position, size); break;
             case StudioPanelKind.Graph or StudioPanelKind.MissionGraph or StudioPanelKind.NodeGraph:
                 DrawGraphPanel(position, size);
@@ -215,10 +238,33 @@ public sealed partial class StudioForm
                 DrawObjectTree("layout-tree");
                 ImGui.End();
                 break;
-            default:
-                BeginPanel($"area-{area}-empty", position, size);
+            case StudioPanelKind.Place: DrawPlacePanel(position, size); break;
+            case StudioPanelKind.Output: DrawOutputLog(position, size); break;
+            case StudioPanelKind.Workflows:
+                BeginPanel("Workflows", position, size);
+                TrackAreaFocus();
+                DrawWorkflowStatusPanel();
                 ImGui.End();
                 break;
+            default:
+                BeginPanel($"area-{area}-empty", position, size);
+                DrawEmptyArea(area);
+                ImGui.End();
+                break;
+        }
+    }
+
+    /** An empty area offers its editors as buttons, so a fresh split is one click from useful. */
+    private void DrawEmptyArea(int area)
+    {
+        if (area <= 0) return;
+        ImGui.SetCursorPos(new(SolTheme.Space5, SolTheme.Space5));
+        ImGui.TextDisabled("Choose an editor for this area, or drag a tab here.");
+        foreach (var kind in StudioLayout.Pickable.Where(kind => kind != StudioPanelKind.Empty))
+        {
+            ImGui.SetCursorPosX(SolTheme.Space5);
+            if (UiAuto.Selectable(DisplayTitle(kind) + "##empty-" + kind, false, ImGuiSelectableFlags.None, new(220 * scale, 0)))
+                pendingLayoutChange = () => { ClosePopout(kind); layout.SetPanel(area, kind); };
         }
     }
 
@@ -227,10 +273,11 @@ public sealed partial class StudioForm
         if (UiAuto.BeginMenu("Panels"))
         {
             foreach (var kind in StudioLayout.Pickable.Where(kind => kind != StudioPanelKind.Empty))
-                if (UiAuto.MenuItem(PanelTitle(kind), "", layout.Find(kind) is not null || IsPoppedOut(kind))
+                if (UiAuto.MenuItem(DisplayTitle(kind), "", layout.Find(kind) is not null || IsPoppedOut(kind))
                     && !ShowPopout(kind, true))
                 {
-                    layout.Show(kind);
+                    var shown = layout.Show(kind);
+                    if (shown.Collapsed == true) shown.Collapsed = false;
                     maximizedPanel = null;
                     layoutDirty = true;
                 }
@@ -257,7 +304,7 @@ public sealed partial class StudioForm
     {
         string? project = workspace.Project?.DirectoryPath;
         // Solforge: a moment without a project (reopening the installation adopts Project = null) is not a project
-        // switch; restoring the saved copy then closed popped-out editors (the AI) and dropped unsaved area sizes.
+        // switch; restoring the saved copy then closed popped-out editors and dropped unsaved area sizes.
         if (project is null || project == layoutProject) return;
         layoutProject = project;
         if (options.Smoke) return;
@@ -267,13 +314,17 @@ public sealed partial class StudioForm
             layout = StudioLayout.Restore(saved, settings.BrowserWidth, settings.InspectorWidth, settings.ChangesHeight);
             maximizedPanel = null;
             browserSlot = null;
+            CancelDrawer();
         }
         else layoutDirty = true;
     }
 
-    /** A side panel shows as a strip when the user folded it, or while it is empty unless the user pinned it open. */
+    /**
+     * A side panel shows as a strip when the user folded it, or while it is empty unless the user pinned it open.
+     * A tabbed area folds while empty only when every tab is empty.
+     */
     private bool IsFolded(StudioLayoutNode node) => node.IsLeaf && StudioLayoutNode.Collapsible(node.Panel)
-        && (node.Collapsed ?? PanelEmpty(node.Panel)) && !options.Smoke;
+        && (node.Collapsed ?? node.Members.All(PanelEmpty)) && !options.Smoke;
 
     private bool PanelEmpty(StudioPanelKind kind) => kind switch
     {
@@ -287,14 +338,19 @@ public sealed partial class StudioForm
 
     private float FoldStrip(bool columns) => ImGui.GetFrameHeight() + (columns ? 10 : 8) * scale;
 
-    /** The strip: an expand button and the panel's name; clicking anywhere on it opens the panel. */
+    /** The strip: an expand button and the area's panel names; clicking anywhere on it opens the area. */
     private void DrawFoldedPanel(StudioLayoutNode node, Vector2 position, Vector2 size)
     {
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(4 * scale));
         ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, Vector2.One);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, SolTheme.Header);
         BeginPanel($"area-{node.Id}-folded", position, size, ImGuiWindowFlags.NoScrollbar);
+        ImGui.PopStyleColor();
+        RecordDropArea(node.Id, position, position + size, header: true);
         bool open = UiAuto.Button("+", new(ImGui.GetFrameHeight(), 0));
-        string title = PanelTitle(node.Panel);
+        // A folded tabbed area lists every panel it holds.
+        string title = string.Join(" · ", node.Members.Select(DisplayTitle));
+        if (title.Length == 0) title = DisplayTitle(node.Panel);
         StudioUi.Tip($"Open {title}" + (node.Collapsed is null ? " (folded while empty; its area menu can keep it open)" : ""));
         if (size.X < size.Y)
         {
@@ -311,9 +367,16 @@ public sealed partial class StudioForm
         }
         else { ImGui.SameLine(); ImGui.AlignTextToFramePadding(); ImGui.TextDisabled(title); }
         if (!open && ImGui.IsWindowHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left)) open = true;
-        if (open) pendingLayoutChange = () => node.Collapsed = false;
+        if (open) pendingLayoutChange = () => OpenFoldedArea(node);
         ImGui.End();
         ImGui.PopStyleVar(2);
+    }
+
+    /** Opens a folded area; the Content Browser's area slides open like the drawer. */
+    private void OpenFoldedArea(StudioLayoutNode node)
+    {
+        node.Collapsed = false;
+        if (node.Holds(StudioPanelKind.Browser)) StartDrawer(node.Id, open: true, folds: true);
     }
 
     private void TrackAreaFocus(bool graph = false)

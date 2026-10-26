@@ -11,7 +11,7 @@ namespace SunriseStudio.Editor;
 public sealed record StudioPopoutState(StudioPanelKind Panel, int X, int Y, int Width, int Height);
 
 /** The persisted editor settings; each property is one saved option. */
-public sealed class StudioSettings
+public sealed partial class StudioSettings
 {
     public string SunrisePath { get; set; } = "";
     public string KeySource { get; set; } = "";
@@ -19,12 +19,8 @@ public sealed class StudioSettings
     /** The project opened last; reopened at startup when AutoOpenLastProject is on. */
     public string LastProjectPath { get; set; } = "";
     public bool AutoOpenLastProject { get; set; } = true;
-    /** Fallback when no project was saved yet: the owner's project in owner builds (RELEASING.md), none in public builds. */
-#if SOLFORGE_RELAY
-    public const string DefaultProjectPath = @"C:\Users\Seth\Desktop\sol\10-Project Sol\Project Sol\sunrise.project.json";
-#else
+    /** Fallback when no project was saved yet; empty means no automatic project. */
     public const string DefaultProjectPath = "";
-#endif
     public float BrowserWidth { get; set; } = 300;
     public float InspectorWidth { get; set; } = 300;
     public float ChangesHeight { get; set; } = 190;
@@ -55,9 +51,11 @@ public sealed class StudioSettings
     public int TextureCacheMiB { get; set; } = 256;
     /** Interface size multiplier on top of the monitor DPI (0.8 to 1.5). */
     public float UiScale { get; set; } = 1;
-    /** AI workspace: the engine picked last (Claude Code, Cline, Antigravity or Custom command), and its custom command line. */
+    /** AI workspace: legacy engine and custom command fields, kept so old settings files load; the Pi harness is the only engine. */
     public string AiEngine { get; set; } = "";
     public string AiCustomCommand { get; set; } = "";
+    /** AI workspace: pi-cust.cmd for the custom Pi harness; blank discovers PATH, the Desktop build, or a copy beside Solforge. */
+    public string AiPiHarnessPath { get; set; } = "";
     /** AI workspace: run the MCP server for AI engines (off stops it; engines then see no Solforge tools). */
     public bool AiMcpEnabled { get; set; } = true;
     /** Folders the tools and playbooks use: the server's mission scripts, and Blender (blank = found automatically). */
@@ -80,7 +78,7 @@ public sealed class StudioSettings
     public List<string> AiHiddenFolders { get; set; } = [];
     /** AI workspace: press Enter on an engine's allow prompt when its highlighted choice is a one-time Yes/Allow. */
     public bool AiAutoAllow { get; set; }
-    /** AI workspace: approve MCP action requests (the AI REQUESTS panel) with no click; null follows AiAutoAllow. */
+    /** AI workspace: approve MCP action requests (the AI LOG panel) with no click; null follows AiAutoAllow. */
     public bool? AiAutoApproveRequests { get; set; }
     /** Whether MCP action requests are approved automatically. */
     [System.Text.Json.Serialization.JsonIgnore]
@@ -119,8 +117,12 @@ public sealed class StudioSettings
             settings.AiFolders ??= [];
             settings.AiHiddenFolders ??= [];
             settings.AiProviders ??= [];
+            // The console's auto-allow switch is gone (UI-UE5 §4.2): carry it once into the request switch Settings > AI shows,
+            // so that switch is the only one deciding whether MCP action requests are approved without a click.
+            settings.AiAutoApproveRequests ??= settings.AiAutoAllow;
             settings.AiEngine ??= "";
             settings.AiCustomCommand ??= "";
+            settings.AiPiHarnessPath ??= "";
             settings.ScriptsPath ??= "";
             settings.BlenderPath ??= "";
             settings.ProjectLayouts ??= [];

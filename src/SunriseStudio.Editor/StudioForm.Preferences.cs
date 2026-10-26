@@ -14,6 +14,33 @@ public sealed partial class StudioForm
     private bool preferencesOpen;
     private string preferencesScripts = "", preferencesBlender = "";
     private bool preferencesSeeded;
+    /** A tab to select the next time the window draws (the Solforge AI pill's NotFound click, its "Settings..."). */
+    private string? preferencesSelectTab;
+
+    /** Declared in StudioForm.SolforgeAi.cs: shows Settings on the "Solforge AI" tab. */
+    partial void OpenSolforgeAiSettings()
+    {
+        preferencesOpen = true;
+        preferencesSelectTab = "Solforge AI";
+    }
+
+    /** A Settings tab, selected once when preferencesSelectTab names it, with the sliding Accent underline. */
+    private unsafe bool BeginSettingsTab(string label)
+    {
+        bool select = string.Equals(preferencesSelectTab, label, StringComparison.Ordinal);
+        if (select) preferencesSelectTab = null;
+        // The bar's id, taken before the tab pushes its own, so the underline slides between this bar's tabs.
+        uint bar = ImGui.GetID("##tab-underline");
+        bool open;
+        if (!select) open = UiAuto.BeginTabItem(label);
+        else
+        {
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(label + '\0');
+            fixed (byte* text = bytes) open = ImGuiNative.igBeginTabItem(text, null, ImGuiTabItemFlags.SetSelected) != 0;
+        }
+        if (open) UiMotion.TabUnderline(bar, ImGui.GetItemRectMin(), ImGui.GetItemRectMax());
+        return open;
+    }
 
     /** Draws the preferences window and its tabs. */
     private void DrawPreferences()
@@ -27,15 +54,18 @@ public sealed partial class StudioForm
         }
         ImGui.SetNextWindowPos(new(ClientSize.Width / 2f, ClientSize.Height / 2f), ImGuiCond.Appearing, new(.5f));
         ImGui.SetNextWindowSize(new Vector2(620, 520) * scale, ImGuiCond.Appearing);
-        if (!ImGui.Begin("Settings###solforge-settings", ref preferencesOpen, ImGuiWindowFlags.NoCollapse))
+        if (!ImGui.Begin("Settings###solforge-settings", ref preferencesOpen))
         { ImGui.End(); return; }
-        if (ImGui.BeginTabBar("settings-tabs"))
+        if (ImGui.BeginTabBar("settings-tabs", ImGuiTabBarFlags.FittingPolicyScroll))
         {
-            if (UiAuto.BeginTabItem("Rendering")) { DrawRenderingSettings(); UiAuto.EndTabItem(); }
-            if (UiAuto.BeginTabItem("AI")) { DrawAiSettings(); UiAuto.EndTabItem(); }
-            if (UiAuto.BeginTabItem("Paths")) { DrawPathSettings(); UiAuto.EndTabItem(); }
-            if (UiAuto.BeginTabItem("Live link")) { DrawLiveSettings(); UiAuto.EndTabItem(); }
-            if (UiAuto.BeginTabItem("Interface")) { DrawInterfaceSettings(); UiAuto.EndTabItem(); }
+            if (BeginSettingsTab("Rendering")) { DrawRenderingSettings(); UiAuto.EndTabItem(); }
+            if (BeginSettingsTab("AI")) { DrawAiSettings(); UiAuto.EndTabItem(); }
+            // Hook H4: agent C's pages (each draws its own UiAuto.PushBlocked/PopBlocked).
+            if (BeginSettingsTab("Solforge AI")) { DrawSolforgeAiSettings(); UiAuto.EndTabItem(); }
+            if (BeginSettingsTab("Models & workflows")) { DrawModelsWorkflowsSettings(); UiAuto.EndTabItem(); }
+            if (BeginSettingsTab("Paths")) { DrawPathSettings(); UiAuto.EndTabItem(); }
+            if (BeginSettingsTab("Live link")) { DrawLiveSettings(); UiAuto.EndTabItem(); }
+            if (BeginSettingsTab("Interface")) { DrawInterfaceSettings(); UiAuto.EndTabItem(); }
             ImGui.EndTabBar();
         }
         ImGui.End();
@@ -84,39 +114,28 @@ public sealed partial class StudioForm
         finally { UiAuto.PopBlocked(); }
     }
 
-    /** Draws the AI settings rows (engines and providers). */
+    /**
+     * Settings > AI: the MCP server switch, auto-approve and the automatic-mode note. The console rows (the consoles,
+     * the Pi harness path, Resume) went with the in-editor console; their settings fields stay so old files load.
+     */
     private void DrawAiSettingsRows()
     {
-        ImGui.SetNextItemWidth(220 * scale);
-        if (UiAuto.BeginCombo("Default engine", AiEngines[aiEngine].Name))
-        {
-            for (int i = 0; i < AiEngines.Length; i++)
-                if (UiAuto.Selectable(AiEngines[i].Name, i == aiEngine)) SelectAiEngine(i);
-            UiAuto.EndCombo();
-        }
-        SettingNote("The engine the AI workspace starts. Applies to the next Start.");
-        DrawAiProviderRows("claude", "Claude Code");
-        DrawAiProviderRows("cline", "Cline");
-        bool allow = settings.AiAutoAllow;
-        if (UiAuto.Checkbox("Auto-allow one-time prompts", ref allow)) { settings.AiAutoAllow = allow; aiAllowSeen = null; SaveSettings(); }
+        SettingNote("The AI runs in the separate Solforge AI app (the toolbar button, or Ctrl+Shift+A). Solforge shares project "
+            + "context and live editing tools with it, and with any other MCP client, through its MCP server. Settings > Solforge AI sets where the app is.");
         bool approveRequests = settings.AutoApproveRequests;
         if (UiAuto.Checkbox("Auto-approve AI requests", ref approveRequests)) { settings.AiAutoApproveRequests = approveRequests; SaveSettings(); }
-        SettingNote("MCP action requests (open file, edits, builds) run with no Approve click and are listed under AI AUTO-APPROVED. Follows Auto-allow until changed.");
-        bool skip = settings.AiSkipPermissions;
-        if (UiAuto.Checkbox("Skip permission prompts (engines start in no-prompt mode)", ref skip)) { settings.AiSkipPermissions = skip; SaveSettings(); }
-        SettingNote("Claude Code and agy: --dangerously-skip-permissions; Cline: --yolo. Applies to the next Start. Auto-allow above stays as the fallback.");
-        bool resume = settings.AiResumeSessions;
-        if (UiAuto.Checkbox("Resume last session on Start/Restart", ref resume)) { settings.AiResumeSessions = resume; SaveSettings(); }
+        SettingNote("Solforge MCP action requests (open file, edits, builds) run with no Approve click and are listed in the AI LOG (Output Log, MCP). "
+            + "Model-workflow workers are never auto-approved.");
         bool mcp = settings.AiMcpEnabled;
-        if (UiAuto.Checkbox("MCP server (Solforge tools for AI engines)", ref mcp)) SetAiMcp(mcp);
+        if (UiAuto.Checkbox("MCP server (Solforge live editing tools)", ref mcp)) SetAiMcp(mcp);
         string status = "MCP off";
         AiServiceStatus(ref status);
-        SettingNote(status + ". Off stops the server at once; running engines lose the Solforge tools until it is back on.");
+        SettingNote(status + ". Off stops the server at once; connected clients lose Solforge's live editing tools until it is back on. "
+            + "On, it starts with Solforge, with or without a project.");
         ImGui.Separator();
         DrawAiAutomaticSettings();
-        ImGui.Separator();
-        DrawAiFolders();
     }
+
 
     /** Draws the path settings (game folder, reference folder and others). */
     private void DrawPathSettings()
@@ -178,11 +197,15 @@ public sealed partial class StudioForm
         }
         ImGui.NewLine();
         if (UiAuto.Button("Reset layout")) ResetLayout();
-        SettingNote("Each project remembers its own layout, including collapsed side panels. Applies now.");
+        SettingNote("Each project remembers its own layout, including collapsed areas. Applies now.");
         ImGui.Spacing();
         ImGui.TextDisabled("Theme");
-        ImGui.TextUnformatted("Sol (dark)");
+        ImGui.TextUnformatted("Solforge UE5 (dark)");
         SettingNote("Solforge has one theme for now.");
+        ImGui.Spacing();
+        ImGui.TextDisabled("Motion");
+        // Hook H3: Reduce motion and the animation speed (agent A).
+        DrawMotionSettings();
         ImGui.Spacing();
         float size = settings.UiScale;
         ImGui.SetNextItemWidth(220 * scale);

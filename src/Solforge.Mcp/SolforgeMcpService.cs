@@ -14,6 +14,8 @@ public sealed partial class SolforgeMcpService : IAsyncDisposable
     }
 
     public McpDispatcher Dispatcher { get; }
+    /** The /editor/* channel (null when the host does not implement IEditorUiHost). */
+    public EditorUiApi? EditorUi => server.EditorUi;
     /** Connected MCP sessions, the map claim and running work (the editor's presence list reads it). */
     public McpSessionRegistry? Sessions => server.Sessions;
     public string Url => server.Url;
@@ -34,17 +36,96 @@ public sealed partial class SolforgeMcpService : IAsyncDisposable
             .. Testkit.TestkitTools.Create(Testkit.TestkitMonitor.CreateDefault(), host.ApproveAsync)], host as ISolforgePresence, sessions), version,
             SolforgeTools.Instructions + LocalServer.LocalServerTools.Instructions + ClientProvenance.ClientBuildTools.Instructions + Testkit.TestkitTools.Instructions + MultiAgentTools.Instructions);
         dispatcher.OnToolCall = tool => host.Automatic?.NoteToolCall(tool);
-        var server = new McpHttpServer(dispatcher) { Viewport = host.Viewport, Sessions = sessions };
-        ConnectOwnerFeatures(server, host);
+        // UI-UE5 §5.6: sessions are bound to the project they were opened for; a switch refuses their calls ("project changed").
+        var server = new McpHttpServer(dispatcher) { Viewport = host.Viewport, Sessions = sessions, CurrentProject = () => host.ProjectRoot };
+        // SOLFORGE-AI-APP-SPEC §6.3: the editor UI channel for the Solforge AI app; its token never leaves this process
+        // except to a paired app, and is not part of the discovery entry.
+        if (host is IEditorUiHost uiHost)
+        {
+            var ui = new EditorUiApi(uiHost);
+            server.EditorUi = ui;
+            sessions.Changed += () => ui.EmitSoon(EditorUiEvents.SessionsChanged);
+        }
         server.Start();
         host.Viewport.LocalUrl = server.ViewportUrl;
         McpDiscovery.CleanStale();
         var service = new SolforgeMcpService(server, dispatcher);
         service.Publish(host.ProjectRoot);
+        // UI-UE5 §4.4: the standalone shim's tool cache, per-user upstreams and descriptor; off the UI thread, best effort.
+        var tools = dispatcher.Tools;
+        _ = Task.Run(() => PublishStandaloneFiles(tools, version, null));
         return service;
     }
 
-    /** Points the discovery file at the open project; called again when another project opens. */
+    /** Where the standalone files went (or why not), for the AI panel. */
+    public static string StandaloneStatus { get; private set; } = "Standalone MCP files not written yet.";
+
+    /**
+     * UI-UE5 §4.4: writes tools-cache.json (this editor's catalogue), sol-upstreams-default.json (solforge, the delegates and the
+     * carried workspace MCPs, no project entries) and solforge-ai-mcp.json (the standalone descriptor). With shared null the
+     * descriptor is written when none exists and rewritten when stale (StandaloneDescriptor.RefreshIfStale), keeping the
+     * destinyModder and skill folders a richer one from the Solforge AI settings carried.
+     */
+    public static void PublishStandaloneFiles(IReadOnlyList<McpTool>? tools, string version, Solforge.Harness.Shared.SharedHarnessResourceSnapshot? shared)
+    {
+        // The editor start (Start) and SolforgeAiStartup both publish at once; one at a time, so neither loses its write.
+        lock (publishGate)
+        {
+            try
+            {
+                if (tools is not null) ToolsCache.Write(tools, version);
+                if (FindShim() is not { } published) { StandaloneStatus = "solforge-mcp.exe not found beside Solforge: standalone files not written."; return; }
+                string shim = SolMcpServers.RunCopy(published, Path.Combine(McpDiscovery.Folder, "bin"));
+                string path = EngineCommands.FreshPath();
+                string upstreams = SolMcpServers.WriteDefaultUpstreams(SolMcpServers.CollectDefault(shim,
+                    gemini: EngineCommands.Resolve("agy", path) is not null, clinePass: EngineCommands.Resolve("cline", path) is not null));
+                // With the shared snapshot the descriptor is written in full. On a plain editor start a stale descriptor
+                // (older version, pruned run copy, other upstreams file) is rewritten, keeping its destinyModder and skill folders.
+                string? descriptor = shared is not null
+                    ? StandaloneDescriptor.Write(shim, upstreams, shared.ServerDefinition, shared.SkillDirectories ?? [])
+                    : StandaloneDescriptor.RefreshIfStale(shim, upstreams);
+                StandaloneShim = shim;
+                // A registered ~/.claude.json entry follows the run copy (older copies are pruned); never created here.
+                StandaloneRegistration.Refresh(shim, upstreams);
+                // Write and RefreshIfStale return null when the folder is not writable: never report that as success.
+                StandaloneStatus = descriptor is null
+                    ? "solforge-ai-mcp.json could not be written/refreshed in " + McpDiscovery.Folder + " (folder not writable)."
+                    : descriptor == "current"
+                        ? "Standalone MCP files written to " + McpDiscovery.Folder + " (solforge-ai-mcp.json already current)."
+                        : descriptor == "rewritten"
+                            ? "Standalone MCP files written to " + McpDiscovery.Folder + " (stale solforge-ai-mcp.json rewritten)."
+                            : "Standalone MCP files written to " + McpDiscovery.Folder + ".";
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Text.Json.JsonException
+                or InvalidOperationException or ArgumentException)
+            {
+                StandaloneStatus = "Standalone MCP files not written: " + exception.Message;
+            }
+        }
+    }
+
+    private static readonly object publishGate = new();
+
+    /** The run copy of solforge-mcp.exe the last publish used (the standalone registration's command), or null. */
+    public static string? StandaloneShim { get; private set; }
+
+    /**
+     * The user's Register action (Settings > Solforge AI > STANDALONE MCP): publishes the files, then registers the shim with a
+     * Solforge AI started without the editor (StandaloneRegistration). Throws with a curated message when it cannot.
+     */
+    public static StandaloneRegistration.State RegisterStandalone(IReadOnlyList<McpTool>? tools, string version,
+        Solforge.Harness.Shared.SharedHarnessResourceSnapshot? shared)
+    {
+        PublishStandaloneFiles(tools, version, shared);
+        lock (publishGate)
+        {
+            if (StandaloneShim is not { } shim || !File.Exists(McpDiscovery.DefaultUpstreamsFile))
+                throw new InvalidOperationException(StandaloneStatus);
+            return StandaloneRegistration.Register(shim, McpDiscovery.DefaultUpstreamsFile);
+        }
+    }
+
+    /** Points the discovery file at the open project (null when none is open); called on every project change. */
     public void Publish(string? project) =>
         DiscoveryPath = McpDiscovery.Write(new McpDiscoveryEntry(Environment.ProcessId, server.Url, server.Token, project, DateTimeOffset.UtcNow));
 
@@ -69,17 +150,13 @@ public sealed partial class SolforgeMcpService : IAsyncDisposable
         return null;
     }
 
-    /** Owner builds only (RELEASING.md): wires their extra server features to the host; public builds have none. */
-    static partial void ConnectOwnerFeatures(McpHttpServer server, ISolforgeHost host);
-    /** Owner builds only: stops what ConnectOwnerFeatures or their tools started. */
-    static partial void StopOwnerFeatures(ViewportFeed feed);
-
     /** Removes the discovery file and stops the server. */
     public async ValueTask DisposeAsync()
     {
         McpDiscovery.Remove(Environment.ProcessId);
-        if (server.Viewport is { } feed) { StopOwnerFeatures(feed); feed.LocalUrl = null; }
+        if (server.Viewport is { } feed) feed.LocalUrl = null;
         await server.DisposeAsync().ConfigureAwait(false);
+        server.EditorUi?.Dispose();
     }
 
     /** Debug-output trace line. */

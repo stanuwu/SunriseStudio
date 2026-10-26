@@ -78,10 +78,26 @@ public static class McpJson
 /**
  * JSON-RPC 2.0 dispatch for MCP (initialize, ping, tools/list, tools/call). Transport-free: the HTTP
  * server and the checks feed it one message at a time and get the reply (null for a notification).
+ * Every tools/call runs under McpJobs' per-call deadline: a call still running then replies "pending" with a job id
+ * and keeps working in the background (mcp_job, listed last, collects it), so no tool holds a request until the
+ * client's HTTP timeout.
  */
-public sealed class McpDispatcher(IReadOnlyList<McpTool> tools, string version, string instructions)
+public sealed class McpDispatcher
 {
     public static readonly string[] ProtocolVersions = ["2025-06-18", "2025-03-26", "2024-11-05"];
+    private readonly IReadOnlyList<McpTool> tools;
+    private readonly string version, instructions;
+
+    public McpDispatcher(IReadOnlyList<McpTool> tools, string version, string instructions, McpJobs? jobs = null)
+    {
+        Jobs = jobs ?? new McpJobs();
+        this.tools = tools.Any(tool => tool.Name == McpJobs.ToolName) ? tools : [.. tools, Jobs.Tool()];
+        this.version = version;
+        this.instructions = instructions.Contains(McpJobs.ToolName, StringComparison.Ordinal) ? instructions : instructions + " " + McpJobs.Hint;
+    }
+
+    /** The background jobs behind the per-call deadline. */
+    public McpJobs Jobs { get; }
     public IReadOnlyList<McpTool> Tools => tools;
     /** Called with each tools/call name before it runs (automatic mode counts them as activity). */
     public Action<string>? OnToolCall { get; set; }
@@ -115,7 +131,7 @@ public sealed class McpDispatcher(IReadOnlyList<McpTool> tools, string version, 
                 {
                     ["protocolVersion"] = ProtocolVersions.Contains(asked) ? asked : ProtocolVersions[0],
                     ["capabilities"] = new JsonObject { ["tools"] = new JsonObject { ["listChanged"] = false } },
-                    ["serverInfo"] = new JsonObject { ["name"] = "solforge", ["title"] = "Solforge", ["version"] = version },
+                    ["serverInfo"] = new JsonObject { ["name"] = "sol", ["title"] = "Sol", ["version"] = version },
                     ["instructions"] = instructions
                 });
             case "ping": return Success(id, new JsonObject());
@@ -137,7 +153,9 @@ public sealed class McpDispatcher(IReadOnlyList<McpTool> tools, string version, 
                 var arguments = parameters["arguments"] as JsonObject ?? new JsonObject();
                 try { OnToolCall?.Invoke(target.Name); } catch (Exception) { }
                 McpToolResult result;
-                try { result = await target.Handler(arguments, cancel).ConfigureAwait(false); }
+                // mcp_job waits at most one deadline itself; everything else runs as a job that may outlive the request.
+                try { result = target.Name == McpJobs.ToolName ? await target.Handler(arguments, cancel).ConfigureAwait(false)
+                        : await Jobs.RunAsync(target, arguments, cancel).ConfigureAwait(false); }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception exception) { result = McpToolResult.Error($"{target.Name} failed: {exception.Message}"); }
                 return Success(id, result.ToJson());

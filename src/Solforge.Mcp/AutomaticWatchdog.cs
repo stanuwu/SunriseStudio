@@ -59,7 +59,7 @@ public sealed class AutomaticWatchdog(Func<DateTimeOffset> clock, Func<Automatic
     public static string StartPrompt(string goal) =>
         $"[Solforge automatic mode] Goal: {goal} -- Work on this autonomously until it is truly done; do not stop to ask me. " +
         "Break it into steps, do them, and verify the result yourself (build, run checks, read the output, look at the viewport or log). " +
-        "After each step call the solforge MCP tool goal_progress (done, remaining). When the goal is achieved and verified, call " +
+        "After each step call the sol MCP tool goal_progress (done, remaining). When the goal is achieved and verified, call " +
         "goal_complete (summary, evidence). If you truly need me (a decision, a login, hardware, missing access), call goal_blocked (reason). " +
         "If you go quiet without calling one of those, Solforge will nudge you to continue.";
 

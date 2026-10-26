@@ -14,6 +14,41 @@ public static class McpDiscovery
         Environment.GetEnvironmentVariable("SOLFORGE_MCP_DISCOVERY") is { Length: > 0 } custom ? custom
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Solforge", "mcp");
 
+    /** UI-UE5 §4.4: the editor's tool catalogue, rewritten on every editor start (ToolsCache). */
+    public static string ToolsCacheFile => Path.Combine(Folder, "tools-cache.json");
+    /** UI-UE5 §4.4.7: the per-user upstream list without project-specific entries (SolMcpServers.WriteDefaultUpstreams). */
+    public static string DefaultUpstreamsFile => Path.Combine(Folder, "sol-upstreams-default.json");
+    /**
+     * UI-UE5 §4.4.7: the standalone descriptor (StandaloneDescriptor). solforge-next does not read it; a directly launched
+     * Solforge AI gets the Solforge MCP through StandaloneRegistration instead.
+     */
+    public static string StandaloneDescriptorFile => Path.Combine(Folder, "solforge-ai-mcp.json");
+
+    /**
+     * The live editor for a project, cached for maxAge: the stdio shim re-runs discovery on every tools/list and tools/call
+     * (UI-UE5 §4.4.3) without rereading the folder each time. A cached entry whose process is gone is dropped at once.
+     */
+    public static McpDiscoveryEntry? FindCached(string? project, TimeSpan maxAge)
+    {
+        string key = project ?? "";
+        lock (cache)
+        {
+            if (cache.TryGetValue(key, out var hit) && DateTimeOffset.UtcNow - hit.At < maxAge && (hit.Entry is null || Alive(hit.Entry.Pid)))
+                return hit.Entry;
+        }
+        var found = Find(project);
+        lock (cache) cache[key] = (found, DateTimeOffset.UtcNow);
+        return found;
+    }
+
+    /** Forgets cached lookups (after a failed request to the cached editor). */
+    public static void Invalidate()
+    {
+        lock (cache) cache.Clear();
+    }
+
+    private static readonly Dictionary<string, (McpDiscoveryEntry? Entry, DateTimeOffset At)> cache = new(StringComparer.OrdinalIgnoreCase);
+
     /** Writes server-{pid}.json for the entry and returns its path. */
     public static string Write(McpDiscoveryEntry entry, string? folder = null)
     {

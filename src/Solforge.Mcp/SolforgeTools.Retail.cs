@@ -1,4 +1,4 @@
-/**
+﻿/**
  * File: MCP tools retail_* over the retail (build 245048) dump: offline reads of the extracted payloads, the tag index and
  * the lookup cache (Solforge.Retail), tiger-mcp at 127.0.0.1:3033 for incoming references and localized text when it is
  * up, port plans, and the porting actions that write into the open project. The read tools are shared with the
@@ -23,11 +23,11 @@ public static partial class SolforgeTools
     /** Read tools of this file, in listing order (also served by the standalone host). */
     public static readonly string[] RetailReadTools =
     [
-        "retail_status", "retail_search", "retail_tag", "retail_read", "retail_references", "retail_strings", "retail_class_map",
+        "retail_status", "retail_search", "retail_tag", "retail_read", "retail_references", "retail_strings", "retail_class_map", "retail_capabilities",
         "retail_activity", "retail_map", "retail_port_plan", "retail_preview_mission", "retail_engine"
     ];
     /** Action tools of this file (editor only: they write into the open project or open the viewport). */
-    public static readonly string[] RetailActionTools = ["retail_port_mission", "retail_port_strings", "retail_convert_tag", "retail_open_map"];
+    public static readonly string[] RetailActionTools = ["retail_port_mission", "retail_port_strings", "retail_convert_tag", "retail_port_audio", "retail_export_geometry", "retail_open_map"];
     /** Every tool of this file, in listing order. */
     public static readonly string[] RetailToolNames = [.. RetailReadTools, .. RetailActionTools];
 
@@ -145,6 +145,48 @@ public static partial class SolforgeTools
                 return report;
             });
 
+        yield return Write("retail_port_audio", "Decode a retail Wwise media tag (file type 26) to 16-bit PCM WAV under " +
+            "the open project's retail_ports\\audio folder. Retail audio is packaged by family (sr_audio, sr_dialog_*, " +
+            "sr_dialog_v6xx..v9xx) with no destination id, so find the tag with retail_search (type 26) or read a bank with " +
+            "retail_read, then decode one media stream per call. Reports codec, sample rate, channels and duration. " +
+            "Putting the result into an 86657 audio tag is not implemented: the WAV is the deliverable for now.",
+            McpJson.Schema(("tag", "string", "Retail Wwise media tag (file type 26, 0x...)", true)),
+            args => RetailTag.Parse(McpJson.String(args, "tag")) is null ? "Give a retail tag (0x...)." : null,
+            args => $"Decode retail audio {McpJson.String(args, "tag")} to retail_ports/audio",
+            (root, args, cancel) =>
+            {
+                if (host is not ISolforgeMediaHost media)
+                    throw new InvalidDataException("This Solforge host has no audio decoder; open the project in the editor.");
+                uint tag = RetailTag.Parse(McpJson.String(args, "tag"))!.Value;
+                byte[] bytes = source.Read(tag) ?? throw new InvalidDataException($"{RetailTag.Hex(tag)} has no payload in the dump.");
+                string folder = Path.Combine(root, "retail_ports", "audio");
+                return media.ExportWwiseBytes(bytes, tag, folder, cancel)
+                    ?? throw new InvalidDataException($"{RetailTag.Hex(tag)} is not a decodable Wwise stream.");
+            });
+
+
+        yield return Write("retail_export_geometry", "Export a retail bubble's static meshes and terrain to Wavefront OBJ " +
+            "under the project's retail_ports\\geometry\\<bubble> folder, with placements.json (each mesh tag's world " +
+            "transforms) and report.json. This is the usable map path: import_asset or start_creation reads .obj and writes " +
+            "a real 86657 static mesh, so retail geometry becomes project content you can place. Textures and entity models " +
+            "are still absent, so the result is untextured geometry.",
+            McpJson.Schema(("bubble", "string", "Bubble parent (0x8080891E) or definition (0x80808701) tag, from retail_map", true),
+                ("statics", "boolean", "Include static meshes (default true)", false),
+                ("terrain", "boolean", "Include terrain (default true)", false),
+                ("max_meshes", "integer", "Cap on meshes written (default 200, max 2000)", false)),
+            args => RetailTag.Parse(McpJson.String(args, "bubble")) is null ? "Give a bubble tag (0x...) from retail_map." : null,
+            args => $"Export retail bubble {McpJson.String(args, "bubble")} geometry to retail_ports/geometry",
+            (root, args, cancel) =>
+            {
+                uint bubble = RetailTag.Parse(McpJson.String(args, "bubble"))!.Value;
+                var result = RetailGeometryExport.Export(source, bubble, root,
+                    McpJson.Bool(args, "statics", true), McpJson.Bool(args, "terrain", true),
+                    Math.Clamp(McpJson.Int(args, "max_meshes", 200), 1, 2000), cancel);
+                var report = result.ToJson();
+                report["files"] = new JsonArray(result.Files.Select(file => (JsonNode)Path.GetRelativePath(root, file)).ToArray());
+                return report;
+            });
+
         yield return act("retail_open_map", "Open a retail bubble (map) read-only in Solforge's viewport, in the Retail workspace: " +
             "every map node as a marker by component kind (statics, terrain, lights, decals, respawn points...) with selection and a " +
             "retail tag inspector, plus untextured terrain and static mesh geometry. Textures, materials, entity models and " +
@@ -180,7 +222,8 @@ public static partial class SolforgeTools
         }
 
         yield return read("retail_status", "Where the retail data stands: the dump folders, the tag index (rows, or its build " +
-            "progress: the first build takes about a minute, later starts read a cache), the lookup cache (64-bit hashes and named " +
+            "progress as rows done of the total: the first build parses the dump's TSVs once, later starts read a cache in seconds), " +
+            "the lookup cache (64-bit hashes and named " +
             "tags), the retail schemas (confirmed vs guessed fields), the class map and whether tiger-mcp answers. Start here.",
             McpJson.Schema(("engine", "boolean", "Also ask tiger-mcp for its status (default true)", false)),
             async (args, cancel) =>
@@ -197,7 +240,7 @@ public static partial class SolforgeTools
                             ["loaded"] = source.Index is not null, ["rows"] = source.Index?.Count, ["error"] = source.IndexError,
                             ["struct_classes"] = source.Index?.ClassCounts.Count
                         }
-                        : new JsonObject { ["loaded"] = false, ["building"] = true, ["progress"] = source.IndexProgress },
+                        : RetailIndexState(source),
                     ["lookup_cache"] = new JsonObject
                     {
                         ["path"] = options.LookupCache, ["hash64"] = source.Lookup.Tag64Count, ["named_tags"] = source.Lookup.Named.Count,
@@ -383,19 +426,28 @@ public static partial class SolforgeTools
                 return Task.FromResult(McpToolResult.Json(page));
             });
 
+        yield return read("retail_capabilities", "What can actually be ported from retail to Sol today, and what cannot: one row " +
+            "per content kind (missions, maps, textures, materials, audio, entities, subclasses) with state (portable, " +
+            "needs_authoring, needs_writer, blocked), the tool to use, the reason from the code, and the next step. Call this " +
+            "BEFORE promising a DLC port: it is the source of truth for feasibility, not the presence of a retail tag. " +
+            "filter narrows to one kind or to a state.",
+            McpJson.Schema(("filter", "string", "Kind (missions, maps, textures, materials, audio, entities, subclasses) or state (portable, needs_authoring, needs_writer, blocked)", false)),
+            (args, _) => Task.FromResult(McpToolResult.Json(RetailCapabilities(source, McpJson.String(args, "filter")))));
+
+
         yield return Indexed("retail_activity", "Retail destinations and activities. No arguments: every named destination. " +
             "query: named activities whose name contains it (e.g. schism, mission_alice). destination: that destination decoded " +
             "(name, string container, activity list). activity: that activity decoded (phases with bubble hashes, map references " +
             "and entity links).",
             Paged(("query", "string", "Substring of an activity name", false), ("destination", "string", "Destination tag or name", false),
                 ("activity", "string", "Activity tag or name", false)),
-            (args, _) =>
+            (args, cancel) =>
             {
                 if (McpJson.String(args, "activity") is { Length: > 0 } activityText)
                 {
                     if (RetailResolve(source, activityText, RetailActivity.ActivityClass) is not { } activityTag)
                         return McpToolResult.Error($"No activity named {Quote(activityText)}; use query to search.");
-                    var activity = RetailActivity.ReadActivity(source, activityTag, out string? problem);
+                    var activity = RetailActivity.ReadActivity(source, activityTag, out string? problem, cancel: cancel);
                     return activity is null ? McpToolResult.Error(problem ?? "The activity did not decode.") : McpToolResult.Json(RetailActivityJson(source, activity));
                 }
                 if (McpJson.String(args, "destination") is { Length: > 0 } destinationText)
@@ -424,7 +476,7 @@ public static partial class SolforgeTools
                 {
                     if (RetailResolve(source, activityText, RetailActivity.ActivityClass) is not { } activityTag)
                         return McpToolResult.Error($"No activity named {Quote(activityText)}.");
-                    var activity = RetailActivity.ReadActivity(source, activityTag, out string? problem, entities: false);
+                    var activity = RetailActivity.ReadActivity(source, activityTag, out string? problem, entities: false, cancel: cancel);
                     if (activity is null) return McpToolResult.Error(problem ?? "The activity did not decode.");
                     return McpToolResult.Json(new JsonObject
                     {
@@ -542,15 +594,30 @@ public static partial class SolforgeTools
             });
     }
 
-    /** Null when the index is ready (or failed, which the tool reports); otherwise a "still loading" reply after 20 seconds. */
+    /**
+     * Null when the index is ready (or failed, which the tool reports); otherwise, after up to 20 seconds, a structured
+     * "still loading, call again" reply with the build's real progress (rows done of the total).
+     */
     private static async Task<McpToolResult?> RetailIndexing(RetailSource source, CancellationToken cancel)
     {
+        McpJobs.Report(source.IndexProgress.Length > 0 ? source.IndexProgress : "Loading the retail tag index");
         if (await source.WaitForIndexAsync(TimeSpan.FromSeconds(20), cancel).ConfigureAwait(false)) return null;
-        return McpToolResult.Json(new JsonObject
+        var state = RetailIndexState(source);
+        state["retry"] = true;
+        state["message"] = "The retail tag index is still loading (" + (source.IndexProgress.Length > 0 ? source.IndexProgress : "starting") +
+            "). The first build parses the dump's TSVs once and writes a cache; later starts load the cache in seconds. Call again in a few seconds.";
+        return McpToolResult.Json(state);
+    }
+
+    /** The index build state for replies: phase, done, total and the progress line. */
+    private static JsonObject RetailIndexState(RetailSource source)
+    {
+        var info = source.IndexProgressInfo;
+        return new JsonObject
         {
-            ["loading"] = true, ["progress"] = source.IndexProgress,
-            ["message"] = "The retail tag index is still loading (the first build parses the dump's TSVs once, about a minute; later starts read a cache). Call again shortly."
-        });
+            ["loaded"] = false, ["building"] = true, ["progress"] = source.IndexProgress, ["phase"] = info?.Phase,
+            ["done"] = info?.Done, ["total"] = info?.Total, ["unit"] = info is null ? null : info.Value.Phase == "counting" ? "bytes" : "rows"
+        };
     }
 
     private static bool RetailRecoverable(Exception error) =>
@@ -563,7 +630,8 @@ public static partial class SolforgeTools
         text = text.Trim();
         if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || text.Contains(':') || (text.Length == 8 && text.All(Uri.IsHexDigit)))
             return RetailTag.Parse(text);
-        var named = source.Lookup.Named.Where(row => row.Class == type).ToList();
+        var named = source.Lookup.NamedOfClass(type);
+        if (source.Lookup.FindNamed(type, text) is { } ordinal) return ordinal;
         if (named.FirstOrDefault(row => string.Equals(row.Name, text, StringComparison.OrdinalIgnoreCase)) is { } exact) return exact.Tag;
         var partial = named.Where(row => row.Name.Contains(text, StringComparison.OrdinalIgnoreCase)).Select(row => row.Tag).Distinct().ToList();
         return partial.Count == 1 ? partial[0] : null;
@@ -603,6 +671,88 @@ public static partial class SolforgeTools
         ["reference"] = entry.IsStruct ? null : RetailTag.Hex(entry.Reference), ["type"] = entry.Type, ["subtype"] = entry.Subtype,
         ["size"] = entry.Size, ["package"] = entry.Package, ["name"] = source.NameOf(entry.Tag)
     };
+
+    /**
+     * The portability matrix behind retail_capabilities. Every row names the check that produced it, so a reader can
+     * re-derive it rather than trust it: the texture and entity rows come from the dump's own entry sizes (no type 32/33
+     * payload exceeds 64 bytes, type 41 is DXBC shader bytecode), and the subclass row from Solfore's content families.
+     */
+    private static JsonObject RetailCapabilities(RetailSource source, string? filter)
+    {
+        // (kind, state, tool, what, why, next)
+        (string Kind, string State, string? Tool, string What, string Why, string Next)[] rows =
+        [
+            ("missions", "portable", "retail_port_mission",
+                "The activity document (one objective per retail phase, chained) plus a Lua script skeleton and report.json.",
+                "RetailActivity and RetailMissionPort decode phases and directives; the script is written with CHANGE_ME placeholders.",
+                "Run retail_preview_mission, then retail_port_mission, then finish with the solforge-new-mission skill "
+                + "(bind script, replace CHANGE_ME, check_mission_script, simulate_mission, build)."),
+            ("missions", "blocked", null,
+                "Encounter logic, AI, loot and dialogue inside a mission.",
+                "The retail entity scripts are not decoded; only phases/objectives are readable.",
+                "Hand-write encounters on 86657 objects. Do not promise parity: this is authored, not ported."),
+            ("maps", "portable", "retail_export_geometry",
+                "Bubble geometry as Wavefront OBJ per mesh plus placements.json (world transforms) and report.json.",
+                "Two decoders feed it: RetailGeometry reads the triangles, and MeshAssetImporter reads .obj and writes a real "
+                + "86657 static mesh, so the exported geometry becomes project content. Still untextured: retail texels are "
+                + "absent, and terrain exports as geometry rather than as a v38 terrain tag.",
+                "retail_export_geometry {bubble} then import the .obj files (import_asset or start_creation) and place them "
+                + "with the transforms in placements.json."),
+            ("textures", "blocked", null,
+                "Texture pixels.",
+                "No texture payload exists to convert: across 1.2M indexed entries every type-32 header is at most 64 bytes "
+                + "and every type-33 stub is exactly 40 bytes; type 41 is DXBC shader bytecode, not texels. Not a decoder gap.",
+                "Do not plan around retail textures. Reuse an existing Sol texture, or author new art and import it."),
+            ("materials", "blocked", null,
+                "Material graph look; shader code is readable (DXBC) but its texture inputs are absent.",
+                "Material tags decode, so names and slot wiring are known; the texels they bind are missing (see textures).",
+                "Port material structure as a starting point, then supply authored textures from the Sol install."),
+            ("audio", "portable", "retail_port_audio",
+                "Wwise media as 16-bit PCM WAV: 13.15 GB across 276,872 type-26 entries. Payloads carry a RIFF (Wwise) "
+                + "header and decode with WemDecoder.",
+                "Decoding works today. Two limits remain: audio is packaged by family (sr_audio, sr_dialog_*, "
+                + "sr_dialog_v6xx..v9xx) with no destination id, so a tag must be found by search rather than by map; and "
+                + "packing the WAV into an 86657 audio tag is not implemented, so the WAV is the deliverable.",
+                "Find the tag with retail_search (type 26) or retail_read a bank, then retail_port_audio to write "
+                + "retail_ports/audio/<tag>.wav. Placement into the game still needs an 86657 audio tag writer."),
+            ("entities", "blocked", null,
+                "Entity models, materials and skinning.",
+                "No retail model/material/skin reader exists in Solforge.Retail (only viewport geometry), and the never-indexed "
+                + "packages checked carry zero mesh bytes.",
+                "Phase 4.4: mirror ModelSkinReader/ClothSkinReader/AnimationRigReader for v53, after R.10."),
+            ("subclasses", "needs_authoring", null,
+                "Stasis subclasses: Behemoth, Shadebinder, Revenant present supers, melees, grenades, aspects and fragments.",
+                "Reverse-engineered 2026-10-19: 86657 ships NO Stasis content. A full 15,424-item export has zero Stasis "
+                + "abilities (only emotes/bounties named slow/freeze) and just the nine light subclass items. Abilities come "
+                + "from the client talent grid (ability_buckets.bin), which Solforge does not write.",
+                "Use gameplay \"reskin\": the packs declare reskin_of (Behemoth->arc.titan.striker, Shadebinder->"
+                + "arc.warlock.stormcaller, Revenant->void.hunter.nightstalker) and framework.reskin() builds that light "
+                + "subclass while showing the Stasis names. Going live needs a client talent-grid writer."),
+        ];
+        var items = rows.Where(row => string.IsNullOrEmpty(filter)
+            || string.Equals(row.Kind, filter, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(row.State, filter, StringComparison.OrdinalIgnoreCase));
+        var result = new JsonObject
+        {
+            ["build_retail"] = RetailOptions.Build,
+            ["build_sol"] = 86657,
+            ["summary"] = "Missions port as skeletons. Map geometry exports to OBJ and imports as real 86657 static meshes. "
+                + "Textures and entity models are absent from the retail install, so no converter can supply them. Audio "
+                + "decodes to WAV but is not yet installable as an 86657 tag. Stasis is data-complete but needs authored plugs.",
+            ["kinds"] = new JsonArray(items.Select(row => (JsonNode)new JsonObject
+            {
+                ["kind"] = row.Kind, ["state"] = row.State, ["tool"] = row.Tool,
+                ["what"] = row.What, ["why"] = row.Why, ["next"] = row.Next
+            }).ToArray()),
+            ["states"] = new JsonObject
+            {
+                ["portable"] = "a tool writes it today", ["needs_writer"] = "the data decodes, a writer is missing",
+                ["needs_authoring"] = "the data is present but the game needs hand-authored content", ["blocked"] = "the source data is not available"
+            },
+            ["root"] = source.Options.Root, ["root_exists"] = source.RootExists
+        };
+        return result;
+    }
 
     private static JsonObject RetailClassRowJson(RetailClassRow row) => new()
     {

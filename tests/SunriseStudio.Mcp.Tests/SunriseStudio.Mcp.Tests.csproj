@@ -5,6 +5,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Solforge.Mcp/Solforge.Mcp.csproj" />
+    <!-- Console-only helpers excluded from Solforge.Mcp (UI-UE5 §4.2), compiled here for their checks. -->
+    <Compile Include="../../src/Solforge.Mcp/ApprovalPrompts.cs;../../src/Solforge.Mcp/AiConsoleAdapters.cs" Link="RemovedConsole/%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
     <None Include="ocr-sample.png" CopyToOutputDirectory="PreserveNewest" />

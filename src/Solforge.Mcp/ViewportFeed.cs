@@ -49,18 +49,8 @@ public sealed partial class ViewportFeed(int capacity = 32)
     /** Keeps the capture running for IdleTimeout. */
     public void Want() => Interlocked.Exchange(ref lastWant, Environment.TickCount64);
 
-    public bool Wanted
-    {
-        get
-        {
-            bool wanted = Volatile.Read(ref streams) > 0 || Environment.TickCount64 - Interlocked.Read(ref lastWant) < (long)IdleTimeout.TotalMilliseconds;
-            if (!wanted) OwnerWanted(ref wanted);
-            return wanted;
-        }
-    }
-
-    /** Owner builds only (RELEASING.md): an owner-only consumer keeps the capture running; public builds have none. */
-    partial void OwnerWanted(ref bool wanted);
+    public bool Wanted =>
+        Volatile.Read(ref streams) > 0 || Environment.TickCount64 - Interlocked.Read(ref lastWant) < (long)IdleTimeout.TotalMilliseconds;
 
     /** Registers a streaming consumer and wakes the capture. */
     public void BeginStream() { Interlocked.Increment(ref streams); Want(); }

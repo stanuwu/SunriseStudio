@@ -1,67 +1,100 @@
-# Solforge MCP server
+# Sol MCP server
 
-Solforge runs a plain MCP server whenever a project is open. Any MCP client can use it: Claude, Gemini, GPT, Cline or a local model. The model needs nothing special.
+Solforge exposes one MCP server, named **sol**, whenever the editor runs, and `solforge-mcp.exe --sol` also serves it with
+no editor running (see [Standalone MCP](#standalone-mcp-no-editor-running)). It aggregates the Solforge editor tools, the
+workspace's `sol-testkit` and `tiger-mcp`, and the optional `ask_gemini`/`ask_clinepass` delegates, so clients see one
+server with one merged tool/resource/prompt surface instead of four or five entries. Any MCP client can use it: Claude,
+Gemini, GPT, Cline or a local model. The model needs nothing special.
 
 | Feature | How it works |
 | --- | --- |
-| Transports | stdio, through the shim `solforge-mcp.exe` next to `Solforge.exe`, and streamable HTTP on `127.0.0.1` with a Bearer token |
+| Transports | stdio, through `solforge-mcp.exe --sol` next to `Solforge.exe`; the streamable HTTP endpoint on `127.0.0.1` remains the Solforge-only transport |
+| Tool names | Solforge tools keep their names (`get_context`, `open_map`...); other upstreams are namespaced (`testkit_*`, `tiger_*`), and the delegates stay `ask_gemini`/`ask_clinepass` |
+| Resources and prompts | Static resources, resource templates and prompts from every upstream are merged too. Static resource URIs become `sol://<server>/<base64url(original)>`; template variables are preserved so expansion still works. Prompt names are namespaced the same way as tools. |
 | Tool inputs | JSON Schema objects. Every property has a description. |
 | Images | Each image tool also returns text: frame id, size, time, what changed and the labelled objects on screen. Models without vision can work from the text. OCR is not done; the on-screen labels come from Solforge's own scene. |
-| Approval | Action tools (edits, builds, UI clicks, opening maps) wait for the user's click on the approval card in Solforge's AI workspace. This works for every client, because the approval lives in Solforge, not in the client. |
+| Approval | Action tools (edits, builds, UI clicks, opening maps) wait for the user's click on the approval card in Solforge's AI panel (the AI Requests tab; file edits open a before/after review). This works for every client, because the approval lives in Solforge, not in the client. |
 | Skills | Plain Markdown in `skills/` (one `SKILL.md` per job). Any agent can read them. |
+
+The aggregate answers `resources/list`, `resources/templates/list`, `resources/read`, `prompts/list` and `prompts/get`
+when an upstream provides them. Use the returned `sol://` URI or the returned prompt name; the aggregate maps both back
+to the owning server. Resource-list change and subscription notifications are not forwarded, so the aggregate advertises
+those capabilities as false. `tools.listChanged` is true: the aggregate sends `notifications/tools/list_changed` when the
+Solforge route switches between the editor and the headless host, or when a failed upstream comes up on its retry.
 
 ## Client config
 
-`<solforge>` is the folder that holds `Solforge.exe`; `<project>` is the Solforge project folder. The shim finds the Solforge window that has that project open.
+`<solforge>` is the folder that holds `Solforge.exe`; `<project>` is the Solforge project folder. `<upstreams>` is the
+local list Solforge writes on each project start, `%LOCALAPPDATA%\Solforge\mcp\sol-upstreams-<hash>.json`. It holds the
+commands and env for the aggregate's upstreams and is deliberately outside the project (the env may contain credentials).
+The shim finds the Solforge window that has that project open.
 
-**Claude Code** (`.mcp.json` in the project, or `claude mcp add solforge -- "<solforge>\solforge-mcp.exe" --project "<project>"`):
+**Claude Code** (`.mcp.json` in the project, or `claude mcp add sol -- "<solforge>\solforge-mcp.exe" --sol --project "<project>" --upstreams "<upstreams>"`):
 ```json
-{ "mcpServers": { "solforge": { "type": "stdio", "command": "<solforge>\\solforge-mcp.exe", "args": ["--project", "<project>"] } } }
+{ "mcpServers": { "sol": { "type": "stdio", "command": "<solforge>\\solforge-mcp.exe", "args": ["--sol", "--project", "<project>", "--upstreams", "<upstreams>"] } } }
 ```
 
 **Claude Desktop** (`%APPDATA%\Claude\claude_desktop_config.json`), **Cursor** (`.cursor\mcp.json` or `%USERPROFILE%\.cursor\mcp.json`), **Cline** (MCP Servers > Configure > `cline_mcp_settings.json`):
 ```json
-{ "mcpServers": { "solforge": { "command": "<solforge>\\solforge-mcp.exe", "args": ["--project", "<project>"] } } }
+{ "mcpServers": { "sol": { "command": "<solforge>\\solforge-mcp.exe", "args": ["--sol", "--project", "<project>", "--upstreams", "<upstreams>"] } } }
 ```
 
 **Gemini CLI / Antigravity** (`%USERPROFILE%\.gemini\settings.json`, or Antigravity's MCP config, which takes the same shape):
 ```json
-{ "mcpServers": { "solforge": { "command": "<solforge>\\solforge-mcp.exe", "args": ["--project", "<project>"], "timeout": 130000 } } }
+{ "mcpServers": { "sol": { "command": "<solforge>\\solforge-mcp.exe", "args": ["--sol", "--project", "<project>", "--upstreams", "<upstreams>"], "timeout": 130000 } } }
 ```
+
+**Pi harness** (`.pi/mcp.json` in the project; Pi reads it after the project is trusted):
+```json
+{ "mcpServers": { "sol": { "type": "stdio", "command": "<solforge>\\solforge-mcp.exe", "args": ["--sol", "--project", "<project>", "--upstreams", "<upstreams>"], "exposure": "direct" } } }
+```
+Solforge starts the custom `pi-cust.cmd` harness in the AI workspace and writes this entry on each project start; the `direct` exposure makes the `mcp__sol__*` tools visible without a tool search.
 
 **Codex CLI** (`%USERPROFILE%\.codex\config.toml`):
 ```toml
-[mcp_servers.solforge]
+[mcp_servers.sol]
 command = 'C:\path\to\solforge\solforge-mcp.exe'
-args = ["--project", 'C:\path\to\project']
+args = ["--sol", "--project", 'C:\path\to\project', "--upstreams", 'C:\path\to\sol-upstreams.json']
 startup_timeout_sec = 20
 tool_timeout_sec = 130
 ```
+
+Without `--upstreams`, `--sol` reads the project's own list (`sol-upstreams-<hash>.json`) when `--project` is given, then
+the per-user default `%LOCALAPPDATA%\Solforge\mcp\sol-upstreams-default.json`, and only then serves Solforge alone.
+`--project` alone remains the direct stdio bridge to Solforge (headless when no editor runs), and `--gemini` /
+`--clinepass` remain available for a client that wants only one delegate; Solforge's own config writer uses the single
+`sol` entry.
+
+| Argument | Meaning |
+| --- | --- |
+| `--sol` | The aggregate (`sol`). |
+| `--project <folder>` | The session's project. With `--sol` it scopes the Solforge route; alone it is the direct bridge. |
+| `--upstreams <file>` | The upstream list (see above for the fallbacks). |
+| `--from-env` | `--sol` with the project from `SOLFORGE_NEXT_PROJECT` (solforge-next's overlay row). `SOLFORGE_NEXT_PIPE` is ignored: the editor is found through discovery. A missing or wrong variable never makes it exit non-zero; it serves with no project. |
+| `--worker` | A model-workflow worker session: reads and reviewed `apply_project_edit` only (`WorkerSessionPolicy`); no workflow, automatic or other write tools. |
+| `--context` | Prints the live context and exits (the Claude Code prompt hook). |
 
 **HTTP-only clients.** Solforge writes `%LOCALAPPDATA%\Solforge\mcp\<pid>.json` with `url` (`http://127.0.0.1:<port>/mcp`) and `token`. Send `Authorization: Bearer <token>`. The port and token change on every run, so prefer the shim when the client can start a command.
 
 Use tool timeouts of about 130 s: `wait_for_player_near` waits up to 120 s, and `wait_for_viewport_change` up to 60 s.
 
-## Several subscriptions: Claude Code + Gemini (Antigravity CLI) + ClinePass
+## Delegates: Gemini (Antigravity CLI) and ClinePass
 
-Each engine runs on its own official client and its own sign-in. Claude Code uses your Claude plan, and agy uses your Google AI Pro login.
+Each delegate runs on its own official client and sign-in. Solforge adds it as an upstream of the one `sol` server when
+its CLI is installed, so Claude Code or Pi can use it without a second MCP entry.
 
-- **`ask_gemini` (stdio server `solforge-mcp --gemini`).** This tool runs `agy -p <task> --output-format json --mode plan|accept-edits` in the folder you give it. It returns Gemini's reply and a conversation id, which you pass back as `conversation` to continue.
-  - It does not need Solforge to be running.
-  - When agy is installed, Solforge adds it to the Claude Code config it launches.
-  - To use it in any Claude Code session, run: `claude mcp add --scope user gemini -- "<solforge>\solforge-mcp.exe" --gemini`.
-- **`ask_clinepass` (stdio server `solforge-mcp --clinepass`).** This tool works like `ask_gemini` but runs your own Cline CLI on ClinePass: `cline --json -P cline-pass [-m cline-pass/<model>] [-p] -t <seconds> -- <task>`. The default `plan` mode reads and answers only; `act` lets the model edit files and run commands. The prompt is capped at 24,000 characters and the time limit at 30 minutes. It returns the reply plus the model and finish reason. The headless Cline CLI can't resume a session in JSON mode, so each call starts fresh.
-  - It does not need Solforge to be running. Sign in once with `cline auth` and pick ClinePass, or set `CLINE_API_KEY`.
-  - Solforge adds it to the Claude Code config it launches when "Give Claude Code ask_clinepass" is ticked in the AI workspace "..." menu and cline is installed.
-  - To use both tools in any Claude Code session, run:
-    - `claude mcp add --scope user gemini -- "<solforge>\solforge-mcp.exe" --gemini`
-    - `claude mcp add --scope user clinepass -- "<solforge>\solforge-mcp.exe" --clinepass`
+- **`ask_gemini`.** This tool runs `agy -p <task> --output-format json --mode plan|accept-edits` in the folder you give it. It returns Gemini's reply and a conversation id, which you pass back as `conversation` to continue.
+  - It does not need Solforge to be running, but through `sol` it is available alongside the editor tools.
+  - A client that wants only this delegate can still use `solforge-mcp.exe --gemini`.
+- **`ask_clinepass`.** This tool works like `ask_gemini` but runs your own Cline CLI on ClinePass: `cline --json -P cline-pass [-m cline-pass/<model>] [-p] -t <seconds> -- <task>`. The default `plan` mode reads and answers only; `act` lets the model edit files and run commands. The prompt is capped at 24,000 characters and the time limit at 30 minutes. It returns the reply plus the model and finish reason. The headless Cline CLI can't resume a session in JSON mode, so each call starts fresh.
+  - Sign in once with `cline auth` and pick ClinePass, or set `CLINE_API_KEY`.
+  - A client that wants only this delegate can still use `solforge-mcp.exe --clinepass`.
 - **Claude Code on ClinePass (provider for Claude Code).** Claude Code itself runs on ClinePass models through a translator on 127.0.0.1 inside Solforge, which converts Anthropic Messages to OpenAI Chat Completions against `https://api.cline.bot/api/v1`. Cline documents this API for your own scripts and apps with a ClinePass API key ([ClinePass docs](https://docs.cline.bot/getting-started/clinepass)), and its FAQ allows ClinePass "with other coding agents by using your ClinePass API key" ([cline.bot/cline-pass](https://cline.bot/cline-pass)).
   - Setup: create a key at app.cline.bot (Settings > API Keys), set it as the user environment variable `CLINE_API_KEY`, and pick the provider "Claude Code on ClinePass" for Claude Code.
   - The model field takes a `cline-pass/` id; the default is `cline-pass/kimi-k3`. Inside Claude Code, `/model cline-pass/qwen3.8-max` (or any other `cline-pass/` id) switches the model, and the haiku alias maps to `cline-pass/deepseek-v4.1-flash`.
   - That run has every Anthropic and Claude login variable removed. Claude Code gets only a random local token that opens nothing but the translator port. Your Claude and Google sign-ins never pass through it, and Antigravity stays tool-only (`ask_gemini`). The key is read from your environment per request and never stored or logged.
   - It is personal use only: Cline's [terms](https://cline.bot/tos) forbid sharing a subscription or transferring API keys.
-- **Hand off (AI workspace "..." menu).** This stops the running engine and writes `.solforge/HANDOFF.md` with that session's recent requests and last reply. It then starts the other engine on the same project, MCP and skills, with a first prompt that points at the note.
+- **Handoff helper (legacy).** The AI workspace now starts only the Pi harness; the old session-handoff helper remains in `EngineLaunch.cs` for delegate callers but is no longer offered by the workspace.
 - **Not allowed (both providers' terms).** Never copy or proxy a subscription's OAuth token into another client. That rules out pointing Claude Code at Gemini through an Antigravity-login proxy, and putting a Claude login in a third-party harness. Google suspends accounts that do the first. Gemini inside Claude Code itself is possible only with a paid Gemini API key through an LLM gateway such as LiteLLM. That is billed API use, not AI Pro, and Anthropic doesn't support it.
 
 ## Solforge's own UI
@@ -91,7 +124,6 @@ Solforge captures the 3D viewport continuously while someone watches: a frame to
 - `wait_for_viewport_change`: blocks until the view changes, up to the timeout.
 - `read_screen_text`: the text on screen via Windows OCR (`Windows.Media.Ocr`, built into Windows, CPU only): lines with `[x, y, w, h]` boxes in image pixels; `region`, `contains`, `words`, `source=screenshot` for full size. `get_viewport_frame` and `wait_for_viewport_change` take `ocr: true` to add the same text to a frame.
 - `get_viewport_stream`: a local URL, `http://127.0.0.1:<port>/viewport?key=<view key>`, for an MJPEG stream on this PC. The view key is not the MCP token.
-- Owner builds (`RELEASING.md`) add owner-only streaming tools; public builds do not have them.
 
 ## Player position
 
@@ -169,3 +201,54 @@ Keeps the AI working on one goal until it is done.
   - An engine can't type `/automatic` into its own input line, so it uses the tools.
 - The running goal is saved to `automatic-goal.json` beside the settings file. After a restart, the AI panel asks whether to resume it or discard it.
 - `get_editor_state` and the remote AI state both include `automatic`, and the stream page's Status tab shows it.
+
+
+## Standalone MCP (no editor running)
+
+UI-UE5 §4.4, for the relayed request "the mcp should be able to be launched if its standalone too". `solforge-mcp --sol`
+(and `--project`) no longer needs a running editor:
+
+- **Route.** On every `tools/list` and `tools/call` the shim looks for a running editor through the discovery files
+  (`McpDiscovery`, cached for 2 s) and checks again every 5 s in the background. With an editor it talks to it over HTTP;
+  without one it answers in-process from the headless host (`Solforge.Mcp.Headless.HeadlessSolforgeHost`). When an editor
+  starts later, its tools attach to the same shim session; when it stops, the shim falls back to headless.
+- **Tool names stay stable.** The Solforge part of `tools/list` is the union of the live editor catalogue, the cached one
+  (`%LOCALAPPDATA%\Solforge\mcp\tools-cache.json`, written on every editor start) and the headless tools, each with
+  `_meta["solforge/requiresEditor"]`. A client that ignores `list_changed` still sees every name.
+- **Headless tools** (`SolforgeTools.HeadlessTools`): project files (`read_project_file`, `search_project`,
+  `list_project_files`), the reference library, content reads, graph reads, the tag schema registry, the decomp tools,
+  the retail reads, the local server reads, `testkit_status`, `get_client_build`, `get_sessions` and `mcp_job`. Every other
+  tool, and every tool that needs an approve click, answers `needs the Solforge editor: start Solforge (and open <project>)`.
+  With no project, project-folder tools answer `no project: pass --project or open one in the editor`; with no
+  `--project`, the shim follows the attached editor's project.
+- **Other upstreams** (sol-testkit, tiger-mcp, delegates) start once, as before, plus one retry 30 s after a failed start.
+- **Per-user files** for a Solforge AI started directly: the editor (and the Solforge AI settings page) writes
+  `sol-upstreams-default.json` (solforge, the delegates and the carried workspace MCPs, no project entries) and
+  `solforge-ai-mcp.json`, the descriptor solforge-next's default overlay reads:
+  `{ version: 1, shim, args: ["--sol", "--upstreams", <default file>], failOnStartupError: false, toolCallTimeoutMs, destinyModder, skillDirs }`.
+- **Project binding.** Each MCP session is bound to the project it was opened for. After the editor switches projects,
+  its calls are refused with JSON-RPC error `-32001` ("project changed"); the shim then opens a new session for the
+  current project on the next call. `open_project`, `create_project` and `close_project` move their own session along.
+
+Not verified: none of this has been run. The acceptance checks (editor closed: `tools/list` returns the union and a headless
+tool answers; then start the editor: an editor tool answers through the same shim session) are left to the user.
+
+## Solforge AI
+
+The AI console/terminal is gone from the editor; the toolbar's Solforge AI button launches the separate Solforge AI app
+(solforge-next) per its launch contract (`Solforge.AiLauncher`). Its overlay row is
+`solforge-mcp.exe --sol --project <p> --upstreams <file>` (or `--sol --upstreams <per-user default>` with no project), with
+`failOnStartupError: false`, so the MCP comes up headless when the editor is gone.
+
+## Reviewed edits, editor capture and model workflows
+
+- `read_project_file` returns `sha256` (the whole file's version). `apply_project_edit` takes `expected_sha256` and refuses a
+  stale write; the user reviews the exact before/after text in a side-by-side diff (3 minutes), and the write is checked
+  against the reviewed version again before it happens. `get_open_documents` entries with a file carry `dirty` and `sha256`.
+- `get_editor_screenshot`: the whole editor window (uncropped back buffer). `get_recent_activity` is an alias of
+  `get_attention_log`.
+- The configured credential file (Settings > Solforge AI) is never read, searched, opened, edited or captured:
+  `read_project_file`, `search_project`, `open_file`, `apply_project_edit`, the screenshot and frame tools refuse it.
+- `start_model_workflow`, `get_model_workflow`, `cancel_model_workflow`: the model team from Settings > Models & workflows.
+  A start always opens Solforge's own confirm dialog (task and routed models); it is never auto-approved. Workers reach the
+  editor through `solforge-mcp --worker --project <p>`.

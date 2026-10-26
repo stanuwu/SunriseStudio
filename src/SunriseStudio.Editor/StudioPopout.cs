@@ -22,13 +22,17 @@ internal sealed class StudioPopout : Form
     /** The themed frame; its close button docks the editor again. */
     public WindowChrome Chrome { get; }
 
-    public StudioPopout(StudioPanelKind panel, string title, Icon icon, Rectangle? bounds)
+    /** The interface scale this window was last laid out at. */
+    private float uiScale = 1;
+
+    public StudioPopout(StudioPanelKind panel, string title, Icon icon, Rectangle? bounds, float scale)
     {
         Panel = panel;
         Chrome = new(this);
         Text = $"{title} - Solforge";
         Icon = icon;
-        MinimumSize = new Size(320, 240);
+        uiScale = scale > 0 && float.IsFinite(scale) ? scale : 1;
+        MinimumSize = new Size(Scaled(320), Scaled(240));
         KeyPreview = true;
         ShowInTaskbar = false;
         SetStyle(ControlStyles.Opaque | ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint, true);
@@ -40,9 +44,11 @@ internal sealed class StudioPopout : Form
         else
         {
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(900, 640);
+            ClientSize = new Size(Scaled(900), Scaled(640));
         }
     }
+
+    private int Scaled(float value) => Math.Max(1, (int)Math.Round(value * uiScale));
 
     /** Call after Show, on the window thread; the renderer and the shared controller must outlive the window. */
     public void Attach(Dx11Renderer renderer, ImGuiController shared, float scale)
@@ -58,10 +64,22 @@ internal sealed class StudioPopout : Form
         finally { ImGui.SetCurrentContext(caller); }
     }
 
-    /** Reapplies the theme at a new DPI scale; the shared fonts are rebuilt by the main window. */
+    /** Reapplies the theme and the window's scaled minimum/size at a new DPI or interface scale. */
     public void Rescale(float scale)
     {
-        if (gui is null) return;
+        if (gui is null || scale <= 0 || !float.IsFinite(scale)) return;
+        float factor = scale / uiScale;
+        uiScale = scale;
+        MinimumSize = new Size(Scaled(320), Scaled(240));
+        if (Math.Abs(factor - 1) > .001f && WindowState == FormWindowState.Normal)
+        {
+            // Keep the window centred on the same point while its content grows or shrinks with the interface.
+            var bounds = Bounds;
+            int width = Math.Max(MinimumSize.Width, (int)Math.Round(bounds.Width * factor));
+            int height = Math.Max(MinimumSize.Height, (int)Math.Round(bounds.Height * factor));
+            Bounds = new Rectangle(bounds.Left + (bounds.Width - width) / 2, bounds.Top + (bounds.Height - height) / 2,
+                width, height);
+        }
         var caller = ImGui.GetCurrentContext();
         try { gui.MakeCurrent(); StudioTheme.Apply(scale); }
         finally { ImGui.SetCurrentContext(caller); }

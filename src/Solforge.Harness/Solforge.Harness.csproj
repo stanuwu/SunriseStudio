@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Solforge (UI-UE5 §5.2-5.4): model role routing, harness settings, the shared skills/MCP preflight and the credential
+       file rules, ported from solforge-next's Solforge.Next.Harness. Plain net9.0 with no references, so Solforge.Mcp (and
+       through it the stdio shim), the workflow runtime, the Solforge AI launcher and the editor all share it.
+       No provider is contacted from here: everything is file inspection and in-memory routing. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Solforge.Harness</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+  </PropertyGroup>
+</Project>

@@ -9,7 +9,7 @@ using StudioIcon = SunriseStudio.Viewport.StudioIcon;
 
 namespace SunriseStudio.Editor;
 
-/** StudioForm part: the asset browser (categories, type filter, search and row list). */
+/** StudioForm part: the Content Browser (asset browser: categories, type filter, search and row list); its lists scroll smoothly (UiMotion). */
 public sealed partial class StudioForm
 {
     private bool browserDirty = true;
@@ -266,7 +266,8 @@ public sealed partial class StudioForm
     /** Categories with rows, grouped; counts come from the worker, so drawing scans no rows. */
     private void DrawCategoryHome()
     {
-        ImGui.BeginChild("category-home", Vector2.Zero, ImGuiChildFlags.None);
+        ImGui.BeginChild("category-home", Vector2.Zero, ImGuiChildFlags.None, ImGuiWindowFlags.NoScrollWithMouse);
+        UiMotion.SmoothScroll();
         string? group = null;
         int inCategories = 0;
         foreach (var item in StudioCategories.All)
@@ -308,7 +309,8 @@ public sealed partial class StudioForm
     private unsafe void DrawAssetRows()
     {
         bool inCategoryList = OpenCategory is not null;
-        ImGui.BeginChild("asset-list", Vector2.Zero, ImGuiChildFlags.None);
+        ImGui.BeginChild("asset-list", Vector2.Zero, ImGuiChildFlags.None, ImGuiWindowFlags.NoScrollWithMouse);
+        UiMotion.SmoothScroll();
         var clipper = new ImGuiListClipperPtr(ImGuiNative.ImGuiListClipper_ImGuiListClipper());
         float rowHeight = ImGui.GetTextLineHeightWithSpacing() * 2 + 7 * scale;
         clipper.Begin(filtered.Length, rowHeight);

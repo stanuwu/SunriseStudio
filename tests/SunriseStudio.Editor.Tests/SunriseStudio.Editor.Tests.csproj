@@ -9,5 +9,7 @@
     <Compile Include="../SunriseStudio.World.Tests/WorldFixture.cs" Link="WorldFixture.cs" />
     <Compile Include="../SunriseStudio.World.Tests/WorldFingerprint.cs" Link="WorldFingerprint.cs" />
     <Compile Include="../Fixtures/StaticIsolationFixture.cs" Link="StaticIsolationFixture.cs" />
+    <!-- The removed AI console's classes, excluded from Solforge.exe (UI-UE5 §4.2), compiled here for TerminalChecks. -->
+    <Compile Include="../../src/SunriseStudio.Editor/Ai/**/*.cs" Link="RemovedConsole/%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

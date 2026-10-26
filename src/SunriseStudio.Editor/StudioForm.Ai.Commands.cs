@@ -250,7 +250,8 @@ public sealed partial class StudioForm
             case "window.panel":
             {
                 var kind = StudioLayout.Pickable.Where(item => item != StudioPanelKind.Empty)
-                    .FirstOrDefault(item => string.Equals(PanelTitle(item), value, StringComparison.OrdinalIgnoreCase), StudioPanelKind.Empty);
+                    .FirstOrDefault(item => string.Equals(PanelTitle(item), value, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(DisplayTitle(item), value, StringComparison.OrdinalIgnoreCase), StudioPanelKind.Empty);
                 return kind == StudioPanelKind.Empty ? Refused + $"No panel '{value}'." : AiShowLayoutPanel(kind);
             }
             case "window.restore_areas": maximizedPanel = null; return "Restored the areas.";
@@ -268,7 +269,8 @@ public sealed partial class StudioForm
     {
         if (!ShowPopout(kind, true))
         {
-            layout.Show(kind);
+            var shown = layout.Show(kind);
+            if (shown.Collapsed == true) shown.Collapsed = false;
             maximizedPanel = null;
             layoutDirty = true;
         }
@@ -294,7 +296,8 @@ public sealed partial class StudioForm
             case "changes": return AiShowLayoutPanel(StudioPanelKind.Changes);
             case "object_tree": return AiShowLayoutPanel(StudioPanelKind.ObjectTree);
             case "workspace": return AiShowLayoutPanel(StudioPanelKind.Workspace);
-            case "ai_workspace": OpenAiWorkspace(); return "Showing the AI workspace.";
+            // Shows the Solforge AI panel; it never launches the Solforge AI app (launching a GUI app is a user action).
+            case "ai_workspace": OpenAiWorkspace(); return "Showing the Solforge AI panel (the in-editor console is gone; Solforge AI is a separate app the user launches).";
             case "settings": preferencesOpen = true; return "Opened Settings.";
             case "keybinds": helpDialog = true; return "Opened Keybinds & Tips.";
             case "shortcuts": shortcutsDialog = true; return "Opened Shortcuts.";

@@ -27,9 +27,19 @@
     <ProjectReference Include="../Solforge.Graphs/Solforge.Graphs.csproj" />
     <!-- Retail workspace: live-build dump reader, retail map viewer and porting (read-only towards game packages). -->
     <ProjectReference Include="../Solforge.Retail/Solforge.Retail.csproj" />
+    <!-- UI-UE5 §5 (agent C): the Solforge AI launcher, model role routing / credential rules / shared-resources preflight,
+         and the workflow runtime ported from solforge-next. -->
+    <ProjectReference Include="../Solforge.AiLauncher/Solforge.AiLauncher.csproj" />
+    <ProjectReference Include="../Solforge.Harness/Solforge.Harness.csproj" />
+    <ProjectReference Include="../Solforge.Harness.Runtime/Solforge.Harness.Runtime.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <!-- Owner builds only (SolforgeRelay=true, RELEASING.md) draw a link as a QR code. -->
-    <PackageReference Include="QRCoder" Version="1.8.0" Condition="'$(SolforgeRelay)' == 'true'" />
+    <!-- UI-UE5 §4.2: the removed AI console (ConPty terminal, VT screen, selection, paste) no longer ships in Solforge.exe;
+         tests/SunriseStudio.Editor.Tests compiles these files itself so TerminalChecks keep running. -->
+    <Compile Remove="Ai/**" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The bundled solforge-model-workflow skill: Solforge AI's shared-skills row and the preflight read it beside the exe. -->
+    <None Update="Integrations/skills/**/*.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

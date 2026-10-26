@@ -90,7 +90,7 @@ public static class ShortcutActions
         new(NavigateBack, "Navigate back", ShortcutSection.Menus, KeyOrClick),
         new(NavigateForward, "Navigate forward", ShortcutSection.Menus, KeyOrClick),
         new(ToggleBrowser, "Show or hide the Asset browser", ShortcutSection.Menus, KeyOnly),
-        new(OpenAiWorkspace, "Open the AI workspace", ShortcutSection.Menus, KeyOnly),
+        new(OpenAiWorkspace, "Launch or focus Solforge AI", ShortcutSection.Menus, KeyOnly),
         new(ToggleViewportRendering, "Turn 3D viewport rendering on or off", ShortcutSection.Menus, KeyOnly),
         new(OpenSettings, "Open Settings", ShortcutSection.Menus, KeyOnly),
         new(OpenHelp, "Open Help: keybinds and tips", ShortcutSection.Menus, KeyOnly),

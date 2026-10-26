@@ -11,7 +11,8 @@ public sealed record HelpTip(string Topic, string Title, string Text);
  * Help > Keybinds & Tips (F1) and the get_help MCP tool. Keybinds come from ShortcutActions.All and
  * the user's ShortcutMap at call time, so a new or rebound action shows up without touching this file;
  * an action's area comes from its id (AreaOf). FixedInputs lists the keys the viewports (fly and player
- * movement) and the AI terminal (selection, copy/paste, ^C) read directly, which no preset can rebind.
+ * movement) read directly, which no preset can rebind. The AI terminal's keys went with the in-editor console
+ * (docs/UI-UE5.md §4.3); the AI runs in the separate Solforge AI app now.
  */
 public static class HelpCatalog
 {
@@ -48,7 +49,7 @@ public static class HelpCatalog
         return action.Section switch { ShortcutSection.View3D => Viewport, ShortcutSection.View2D => Graphs, _ => General };
     }
 
-    /** Keys the viewports and the AI terminal read directly; listed here so Help shows them. */
+    /** Keys the viewports read directly; listed here so Help shows them. */
     public static IReadOnlyList<HelpKey> FixedInputs { get; } =
     [
         new(Viewport, "Fly: forward, left, back, right (hold Right mouse)", "W A S D", "fixed.fly_move", false),
@@ -59,17 +60,6 @@ public static class HelpCatalog
         new(Viewport, "Player camera: rise, sink", "Space / Ctrl", "fixed.player_vertical", false),
         new(Viewport, "Perspective or orthographic", "Numpad 5", "fixed.ortho", false),
         new(General, "Cancel a shortcut capture or close a dialog", "Escape", "fixed.escape", false),
-        new(Ai, "Terminal: reverse tab", "Shift+Tab", "fixed.terminal_back_tab", false),
-        new(Ai, "Terminal: select text (wheel or drag past an edge for scrollback)", "Left drag", "fixed.terminal_select", false),
-        new(Ai, "Terminal: select a word, a line", "Double-click / Triple-click", "fixed.terminal_select_word", false),
-        new(Ai, "Terminal: extend the selection", "Shift+Click", "fixed.terminal_select_extend", false),
-        new(Ai, "Terminal: copy the selection", "Ctrl+Shift+C", "fixed.terminal_copy", false),
-        new(Ai, "Terminal: paste text, Explorer files as quoted paths, or an image as a temp PNG path (bracketed when the engine asks for it)",
-            "Ctrl+V / Ctrl+Shift+V / Shift+Insert", "fixed.terminal_paste", false),
-        new(Ai, "Terminal: drop files from Explorer to type their quoted paths", "Drag and drop", "fixed.terminal_drop", false),
-        new(Ai, "Terminal: Copy, Paste, Select all menu", "Right-click", "fixed.terminal_menu", false),
-        new(Ai, "Terminal: interrupt the engine (^C)", "Ctrl+C", "fixed.terminal_interrupt", false),
-        new(Ai, "Terminal: stop the engine and every process it started", "Ctrl+C twice within 1 s", "fixed.terminal_stop", false),
     ];
 
     /** Every keybind with the user's current keys, grouped in Areas order. */
@@ -122,13 +112,19 @@ public static class HelpCatalog
         new("Performance", "Frame caps", "Settings > FPS cap, focused and FPS cap, background; a background cap keeps the game smooth while " +
             "Solforge stays open."),
         new("Performance", "Disk cache", "File > Cache... shows and clears decoded asset caches when the install changes."),
-        new("MCP", "What the MCP server is", "Solforge runs a local MCP server while a project is open. Any MCP client can read the open map, " +
-            "assets, items, content documents and help, and ask for actions that wait for your Approve click."),
-        new("MCP", "Claude Code, Cline, Antigravity", "Starting an engine in the AI workspace (Ctrl+Shift+A) writes the 'solforge' MCP entry for Claude Code " +
-            "(.mcp.json in the project), Cline and Antigravity. Each runs solforge-mcp.exe --project <folder>; no token goes into a config file."),
-        new("MCP", "Other AI clients", "Any stdio MCP client works: command = solforge-mcp.exe (next to Solforge.exe), args = [\"--project\", " +
-            "\"<project folder>\"]. Start with get_editor_state, get_help and list_content_families."),
-        new("MCP", "Pausing context", "The AI workspace's pause toggle stops publishing what you look at; catalog, content and help tools keep working."),
+        new("MCP", "What the MCP server is", "Solforge runs a local MCP server from the moment it starts (Settings > AI switches it off). Any MCP " +
+            "client can read the open map, assets, items, content documents and help, and ask for actions that wait for your Approve click. " +
+            "With Solforge closed, solforge-mcp.exe --sol still answers the tools that need no editor; editor tools attach when Solforge starts."),
+        new("MCP", "Solforge AI", "The toolbar's Solforge AI button (Ctrl+Shift+A) launches the separate Solforge AI app for the open project, or " +
+            "brings it to the front; its arrow menu stops it, re-checks it and opens its settings. Requests waiting for approval show as a badge " +
+            "on the button and in the Solforge AI panel (Window > Solforge AI panel); MCP tools can never launch or stop the app."),
+        new("MCP", "Claude Code, Cline, Antigravity", "Solforge writes one 'sol' MCP entry for Claude Code (.mcp.json in the project and " +
+            "~/.claude.json), Cline, Antigravity and the Pi harness. sol aggregates the editor, sol-testkit, tiger-mcp and the delegates; " +
+            "it runs solforge-mcp.exe --sol, and no token goes into a config file."),
+        new("MCP", "Other AI clients", "Any stdio MCP client works: command = solforge-mcp.exe (next to Solforge.exe), args = [\"--sol\", " +
+            "\"--project\", \"<project folder>\", \"--upstreams\", \"<local sol-upstreams file>\"]. Without --upstreams it exposes Solforge only. " +
+            "Start with get_editor_state, get_help and list_content_families."),
+        new("MCP", "Pausing context", "Publish context in the Solforge AI panel stops publishing what you look at; catalog, content and help tools keep working."),
         new("MCP", "Content tools", "list_content_families, list_content, get_content, validate_content and check_subclass_build read; create_content, " +
             "update_content, delete_content and export_content change the project after you approve."),
         new("Live", "Update the running game", "Build > Update running game replaces changed scripts in the installed mod and reloads them in the running game."),

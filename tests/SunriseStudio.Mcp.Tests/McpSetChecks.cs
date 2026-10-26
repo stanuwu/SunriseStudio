@@ -1,6 +1,7 @@
-// Sol MCP set checks: which servers an engine start collects (Solforge's own, .mcp.json above the project, the named
-// workspace MCPs from the user's engine configs), the per-engine entries and Claude's --mcp-config, merging into agy and
-// Cline files without touching the user's own servers, the solforge-mcp run copy, and the file and initialize checks.
+// Sol MCP set checks: which upstreams an engine start collects (Solforge's own, .mcp.json above the project, the named
+// workspace MCPs from the user's engine configs), the one client-facing sol aggregate, merging into agy and Cline files
+// without touching unrelated servers, the solforge-mcp run copy, the aggregate tools/resources/prompts routing, and file/initialize checks.
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Solforge.Mcp;
 
@@ -70,10 +71,17 @@ static class McpSetChecks
         Expect(!SolMcpServers.For(SolMcpServers.Engine.Cline, servers).Any(server => server.Name == "clinepass"), "cline without clinepass");
         Expect(SolMcpServers.For(SolMcpServers.Engine.Claude, servers).Count() == 5, "claude gets all");
 
-        // Claude's --mcp-config holds the whole set in Claude's shape.
+        // Claude's --mcp-config holds one aggregate, whose local upstream list carries the whole set.
         var claude = SolMcpServers.ClaudeConfig(servers)["mcpServers"]!.AsObject();
-        Expect(claude.Count == 5 && claude.All(pair => pair.Value?["type"]?.ToString() == "stdio" && pair.Value?["env"] is JsonObject), "claude shape");
-        Expect(claude["tiger-mcp"]?["command"]?.ToString() == tiger && claude["sol-testkit"]?["env"]?["SOL_PAD_PORT"]?.ToString() == "48811", "claude carried");
+        string upstreamsFile = SolMcpServers.UpstreamFile(project);
+        Expect(claude.Count == 1 && claude["sol"]?["type"]?.ToString() == "stdio" && claude["sol"]?["command"]?.ToString() == shim
+            && claude["sol"]?["args"]?[0]?.ToString() == "--sol"
+            && claude["sol"]?["args"]?.AsArray().Any(node => node?.ToString() == "--upstreams") == true
+            && claude["sol"]?["env"] is JsonObject, "claude sol shape");
+        var upstreams = JsonNode.Parse(File.ReadAllText(upstreamsFile))!["servers"]!.AsArray();
+        Expect(upstreams.Any(node => node?["name"]?.ToString() == "tiger-mcp")
+            && upstreams.Any(node => node?["name"]?.ToString() == "sol-testkit" && node?["env"]?["SOL_PAD_PORT"]?.ToString() == "48811")
+            && upstreams.All(node => node?["name"]?.ToString() != "sol"), "local upstream list");
         string folder = Path.Combine(scratch, "claude-files");
         var files = EngineLaunch.WriteClaudeFiles(project, shim, folder, servers: servers);
         Expect(files.Gemini && files.ClinePass && JsonNode.DeepEquals(JsonNode.Parse(File.ReadAllText(files.McpConfig)), SolMcpServers.ClaudeConfig(servers)),
@@ -81,7 +89,7 @@ static class McpSetChecks
         var plain = EngineLaunch.WriteClaudeFiles(project, shim, folder, servers: bare);
         Expect(!plain.Gemini && !plain.ClinePass && !EngineLaunch.ClaudeArguments(plain, []).Contains("ask_gemini"), "flags follow the set");
 
-        // Cline: the user's rea, their own gemini and their tiger-mcp stay; the old solforge is refreshed; testkit joins.
+        // Cline: unrelated rea stays; the old separate Sol entries are replaced by the one aggregate.
         string cline = SolMcpServers.ClineConfig(home);
         Directory.CreateDirectory(Path.GetDirectoryName(cline)!);
         var rea = new JsonObject { ["command"] = "cmd.exe", ["args"] = new JsonArray("/c", "npx", "rea"), ["disabled"] = false, ["autoApprove"] = new JsonArray() };
@@ -99,12 +107,12 @@ static class McpSetChecks
         var kept = SolMcpServers.MergeInto(cline, SolMcpServers.Engine.Cline, servers);
         var clineRoot = JsonNode.Parse(File.ReadAllText(cline))!;
         var clineServers = clineRoot["mcpServers"]!.AsObject();
-        Expect(kept.SequenceEqual(["gemini", "tiger-mcp"]), "kept: " + string.Join(", ", kept));
-        Expect(JsonNode.DeepEquals(clineServers["rea"], rea) && JsonNode.DeepEquals(clineServers["gemini"], userGemini)
-            && JsonNode.DeepEquals(clineServers["tiger-mcp"], userTiger) && clineRoot["other"]?.GetValue<int>() == 1, "user servers untouched");
-        Expect(clineServers["solforge"]?["command"]?.ToString() == shim && clineServers["solforge"]?["autoApprove"] is JsonArray, "solforge refreshed");
-        Expect(clineServers["sol-testkit"]?["command"]?.ToString() == "py" && clineServers["sol-testkit"]?["env"]?["SOL_PAD_PORT"] is not null
-            && clineServers["clinepass"] is null, "testkit added, no clinepass in cline");
+        Expect(kept.Count == 0 && JsonNode.DeepEquals(clineServers["rea"], rea) && clineRoot["other"]?.GetValue<int>() == 1,
+            "unrelated server and root keys untouched");
+        Expect(clineServers["sol"]?["command"]?.ToString() == shim && clineServers["sol"]?["autoApprove"] is JsonArray
+            && clineServers["sol"]?["args"]?[0]?.ToString() == "--sol", "sol added to Cline");
+        Expect(clineServers["gemini"] is null && clineServers["tiger-mcp"] is null && clineServers["sol-testkit"] is null
+            && clineServers["solforge"] is null && clineServers["clinepass"] is null, "separate Sol entries removed");
         string before = File.ReadAllText(cline);
         SolMcpServers.MergeInto(cline, SolMcpServers.Engine.Cline, servers);
         Expect(File.ReadAllText(cline) == before, "cline merge is idempotent");
@@ -115,16 +123,52 @@ static class McpSetChecks
         File.WriteAllText(agy, "{\"mcpServers\":{\"clinepass\":{\"command\":\"C:\\\\old\\\\solforge-mcp.exe\",\"args\":[\"--clinepass\"]}}}");
         Expect(SolMcpServers.MergeInto(agy, SolMcpServers.Engine.Agy, servers).Count == 0, "agy keeps nothing");
         var agyServers = JsonNode.Parse(File.ReadAllText(agy))!["mcpServers"]!.AsObject();
-        Expect(agyServers["clinepass"]?["command"]?.ToString() == shim && agyServers["gemini"] is null
-            && agyServers["tiger-mcp"]?["disabled"]?.GetValue<bool>() == false && agyServers["tiger-mcp"]?["autoApprove"] is null, "agy entries");
+        Expect(agyServers["sol"]?["command"]?.ToString() == shim && agyServers["sol"]?["args"]?[0]?.ToString() == "--sol"
+            && agyServers["sol"]?["disabled"]?.GetValue<bool>() == false && agyServers["gemini"] is null
+            && agyServers["tiger-mcp"] is null && agyServers["clinepass"] is null, "agy sol entry");
 
-        // WriteAll with the set: the agy and Cline CLI files get it; the desktop app keeps only solforge.
+        // WriteAll with the set: every client gets the aggregate; the desktop app does too.
         string home2 = Path.Combine(scratch, "home2"), appData = Path.Combine(scratch, "appdata2");
         McpClientConfigs.WriteAll(project, shim, home2, appData, servers);
-        Expect(JsonNode.Parse(File.ReadAllText(SolMcpServers.AgyConfig(home2)))?["mcpServers"]?["sol-testkit"] is not null
-            && JsonNode.Parse(File.ReadAllText(SolMcpServers.ClineConfig(home2)))?["mcpServers"]?["gemini"] is not null, "WriteAll merges the set");
+        Expect(JsonNode.Parse(File.ReadAllText(SolMcpServers.AgyConfig(home2)))?["mcpServers"]?["sol"] is not null
+            && JsonNode.Parse(File.ReadAllText(SolMcpServers.ClineConfig(home2)))?["mcpServers"]?["sol"] is not null, "WriteAll writes sol");
+        Expect(JsonNode.Parse(File.ReadAllText(SolMcpServers.AgyConfig(home2)))?["mcpServers"]?["sol-testkit"] is null
+            && JsonNode.Parse(File.ReadAllText(SolMcpServers.ClineConfig(home2)))?["mcpServers"]?["gemini"] is null, "no separate entries");
+        // Claude's user file and its matching project entry are migrated too; unrelated servers stay.
+        string home3 = Path.Combine(scratch, "home3");
+        Directory.CreateDirectory(home3);
+        string claudeUser = Path.Combine(home3, ".claude.json");
+        File.WriteAllText(claudeUser, new JsonObject
+        {
+            ["mcpServers"] = new JsonObject
+            {
+                ["solforge"] = new JsonObject { ["command"] = "old.exe" }, ["tiger-mcp"] = new JsonObject { ["command"] = "old-tiger.exe" },
+                ["mine"] = new JsonObject { ["command"] = "mine.exe" }
+            },
+            ["projects"] = new JsonObject
+            {
+                [project] = new JsonObject
+                {
+                    ["mcpServers"] = new JsonObject { ["solforge"] = new JsonObject { ["command"] = "old.exe" }, ["mine"] = new JsonObject { ["command"] = "mine.exe" } }
+                }
+            }
+        }.ToJsonString());
+        McpClientConfigs.WriteAll(project, shim, home3, appData, servers);
+        var claudeRoot = JsonNode.Parse(File.ReadAllText(claudeUser))!;
+        var claudeUserServers = claudeRoot["mcpServers"]!.AsObject();
+        var claudeProjectServers = claudeRoot["projects"]?[project]?["mcpServers"]!.AsObject()!;
+        Expect(claudeUserServers["sol"] is not null && claudeUserServers["solforge"] is null && claudeUserServers["tiger-mcp"] is null
+            && claudeUserServers["mine"]?["command"]?.ToString() == "mine.exe", "Claude user config migrated");
+        Expect(claudeProjectServers["sol"] is not null && claudeProjectServers["solforge"] is null
+            && claudeProjectServers["mine"]?["command"]?.ToString() == "mine.exe", "Claude project config migrated");
         var desktop = JsonNode.Parse(File.ReadAllText(Path.Combine(home2, ".gemini", "antigravity", "mcp_config.json")))!["mcpServers"]!.AsObject();
-        Expect(desktop.Count == 1 && desktop["solforge"] is not null, "desktop app unchanged");
+        Expect(desktop.Count == 1 && desktop["sol"] is not null, "desktop app gets sol");
+        var pi = JsonNode.Parse(File.ReadAllText(Path.Combine(project, ".pi", "mcp.json")))!["mcpServers"]!.AsObject();
+        var piArgs = pi["sol"]?["args"]?.AsArray().Select(node => node?.ToString()).ToArray() ?? [];
+        Expect(pi.Count == 1 && pi["sol"]?["type"]?.ToString() == "stdio" && pi["sol"]?["exposure"]?.ToString() == "direct"
+            && pi["sol"]?["command"]?.ToString() == shim
+            && piArgs.Contains("--sol") && piArgs.Contains("--upstreams") && pi["gemini"] is null && pi["tiger-mcp"] is null,
+            "Pi gets one sol aggregate");
 
         // File checks: py on PATH and existing paths pass; a missing exe, script or project is reported.
         string bin = Path.Combine(scratch, "bin");
@@ -169,5 +213,138 @@ static class McpSetChecks
         Expect(await SolMcpServers.Probe("dotnet", [shimDll, "--gemini"], TimeSpan.FromSeconds(60)) is null, "shim answers initialize");
         Expect((await SolMcpServers.Probe(Path.Combine(scratch, "nothing.exe"), [], TimeSpan.FromSeconds(5)))?.StartsWith("could not start") == true, "missing command");
         Expect(await SolMcpServers.Probe("cmd.exe", ["/d", "/c", "exit"], TimeSpan.FromSeconds(10)) == "exited without answering initialize", "early exit");
+
+        await AggregateCheck(scratch, shimDll);
+    }
+
+    /** A real `sol` session over two fake stdio upstreams: one server, both tools, calls routed back. */
+    private static async Task AggregateCheck(string scratch, string shimDll)
+    {
+        if (EngineCommands.Resolve("py", EngineCommands.FreshPath()) is null)
+        {
+            Console.WriteLine("SKIP aggregate: python is not on PATH");
+            return;
+        }
+        string folder = Path.Combine(scratch, "aggregate");
+        Directory.CreateDirectory(folder);
+        string fake = Path.Combine(folder, "fake_mcp.py");
+        File.WriteAllText(fake, """
+            import json, os, sys
+            name = os.environ.get("FAKE_NAME", "fake")
+            for line in sys.stdin:
+                request = json.loads(line)
+                method, request_id = request.get("method"), request.get("id")
+                if request_id is None:
+                    continue
+                if method == "initialize":
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
+                              "serverInfo": {"name": name, "version": "1"}, "instructions": name + " instructions"}
+                elif method == "tools/list":
+                    result = {"tools": [{"name": "echo", "description": "Echo text",
+                                         "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}]}
+                elif method == "tools/call":
+                    text = request.get("params", {}).get("arguments", {}).get("text", "")
+                    result = {"content": [{"type": "text", "text": name + ":" + text}], "isError": False}
+                elif method == "resources/list":
+                    result = {"resources": [{"uri": "fake://resource", "name": "resource", "mimeType": "text/plain"}]}
+                elif method == "resources/read":
+                    uri = request.get("params", {}).get("uri", "")
+                    result = {"contents": [{"uri": uri, "mimeType": "text/plain", "text": name + ":resource:" + uri}]}
+                elif method == "resources/templates/list":
+                    result = {"resourceTemplates": [{"uriTemplate": "fake://item/{id}", "name": "item"}]}
+                elif method == "prompts/list":
+                    result = {"prompts": [{"name": "greet", "description": "Greet",
+                                           "arguments": [{"name": "who", "required": True}]}]}
+                elif method == "prompts/get":
+                    who = request.get("params", {}).get("arguments", {}).get("who", "")
+                    result = {"description": "Greet", "messages": [
+                        {"role": "user", "content": {"type": "text", "text": name + ":" + who}}]}
+                else:
+                    print(json.dumps({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "no"}}), flush=True)
+                    continue
+                print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
+            """);
+        string upstreams = Path.Combine(folder, "upstreams.json");
+        File.WriteAllText(upstreams, new JsonObject
+        {
+            ["servers"] = new JsonArray(
+                new JsonObject { ["name"] = "fake", ["command"] = "py", ["args"] = new JsonArray("-3", fake), ["env"] = new JsonObject() },
+                new JsonObject { ["name"] = "tiger-mcp", ["command"] = "py", ["args"] = new JsonArray("-3", fake), ["env"] = new JsonObject { ["FAKE_NAME"] = "tiger" } })
+        }.ToJsonString());
+        var start = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true,
+            RedirectStandardError = true, StandardOutputEncoding = System.Text.Encoding.UTF8
+        };
+        start.ArgumentList.Add(shimDll);
+        start.ArgumentList.Add("--sol");
+        start.ArgumentList.Add("--project");
+        start.ArgumentList.Add(folder);
+        start.ArgumentList.Add("--upstreams");
+        start.ArgumentList.Add(upstreams);
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("aggregate did not start");
+        try
+        {
+            async Task<JsonNode> Call(int id, string method, JsonObject? parameters = null)
+            {
+                await process.StandardInput.WriteLineAsync(new JsonObject
+                {
+                    ["jsonrpc"] = "2.0", ["id"] = id, ["method"] = method,
+                    ["params"] = parameters?.DeepClone() ?? new JsonObject()
+                }.ToJsonString());
+                await process.StandardInput.FlushAsync();
+                while (await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30)) is { } line)
+                {
+                    if (line.Length == 0) continue;
+                    var reply = JsonNode.Parse(line)!;
+                    if ((int?)reply["id"] != id) continue;
+                    Expect(reply["error"] is null, method + ": " + line);
+                    return reply["result"]!;
+                }
+                throw new InvalidOperationException(method + ": aggregate closed");
+            }
+            var initialized = await Call(1, "initialize", new JsonObject
+            {
+                ["protocolVersion"] = "2025-06-18", ["capabilities"] = new JsonObject(),
+                ["clientInfo"] = new JsonObject { ["name"] = "aggregate-check", ["version"] = "1" }
+            });
+            Expect(initialized["serverInfo"]?["name"]?.ToString() == "sol", "aggregate server name");
+            await process.StandardInput.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
+            var tools = (await Call(2, "tools/list"))["tools"]!.AsArray();
+            Expect(tools.Select(tool => tool?["name"]?.ToString()).SequenceEqual(["fake_echo", "tiger_echo"]),
+                "aggregate tools: " + string.Join(", ", tools.Select(tool => tool?["name"]?.ToString())));
+            var echo = await Call(3, "tools/call", new JsonObject { ["name"] = "fake_echo", ["arguments"] = new JsonObject { ["text"] = "one" } });
+            var tiger = await Call(4, "tools/call", new JsonObject { ["name"] = "tiger_echo", ["arguments"] = new JsonObject { ["text"] = "two" } });
+            Expect(echo["content"]?[0]?["text"]?.ToString() == "fake:one" && tiger["content"]?[0]?["text"]?.ToString() == "tiger:two",
+                "aggregate routes calls: " + echo.ToJsonString() + " / " + tiger.ToJsonString());
+            Expect(initialized["capabilities"]?["resources"] is JsonObject && initialized["capabilities"]?["prompts"] is JsonObject,
+                "aggregate advertises resources and prompts");
+            var resources = (await Call(5, "resources/list"))["resources"]!.AsArray();
+            Expect(resources.Count == 2 && resources.All(resource => resource?["uri"]?.ToString()?.StartsWith("sol://") == true),
+                "aggregate resources: " + string.Join(", ", resources.Select(resource => resource?["uri"]?.ToString())));
+            string resourceUri = resources[0]!["uri"]!.ToString();
+            var read = await Call(6, "resources/read", new JsonObject { ["uri"] = resourceUri });
+            Expect(read["contents"]?[0]?["text"]?.ToString() == "fake:resource:fake://resource"
+                && read["contents"]?[0]?["uri"]?.ToString() == resourceUri, "aggregate resource read: " + read.ToJsonString());
+            var templates = (await Call(7, "resources/templates/list"))["resourceTemplates"]!.AsArray();
+            string template = templates[0]!["uriTemplate"]!.ToString();
+            string expanded = template.Replace("{id}", "7", StringComparison.Ordinal);
+            var fromTemplate = await Call(8, "resources/read", new JsonObject { ["uri"] = expanded });
+            Expect(fromTemplate["contents"]?[0]?["text"]?.ToString() == "fake:resource:fake://item/7"
+                && fromTemplate["contents"]?[0]?["uri"]?.ToString() == expanded, "aggregate resource template: " + fromTemplate.ToJsonString());
+            var promptList = (await Call(9, "prompts/list"))["prompts"]!.AsArray();
+            Expect(promptList.Select(prompt => prompt?["name"]?.ToString()).SequenceEqual(["fake_greet", "tiger_greet"]),
+                "aggregate prompts: " + string.Join(", ", promptList.Select(prompt => prompt?["name"]?.ToString())));
+            var prompt = await Call(10, "prompts/get", new JsonObject
+            {
+                ["name"] = "fake_greet", ["arguments"] = new JsonObject { ["who"] = "Ada" }
+            });
+            Expect(prompt["messages"]?[0]?["content"]?["text"]?.ToString() == "fake:Ada", "aggregate prompt get: " + prompt.ToJsonString());
+        }
+        finally
+        {
+            process.StandardInput.Close();
+            if (!process.WaitForExit(5000)) process.Kill();
+        }
     }
 }

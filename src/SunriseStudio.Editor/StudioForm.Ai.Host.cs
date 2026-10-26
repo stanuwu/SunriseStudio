@@ -1,6 +1,9 @@
 /**
  * File: The editor side of the MCP server: AiHost implements ISolforgeHost (Solforge.Mcp) by marshalling onto the UI
- * thread; context snapshots, approvals, edit tracking and screenshots live here.
+ * thread; context snapshots, approvals, edit tracking and screenshots live here. The server starts with the editor
+ * (OnShown, hook H8) so solforge-mcp and Solforge AI attach whether or not a project or the AI panel is open. There is
+ * no in-editor console any more: approvals raise the toolbar badge, a toast and the AI Requests tab, and screenshots
+ * go to the clipboard as a path.
  */
 using System.Diagnostics;
 using System.Drawing;
@@ -9,6 +12,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using ImGuiNET;
+using Solforge.Harness.Credentials;
 using Solforge.Mcp;
 using SunriseStudio.Formats;
 using SunriseStudio.Scene;
@@ -22,18 +26,65 @@ namespace SunriseStudio.Editor;
  */
 public sealed partial class StudioForm
 {
-    /** A pending tool request waiting for the user to approve or decline. */
-    private sealed record AiRequest(string Tool, string Summary, TaskCompletionSource<bool> Answer);
-    /** An edit the AI made (file, shown text, previous content) kept for undo. */
-    private sealed record AiEdit(string Path, string Shown, string? Previous, DateTime Time);
+    /** How an AI action request was answered, as shown in the AI request log. */
+    private enum AiRequestOutcome { Auto, Approved, Denied }
+    /** One answered tool request, kept for the AI request log (newest last); Seq orders it with the AI log lines. */
+    private sealed record AiRequestLogEntry(long Seq, DateTime Time, string Tool, string Summary, AiRequestOutcome Outcome, string? Session);
+    /** One Solforge AI or workflow line of the AI log (AppendAiLog). */
+    private sealed record AiLogLine(long Seq, DateTime Time, string Text);
+    /**
+     * A pending tool request waiting for the user to approve or decline (kind "action"). Id is 128-bit random hex; Expires is
+     * Created + 5 minutes (expiry denies). Reason says who answered ("user" in the editor, "app" in Solforge AI, "stopped").
+     */
+    private sealed record AiRequest(string Id, string Tool, string Summary, DateTimeOffset Created, DateTimeOffset Expires, McpSession? Session,
+        bool Worker, TaskCompletionSource<bool> Answer)
+    {
+        public string Reason { get; set; } = "user";
+    }
+    /** An edit the AI made (file, shown text, previous content) kept for undo; Id addresses it from Solforge AI. */
+    private sealed record AiEdit(string Id, string Path, string Shown, string? Previous, DateTime Time);
+
+    /** How long an action request waits before it counts as denied. */
+    private static readonly TimeSpan AiRequestTimeout = TimeSpan.FromMinutes(5);
+    /** Capacity of the AI log ring (request entries and lines each). */
+    private const int AiLogCapacity = 500;
+    private long aiLogSeq;
+    private readonly List<AiLogLine> aiLogLines = [];
+    /** Ids answered recently, so a late answer from Solforge AI gets 409 rather than 404. */
+    private readonly LinkedList<string> aiAnsweredIds = [];
+
+    /** A new 128-bit random hex id for requests and edits. */
+    private static string NewAiId() => Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+
+    /** Publishes one event on the editor UI channel (no-op without the MCP service). */
+    private void EmitUi(string type, object? data) => aiService?.EditorUi?.Emit(type, data);
+    /** Publishes a coalesced data-less event on the editor UI channel. */
+    private void EmitUiSoon(string type) => aiService?.EditorUi?.EmitSoon(type);
+
+    /** Remembers an answered id and publishes request.answered, once per id. */
+    private void NoteAiAnswered(string id, string kind, string outcome, string reason)
+    {
+        lock (aiAnsweredIds)
+        {
+            if (aiAnsweredIds.Contains(id)) return;
+            aiAnsweredIds.AddLast(id);
+            while (aiAnsweredIds.Count > 200) aiAnsweredIds.RemoveFirst();
+        }
+        EmitUi(EditorUiEvents.RequestAnswered, new EditorRequestAnsweredDto(id, kind, outcome, reason));
+        EmitUiSoon(EditorUiEvents.StateChanged);
+    }
+
+    /** The session reference of a request, from the MCP session that asked. */
+    private static EditorSessionRefDto? AiSessionRef(McpSession? session) =>
+        session is null ? null : new EditorSessionRefDto(session.Id, session.Label, session.Client, session.Pid);
 
     private SolforgeMcpService? aiService;
     private string? aiServiceError, aiConfiguredProject;
     private AiHost? aiHost;
     private readonly List<AiRequest> aiRequests = [];
     private readonly List<AiEdit> aiEdits = [];
-    /** Requests approved automatically (newest last), shown in the AI panel. */
-    private readonly List<(DateTime Time, string Tool, string Summary)> aiAutoApproved = [];
+    /** Answered AI requests (auto-approved, approved or denied), shown as a log in the AI panel. */
+    private readonly List<AiRequestLogEntry> aiRequestLog = [];
     private readonly List<(WorldObject Object, double Until)> aiHighlights = [];
     private TaskCompletionSource<byte[]?>? aiScreenshot;
     /** A requested screenshot: object id, whether to label, whether to send it to the AI. */
@@ -56,7 +107,7 @@ public sealed partial class StudioForm
         else EnsureAiService();
     }
 
-    /** Starts the MCP HTTP service the first time the AI workspace needs it. */
+    /** Starts the MCP HTTP service; OnShown calls it at startup and the AI panel and launches call it again (a no-op). */
     partial void EnsureAiService()
     {
         if (!settings.AiMcpEnabled || aiService is not null || aiServiceError is not null) return;
@@ -75,43 +126,34 @@ public sealed partial class StudioForm
     partial void StopAiService()
     {
         aiWatcher?.Dispose();
-        lock (aiRequests) foreach (var request in aiRequests) request.Answer.TrySetResult(false);
+        // Every pending request is denied, and Solforge AI hears it before the channel closes.
+        AiRequest[] actions;
+        lock (aiRequests) actions = [.. aiRequests];
+        foreach (var request in actions)
+        {
+            request.Reason = "stopped";
+            if (request.Answer.TrySetResult(false))
+                NoteAiAnswered(request.Id, EditorRequestKinds.Action, EditorRequestOutcomes.Denied, "stopped");
+        }
+        PendingDiff[] diffs;
+        lock (diffReviews) diffs = [.. diffReviews];
+        foreach (var diff in diffs)
+        {
+            diff.Reason = "stopped";
+            if (diff.Answer.TrySetResult(false)) NoteAiAnswered(diff.Id, EditorRequestKinds.Edit, EditorRequestOutcomes.Denied, "stopped");
+        }
+        if (pendingWorkflowStart is { FromMcp: true } start)
+        {
+            start.Reason = "stopped";
+            FinishWorkflowStart(start, false);
+        }
         UiAuto.Enabled = false;
         if (aiService is { } service) { aiService = null; service.DisposeAsync().AsTask().Wait(1000); }
-        if (aiClinePass is { } proxy) { aiClinePass = null; proxy.DisposeAsync().AsTask().Wait(1000); }
     }
 
-    /** The localhost ClinePass translator for "Claude Code on ClinePass", started on first use. */
-    private ClinePassProxy? aiClinePass;
-
-    /**
-     * Claude Code's environment for the ClinePass translator, or null (note shown) when CLINE_API_KEY is missing.
-     * The key stays in the user's environment; Claude Code only gets the translator's per-run local token.
-     */
-    private IReadOnlyDictionary<string, string>? AiClinePassEnvironment(string model)
-    {
-        if (!ClinePassProxy.HasApiKey())
-        {
-            aiInstallNote = ("Claude Code on ClinePass needs CLINE_API_KEY: create a key at app.cline.bot (Settings > API Keys) and set it "
-                + "as a user environment variable, then Start again.", false);
-            return null;
-        }
-        if (aiClinePass is not { } proxy)
-        {
-            proxy = new ClinePassProxy();
-            try { proxy.Start(); }
-            catch (System.Net.Sockets.SocketException exception)
-            {
-                proxy.DisposeAsync().AsTask().Wait(1000);
-                aiInstallNote = ("ClinePass translator could not start: " + exception.Message, false);
-                return null;
-            }
-            proxy.Log += message => aiServiceError = message;
-            aiClinePass = proxy;
-        }
-        if (model.Length > 0) proxy.Model = proxy.MapModel(model);
-        return proxy.ClaudeEnvironment();
-    }
+    /** PATH read fresh from Windows once (the delegates' CLI lookup); the console's per-start refresh is gone. */
+    private string aiFreshPath = "";
+    private string AiFreshPath => aiFreshPath.Length > 0 ? aiFreshPath : aiFreshPath = EngineCommands.FreshPath();
 
     /** Reports the MCP service status text. */
     partial void AiServiceStatus(ref string status)
@@ -121,7 +163,10 @@ public sealed partial class StudioForm
         else if (aiService is { } service) status = $"MCP :{service.Port}  {service.Requests} calls" + (aiPaused ? "  (paused)" : "");
     }
 
-    /** Points discovery at the project and writes the per-client MCP configs before an engine starts. */
+    /**
+     * Points discovery at the project and writes the per-client MCP configs (.mcp.json and the Claude Code, Cline and
+     * Agy configs), so external clients and Solforge AI get the sol MCP for this project.
+     */
     partial void PrepareAiEngine(string folder)
     {
         EnsureAiService();
@@ -138,23 +183,24 @@ public sealed partial class StudioForm
         else
         {
             aiServiceError = "solforge-mcp.exe not found beside Solforge";
-            aiMcpWarning = "MCP: solforge-mcp.exe is not beside Solforge.exe, so solforge, gemini and clinepass will not connect. Publish Solforge again.";
+            aiMcpWarning = "MCP: solforge-mcp.exe is not beside Solforge.exe, so the sol MCP server will not connect. Publish Solforge again.";
         }
         WatchAiProject(folder);
     }
 
     /**
-     * The Sol MCP set for an engine start (solforge, gemini, clinepass, then the workspace's sol-testkit, tiger-mcp and
-     * other .mcp.json servers), all run from a copy of the published shim that a publish cannot replace or kill.
-     * Null when there is no shim.
+     * The upstreams of the one `sol` MCP server for an engine start (solforge, gemini, clinepass, then the workspace's
+     * sol-testkit, tiger-mcp and other .mcp.json servers), all run from a copy of the published shim that a publish
+     * cannot replace or kill. Null when there is no shim.
      */
     private IReadOnlyList<SolMcpServers.Server>? AiMcpServers(string folder)
     {
         if (SolforgeMcpService.FindShim() is not { } published) return null;
         string shim = SolMcpServers.RunCopy(published, Path.Combine(McpDiscovery.Folder, "bin"));
-        // ask_gemini only when agy is installed: it runs the user's own agy login, never a copied token.
-        return SolMcpServers.Collect(folder, shim, gemini: AiResolved("agy") is not null,
-            clinePass: settings.AiAskClinePass && AiResolved("cline") is not null);
+        // Both delegates run the user's own CLI login, never a copied token; unavailable CLIs simply omit their tool.
+        string path = AiFreshPath;
+        return SolMcpServers.Collect(folder, shim, gemini: EngineCommands.Resolve("agy", path) is not null,
+            clinePass: EngineCommands.Resolve("cline", path) is not null);
     }
 
     /** Shown in the AI panel: MCP servers whose exe, script or folder is missing, or a shim that does not answer. */
@@ -166,7 +212,7 @@ public sealed partial class StudioForm
     {
         int run = Interlocked.Increment(ref aiMcpCheck);
         aiMcpWarning = null;
-        string path = aiFreshPath.Length > 0 ? aiFreshPath : EngineCommands.FreshPath();
+        string path = AiFreshPath;
         _ = Task.Run(async () =>
         {
             var problems = SolMcpServers.CheckFiles(servers, path).ToList();
@@ -176,31 +222,15 @@ public sealed partial class StudioForm
                 problems.Add($"{solforge.Name}: {error}");
             if (run != Volatile.Read(ref aiMcpCheck)) return;
             aiMcpWarning = problems.Count == 0 ? null
-                : "MCP servers that will not connect (fix the path or republish Solforge, then Start again):\n  " + string.Join("\n  ", problems);
+                : "MCP servers that will not connect (fix the path or republish Solforge, then Re-check):\n  " + string.Join("\n  ", problems);
         });
     }
 
-    /** Draws the MCP warning, if any, above the AI terminal. */
+    /** Draws the MCP warning, if any (the Solforge AI status card and panel). */
     private void DrawAiMcpWarning()
     {
-        if (aiMcpWarning is { } warning) AiNote(SolTheme.Sun, warning);
+        if (aiMcpWarning is { } warning) AiNote(SolTheme.Warn, warning);
     }
-
-    /** Claude Code's own MCP config, prompt hook, system prompt and --add-dir folders (EngineLaunch). */
-    private string AiClaudeArguments(string folder)
-    {
-        EngineLaunch.ClaudeFiles? files = null;
-        if (AiMcpServers(folder) is { } servers)
-        {
-            try { files = EngineLaunch.WriteClaudeFiles(folder, servers[0].Command, servers: servers); }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            { aiServiceError = "config: " + exception.Message; }
-        }
-        return EngineLaunch.ClaudeArguments(files, AiAddDirs(folder));
-    }
-
-    /** The Antigravity CLI's --add-dir folders; its MCP entry was written by PrepareAiEngine. */
-    private string AiAgyArguments(string folder) => EngineLaunch.AgyArguments(AiAddDirs(folder));
 
     /** The found folders the user has not hidden, plus the ones they added. */
     private IReadOnlyList<string> AiAddDirs(string folder)
@@ -221,11 +251,73 @@ public sealed partial class StudioForm
         workspace.Notice?.Folder, workspace.LastBuild?.OutputDirectory, workspace.LastInstall?.ModDirectory
     ]);
 
-    /** Once a project is open the server runs and the client configs are written, whether or not the AI panel or editor is drawn. */
+    /** The last open project Solforge AI was told about (hook H11), and since when no project has been open. */
+    private string? solforgeAiNotifiedProject;
+    private double aiNoProjectSince = -1;
+
+    /**
+     * Once a project is open the server runs and the client configs are written, whether or not the AI panel or editor
+     * is drawn. Every project change (SOLFORGE-AI-APP-SPEC §6.4) is published: discovery points at the project (null on
+     * close), project.changed goes to Solforge AI, which follows the editor to it (the app is never quit for a switch),
+     * and an opened project is written to last-project.json for a standalone start. A closed project is passed on only
+     * after 2 s without one, because reopening the installation adopts Project = null for a moment and that is not a switch.
+     */
     private void StartAiForProject()
     {
-        if (workspace.Project?.DirectoryPath is { } project && project != aiConfiguredProject) PrepareAiEngine(project);
+        string? project = workspace.Project?.DirectoryPath;
+        double now = clock.Elapsed.TotalSeconds;
+        bool changed = false;
+        if (project is not null)
+        {
+            aiNoProjectSince = -1;
+            if (!string.Equals(project, solforgeAiNotifiedProject, StringComparison.OrdinalIgnoreCase))
+            {
+                solforgeAiNotifiedProject = project;
+                changed = true;
+                SolforgeAiProjectChanged(project);
+                try { AiWriteSession(project); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { aiServiceError ??= "session: " + error.Message; }
+            }
+        }
+        else if (solforgeAiNotifiedProject is not null)
+        {
+            if (aiNoProjectSince < 0) aiNoProjectSince = now;
+            else if (now - aiNoProjectSince >= 2)
+            {
+                solforgeAiNotifiedProject = null; aiNoProjectSince = -1;
+                SolforgeAiProjectChanged(null);
+                aiService?.Publish(null);
+                aiConfiguredProject = null;
+                changed = true;
+            }
+        }
+        if (project is not null && project != aiConfiguredProject) PrepareAiEngine(project);
+        if (changed) AiProjectPublished(project);
     }
+
+    /** project.changed on the UI channel and, for an opened project, %LOCALAPPDATA%\Solforge\last-project.json. */
+    private void AiProjectPublished(string? project)
+    {
+        var dto = AiProjectDto(project);
+        EmitUi(EditorUiEvents.ProjectChanged, new { project = dto });
+        EmitUiSoon(EditorUiEvents.StateChanged);
+        if (dto is null) return;
+        try
+        {
+            string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Solforge");
+            Directory.CreateDirectory(folder);
+            string path = Path.Combine(folder, "last-project.json"), temporary = path + ".tmp";
+            File.WriteAllText(temporary, System.Text.Json.JsonSerializer.Serialize(new { path = dto.Path, name = dto.Name, updated = DateTimeOffset.UtcNow }));
+            File.Move(temporary, path, true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { AppendAiLog("Solforge AI: last-project.json not written: " + error.Message); }
+    }
+
+    /** The UI channel's project record, or null. */
+    private static EditorProjectDto? AiProjectDto(string? project) =>
+        string.IsNullOrWhiteSpace(project) ? null : new EditorProjectDto(project, Path.GetFileName(Path.TrimEndingDirectorySeparator(project)));
+
+    private string aiLastChip = "";
 
     /** Runs every frame from HandleAiShortcuts: MCP start, context snapshot, highlight outlines, hot reload. */
     private void PublishAiContext()
@@ -239,6 +331,9 @@ public sealed partial class StudioForm
         aiHost.ContextJson = aiPaused ? "{\"paused\":true}" : BuildAiContext().ToJsonString(McpJson.Indented);
         aiHost.CurrentMap = workspace.World?.Map.Name;
         if (now >= aiHost.NextVisible) { aiHost.NextVisible = now + 1; aiHost.Visible = aiPaused ? [] : BuildAiVisible(); }
+        // Solforge AI's Context tab refreshes when what the chip says changes (coalesced to 4 Hz at most).
+        string chip = AiContextChip();
+        if (chip != aiLastChip) { aiLastChip = chip; EmitUiSoon(EditorUiEvents.ContextChanged); }
         AiPrewarm();
     }
 
@@ -259,7 +354,8 @@ public sealed partial class StudioForm
             ["project"] = workspace.Project?.DirectoryPath,
             ["map"] = workspace.World?.Map.Name,
             ["mission"] = workspace.World?.MissionTag is { } mission ? $"0x{mission:X8}" : null,
-            ["openFile"] = missionGraph.ScriptPath is { } script && workspace.Project is { } open
+            // Hook H9 (b): the credential file is never named or read into the context.
+            ["openFile"] = missionGraph.ScriptPath is { } script && workspace.Project is { } open && !CredentialGuard.IsCredentialPath(script)
                 ? Path.GetRelativePath(open.DirectoryPath, script).Replace('\\', '/') : null,
             // Which model the unified Graph panel shows: mission_script, node_graph:material|weapon|mission, or null.
             ["graph_kind"] = AiGraphKind(),
@@ -320,7 +416,8 @@ public sealed partial class StudioForm
         var open = new JsonObject();
         if (workspace.Document is { } document)
             open["asset"] = $"{document.Name} 0x{document.Entry.TagHash:X8} ({document.Entry.PackageName})";
-        if (missionGraph.ScriptPath is { } script) open["script"] = AiShownPath(script) + (missionGraph.IsDirty ? " (unsaved)" : "");
+        if (missionGraph.ScriptPath is { } script && !CredentialGuard.IsCredentialPath(script))
+            open["script"] = AiShownPath(script) + (missionGraph.IsDirty ? " (unsaved)" : "");
         if (AiGraphKind() is { } graphKind) open["graph_kind"] = graphKind;
         if (tagDiff is { } diff) open["tagDiff"] = $"0x{diff.TagHash:X8}, {diff.ChangedBytes} bytes differ";
         if (workspace.Project is { } project)
@@ -377,10 +474,10 @@ public sealed partial class StudioForm
                 selection.Add(row);
             }
         open["selection"] = selection;
-        if (missionGraph.ScriptPath is { } script)
+        if (missionGraph.ScriptPath is { } script && !CredentialGuard.IsCredentialPath(script))
             open["script"] = new JsonObject { ["path"] = AiShownPath(script), ["fullPath"] = script, ["unsaved"] = missionGraph.IsDirty };
         open["graph_kind"] = AiGraphKind();
-        if (AiGraphSummary() is { } graph) open["graph"] = graph;
+        if (!CredentialDocumentShown() && AiGraphSummary() is { } graph) open["graph"] = graph;
         if (tagDiff is { } diff)
             open["tagDiff"] = new JsonObject
             {
@@ -475,32 +572,94 @@ public sealed partial class StudioForm
             }
     }
 
-    /** Approval requests sit above the terminal, never inside a closed dropdown. */
+    /** One AI LOG line's outcome word and colour. */
+    private static (string Word, Vector4 Color) AiOutcome(AiRequestOutcome outcome) => outcome switch
+    {
+        AiRequestOutcome.Auto => ("auto", SolTheme.Muted),
+        AiRequestOutcome.Approved => ("approved", SolTheme.Ok),
+        _ => ("denied", SolTheme.Bad)
+    };
+
+    /**
+     * The requests still waiting for an answer (approve/deny cards, unchanged logic), then the last 3 AI LOG lines with
+     * a link to the full log, which lives in the Output Log under its "MCP" filter now.
+     */
     partial void DrawAiRequests()
     {
         AiRequest[] pending;
         lock (aiRequests) pending = [.. aiRequests];
-        (DateTime Time, string Tool, string Summary)[] auto;
-        lock (aiAutoApproved) auto = [.. aiAutoApproved.TakeLast(6)];
-        if (auto.Length > 0)
-        {
-            SolTheme.SectionHeader("AI AUTO-APPROVED");
-            foreach (var item in auto.Reverse())
-                ImGui.TextWrapped($"{item.Time:HH:mm:ss} {item.Tool}: {item.Summary}");
-        }
-        if (pending.Length == 0) return;
-        SolTheme.SectionHeader("AI REQUESTS");
+        AiRequestLogEntry[] log;
+        lock (aiRequestLog) log = [.. aiRequestLog];
+        SolTheme.SectionHeader(pending.Length > 0 ? $"AI REQUESTS ({pending.Length})" : "AI REQUESTS");
+        if (pending.Length == 0) ImGui.TextDisabled("Nothing waits for approval.");
         foreach (var request in pending)
         {
-            ImGui.PushID(request.GetHashCode());
-            ImGui.TextColored(SolTheme.Sun, request.Tool);
+            ImGui.PushID(request.Id);
+            var start = ImGui.GetCursorScreenPos();
+            float width = ImGui.GetContentRegionAvail().X;
+            var draw = ImGui.GetWindowDrawList();
+            draw.ChannelsSplit(2);
+            draw.ChannelsSetCurrent(1);
+            ImGui.SetCursorScreenPos(start + new Vector2(SolTheme.Space4, SolTheme.Space3));
+            ImGui.BeginGroup();
+            ImGui.TextColored(SolTheme.Warn, request.Tool);
+            if (request.Session is { } asker) { ImGui.SameLine(); ImGui.TextColored(SolTheme.Muted, asker.Label + (request.Worker ? " (workflow worker)" : "")); }
+            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + Math.Max(40, width - SolTheme.Space4 * 2));
             ImGui.TextWrapped(request.Summary);
+            ImGui.PopTextWrapPos();
             if (SolTheme.PrimaryButton("Approve")) Answer(request, true);
             ImGui.SameLine();
             if (UiAuto.Button("Deny")) Answer(request, false);
+            ImGui.EndGroup();
+            var end = new Vector2(start.X + width, ImGui.GetItemRectMax().Y + SolTheme.Space3);
+            draw.ChannelsSetCurrent(0);
+            SolTheme.ChamferFrame(draw, start, end, 0, SolTheme.U32(SolTheme.Alpha(SolTheme.Warn, .08f)), SolTheme.U32(SolTheme.Alpha(SolTheme.Warn, .45f)));
+            draw.ChannelsMerge();
+            ImGui.SetCursorScreenPos(new(start.X, end.Y + SolTheme.Space2));
+            ImGui.Dummy(new(width, 0));
             ImGui.PopID();
         }
+        SolTheme.SectionHeader("AI LOG");
+        if (log.Length == 0) ImGui.TextDisabled("No MCP actions yet.");
+        for (int i = log.Length - 1; i >= Math.Max(0, log.Length - 3); i--)
+        {
+            var item = log[i];
+            var (outcome, color) = AiOutcome(item.Outcome);
+            string text = $"{item.Time:HH:mm:ss}  {outcome,-8}  {item.Tool}: {item.Summary}".ReplaceLineEndings(" ");
+            ImGui.TextColored(color, StudioUi.Fit(text, ImGui.GetContentRegionAvail().X));
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(text);
+        }
+        if (UiAuto.SmallButton("More in Output Log##ai-log-more")) ShowOutputLog("MCP");
     }
+
+    /** Adds one answered request to the AI log, keeping the newest 500, and publishes it as log.appended. */
+    private void RecordAiRequest(string tool, string summary, AiRequestOutcome outcome, string? session = null)
+    {
+        AiRequestLogEntry entry;
+        lock (aiRequestLog)
+        {
+            entry = new(Interlocked.Increment(ref aiLogSeq), DateTime.Now, tool, summary, outcome, session);
+            aiRequestLog.Add(entry);
+            if (aiRequestLog.Count > AiLogCapacity) aiRequestLog.RemoveAt(0);
+        }
+        EmitUi(EditorUiEvents.LogAppended, new { entries = new[] { AiLogEntryDto(entry) }, lines = Array.Empty<EditorLogLineDto>() });
+    }
+
+    /** Adds one AI log line (AppendAiLog), keeping the newest 500, and publishes it as log.appended. */
+    private void RecordAiLogLine(string text)
+    {
+        AiLogLine line;
+        lock (aiRequestLog)
+        {
+            line = new(Interlocked.Increment(ref aiLogSeq), DateTime.Now, text);
+            aiLogLines.Add(line);
+            if (aiLogLines.Count > AiLogCapacity) aiLogLines.RemoveAt(0);
+        }
+        EmitUi(EditorUiEvents.LogAppended, new { entries = Array.Empty<EditorLogEntryDto>(), lines = new[] { new EditorLogLineDto(line.Seq, line.Time, line.Text) } });
+    }
+
+    private static EditorLogEntryDto AiLogEntryDto(AiRequestLogEntry entry) =>
+        new(entry.Seq, entry.Time, entry.Tool, entry.Summary, AiOutcome(entry.Outcome).Word, entry.Session);
 
     /** Draws the list of AI edits with an undo button for each. */
     partial void DrawAiEdits()
@@ -518,11 +677,16 @@ public sealed partial class StudioForm
         }
     }
 
-    /** Completes a pending request with the user answer. */
-    private void Answer(AiRequest request, bool approved)
+    /**
+     * Completes a pending request with the user's answer (reason "user" in the editor, "app" from Solforge AI) and records it in
+     * the AI log. False when it was answered already (whichever side answers first wins).
+     */
+    private bool Answer(AiRequest request, bool approved, string reason = "user")
     {
-        lock (aiRequests) aiRequests.Remove(request);
-        request.Answer.TrySetResult(approved);
+        lock (aiRequests) if (!aiRequests.Remove(request)) return false;
+        request.Reason = reason;
+        RecordAiRequest(request.Tool, request.Summary, approved ? AiRequestOutcome.Approved : AiRequestOutcome.Denied, request.Session?.Label);
+        return request.Answer.TrySetResult(approved);
     }
 
     /** Restores the file as it was before an AI edit. */
@@ -533,15 +697,24 @@ public sealed partial class StudioForm
         else File.WriteAllText(edit.Path, edit.Previous);
         aiEdits.RemoveAt(index);
         aiAttention.Record(AttentionKind.Open, "file:" + edit.Shown, "Undid AI edit of " + edit.Shown);
+        EmitUiSoon(EditorUiEvents.EditsChanged);
     }
 
-    /** Captures and sends the requested viewport screenshot. */
+    /** Saves the viewport as a PNG in the project and copies its path (the console it used to paste into is gone). */
     partial void SendAiScreenshot()
     {
         if (workspace.Project is null || viewport is null) return;
+        // Hook H9 (c): nothing is captured while the credential file is on screen.
+        if (CredentialDocumentShown()) { ShowInfoToast("No screenshot while the credential file is open."); return; }
         aiScreenshotRequest = (null, true, true);
+        aiScreenshotCopy = true;
         aiScreenshot = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
     }
+
+    /** Whether the next saved screenshot's path goes to the clipboard (false for Solforge AI's Screenshot, which gets the path). */
+    private bool aiScreenshotCopy = true;
+    /** Solforge AI's pending Screenshot: the saved project-relative path, or null when nothing was saved. */
+    private TaskCompletionSource<string?>? aiScreenshotSaved;
 
     /** After a frame is drawn and before Present: the back buffer cropped to the viewport or an object. */
     private void CaptureAiScreenshot()
@@ -549,24 +722,35 @@ public sealed partial class StudioForm
         if (aiScreenshot is not { } pending || renderer is null) return;
         aiScreenshot = null;
         var (id, labels, send) = aiScreenshotRequest;
+        var saved = aiScreenshotSaved;
+        aiScreenshotSaved = null;
         try
         {
             string temporary = Path.Combine(Path.GetTempPath(), $"solforge-ai-{Environment.ProcessId}.png");
             renderer.CapturePng(temporary);
             byte[]? png = CropAiScreenshot(temporary, id, labels);
             File.Delete(temporary);
+            string? relative = null;
             if (send && png is not null && workspace.Project is { } project)
             {
                 string folder = Path.Combine(project.DirectoryPath, ".solforge", "screenshots");
                 Directory.CreateDirectory(folder);
                 string path = Path.Combine(folder, $"viewport-{DateTime.Now:yyyyMMdd-HHmmss}.png");
                 File.WriteAllBytes(path, png);
-                aiTerminal.Paste(Path.GetRelativePath(project.DirectoryPath, path).Replace('\\', '/') + " ");
+                relative = Path.GetRelativePath(project.DirectoryPath, path).Replace('\\', '/');
+                if (aiScreenshotCopy)
+                {
+                    CopyText(relative);
+                    ShowInfoToast("Screenshot saved; its path is on the clipboard for Solforge AI");
+                }
+                else ShowInfoToast("Screenshot saved; its path went to Solforge AI");
             }
+            aiScreenshotCopy = true;
             pending.TrySetResult(png);
+            saved?.TrySetResult(relative);
         }
         catch (Exception exception) when (exception is IOException or ExternalException or ArgumentException or UnauthorizedAccessException)
-        { pending.TrySetResult(null); }
+        { aiScreenshotCopy = true; pending.TrySetResult(null); saved?.TrySetResult(null); }
     }
 
     /** Crops a screenshot to an object (optionally with labels); null when it cannot. */
@@ -702,9 +886,10 @@ public sealed partial class StudioForm
                 }
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 File.WriteAllText(target, next);
-                aiEdits.Add(new AiEdit(target, relative.Replace('\\', '/'), previous, DateTime.Now));
+                aiEdits.Add(new AiEdit(NewAiId(), target,relative.Replace('\\', '/'), previous, DateTime.Now));
                 aiAttention.Record(AttentionKind.Open, "file:" + relative, "AI edited " + relative);
-                return $"Wrote {relative} ({next.Length} chars). It is listed under AI edits in the AI workspace, where Undo restores it.";
+                EmitUiSoon(EditorUiEvents.EditsChanged);
+                return $"Wrote {relative} ({next.Length} chars). It is listed under AI edits in the Solforge AI panel, where Undo restores it.";
             default:
                 return RunAiProjectAction(tool, args) ?? "Unknown action.";
         }
@@ -781,8 +966,9 @@ public sealed partial class StudioForm
         /** ISolforgeHost: a viewport screenshot, optionally cropped to an object. */
         public async Task<byte[]?> ScreenshotAsync(string? objectId, bool labels, CancellationToken cancel)
         {
-            // Nothing is drawn while the 3D viewport is off or paused for the game.
-            if (!await form.OnUi(() => form.viewport is { IsRendering: true }).ConfigureAwait(false)) return null;
+            // Nothing is drawn while the 3D viewport is off or paused for the game; nothing is captured while the
+            // credential file is on screen (hook H9 c; the tools refuse through CredentialDocumentVisible too).
+            if (!await form.OnUi(() => form.viewport is { IsRendering: true } && !form.CredentialDocumentShown()).ConfigureAwait(false)) return null;
             var pending = await form.OnUi(() =>
             {
                 form.aiScreenshotRequest = (objectId, labels, false);
@@ -791,25 +977,54 @@ public sealed partial class StudioForm
             return await pending.Task.WaitAsync(TimeSpan.FromSeconds(10), cancel).ConfigureAwait(false);
         }
 
-        /** ISolforgeHost: asks the user to approve an action; false when declined. */
+        /**
+         * ISolforgeHost: asks the user to approve an action; false when declined. The request never opens a window or
+         * takes focus (hook H9 a): it raises the toolbar badge and the approval toast, and docks the AI panel as a tab
+         * when the layout has none. A model-workflow worker session is never auto-approved.
+         */
         public async Task<bool> ApproveAsync(string tool, string summary, CancellationToken cancel)
         {
-            var gate = new ApprovalGate(() => form.settings.AutoApproveRequests, (t, s) =>
-            {
-                lock (form.aiAutoApproved)
-                {
-                    form.aiAutoApproved.Add((DateTime.Now, t, s));
-                    if (form.aiAutoApproved.Count > 50) form.aiAutoApproved.RemoveAt(0);
-                }
-            });
+            bool worker = McpSessionRegistry.Current?.IsWorker == true;
+            var session = McpSessionRegistry.Current;
+            // Unchanged rule (SOLFORGE-AI-APP-SPEC §6.3): only the editor's AutoApproveRequests setting auto-approves, never
+            // for a worker session; Solforge AI only shows the request and relays the user's answer.
+            var gate = new ApprovalGate(() => form.settings.AutoApproveRequests && !worker, (t, s) =>
+                form.RecordAiRequest(t, s, AiRequestOutcome.Auto, session?.Label));
             return await gate.AskAsync(tool, summary, async () =>
             {
-                var request = new AiRequest(tool, summary, new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
+                var created = DateTimeOffset.UtcNow;
+                var request = new AiRequest(NewAiId(), tool, summary, created, created + AiRequestTimeout, session, worker,
+                    new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
                 lock (form.aiRequests) form.aiRequests.Add(request);
-                await form.OnUi(() => { form.OpenAiWorkspace(); return true; }).ConfigureAwait(false);
-                try { return await request.Answer.Task.WaitAsync(TimeSpan.FromMinutes(5), cancel).ConfigureAwait(false); }
-                catch (TimeoutException) { return false; }
-                finally { lock (form.aiRequests) form.aiRequests.Remove(request); }
+                form.EmitUi(EditorUiEvents.RequestAdded, AiRequestDto(request));
+                form.EmitUiSoon(EditorUiEvents.StateChanged);
+                await form.OnUi(() => { form.DockAiPanelForApproval(); return true; }).ConfigureAwait(false);
+                string outcome = EditorRequestOutcomes.Denied, reason = "user";
+                try
+                {
+                    bool approved = await request.Answer.Task.WaitAsync(AiRequestTimeout, cancel).ConfigureAwait(false);
+                    (outcome, reason) = (approved ? EditorRequestOutcomes.Approved : EditorRequestOutcomes.Denied, request.Reason);
+                    return approved;
+                }
+                catch (TimeoutException)
+                {
+                    // Expiry is a deny, recorded in the AI log like one.
+                    (outcome, reason) = (EditorRequestOutcomes.Expired, "timeout");
+                    bool removed;
+                    lock (form.aiRequests) removed = form.aiRequests.Remove(request);
+                    if (removed) form.RecordAiRequest(tool, summary + " (expired)", AiRequestOutcome.Denied, session?.Label);
+                    return false;
+                }
+                catch (OperationCanceledException)
+                {
+                    (outcome, reason) = (EditorRequestOutcomes.Cancelled, "cancelled");
+                    throw;
+                }
+                finally
+                {
+                    lock (form.aiRequests) form.aiRequests.Remove(request);
+                    form.NoteAiAnswered(request.Id, EditorRequestKinds.Action, outcome, reason);
+                }
             }).ConfigureAwait(false);
         }
 

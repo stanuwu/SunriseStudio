@@ -124,9 +124,36 @@ Project facts (TFM, references, sizes) are in ARCHITECTURE.md; this file is abou
 - UI automation: `UiAuto` wraps the ImGui widgets the editor uses and records each drawn control (ImGui id, label, panel,
   scope, rect, value); `list_ui_controls` + approval-gated `ui_invoke/ui_set_value/ui_set_checked/ui_select`.
 - Live viewport: `Dx11Renderer.GrabCycle` staging ring (no stall), `ViewportFeed` change-only JPEG ring, local MJPEG page
-  (this PC only). Owner builds add owner-only streaming features; public builds have none (`RELEASING.md`).
+  (this PC only).
 - Player tracking: Live link, recorder snapshots or the local server's /coop; viewport marker, facing, trail, Follow player;
   `get_player_position`, `wait_for_player_near`. Map/mission link in `open_map` and `list_missions`.
+
+## Editor UI, UE5 style (branch `ue5-ui`, docs/UI-UE5.md; builds, not yet looked at)
+- (Solforge) Two-row chrome: a 30 px menu bar (brand mark, menus, centred project name, window buttons) and a 40 px main
+  toolbar (Back/Forward, Select/Move/Rotate/Scale, Place dropdown, Build, view controls, Solforge AI button); 24 px status
+  bar with an MCP dot and call count. Narrow windows fold groups into "»" menus.
+- (Solforge) Tabbed areas: compact 22 px headers, drag a tab onto another header to join it or onto an edge to split; Area
+  menu "Move tab to new area" and "Merge into neighbour". New panels: Place (creation and category tiles), Output Log
+  (status, notices, busy stages, errors, MCP calls; filter, Copy, Clear view), Workflows (agent C).
+- (Solforge) New default layout `Solforge (UE5)`: Place | Viewport | Outliner over Details, and a bottom dock with Content
+  Browser, Output Log, Project changes and Solforge AI. All older presets stay under Window > Layouts.
+- (Solforge) Motion (agent A's UiMotion): eased hover, sliding tab underlines, the Content Browser drawer slide (Ctrl+Space),
+  content fade on tab switch, toasts, smooth list scrolling, eased splitter highlight; Settings > Interface > Reduce motion.
+- (Removed) The in-editor AI console/terminal, its engine picker, install cards, auto-allow and `/automatic` nudges. The
+  Solforge AI button launches, focuses or stops the separate Solforge AI app; the Solforge AI panel keeps approvals, AI edits
+  with Undo, connected sessions and context publishing. "Ask about this" and screenshots copy to the clipboard.
+- (Solforge) The MCP server starts with the editor, with or without a project, so `solforge-mcp --sol` and Solforge AI attach
+  as soon as Solforge runs (and `solforge-mcp` serves its headless tools when Solforge is closed, agent C).
+- (Solforge) Standalone Solforge AI gets the Solforge MCP after Settings > Solforge AI > STANDALONE MCP > Register: a
+  `solforge-standalone` stdio entry in `~/.claude.json` plus that name in Solforge AI's `importClaudeServers`
+  (confirmation first; Unregister removes both; Claude Code sees the entry too). Without it, only an editor-launched
+  Solforge AI has the Solforge tools. The status card and the settings page say which is true.
+- (Solforge) Motion polish: area tabs slide their Accent top line and ease the fill; tab bars use the same top line, clipped;
+  the fold drawer slides from and to its strip; notices, the load toast and the approval badge fade out; spinners and
+  progress lines run at steady frame pacing and stop under Reduce motion; tilt-wheel and Shift+wheel scroll sideways in the
+  Output Log and workflow output.
+- (Changed) Automatic mode is no longer advertised to MCP clients; its six tools stay listed and refuse with a pointer to
+  `start_model_workflow`. `get_editor_state` reports `autoApproveRequests` instead of the console's `aiAutoAllow`.
 
 ## Retail backport (`Solforge.Retail`, `Solforge.Retail.Mcp`, docs/DATA-TOOLS.md)
 - (Solforge) Read-only access to the retail Destiny 2 extraction (build 245048, package v53): tag index (8.6M rows, cached),

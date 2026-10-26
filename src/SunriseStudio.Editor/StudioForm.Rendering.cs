@@ -22,13 +22,18 @@ public sealed partial class StudioForm
         SaveSettings();
     }
 
-    /** Seconds between frames: the game-sharing caps first, then the user's Settings caps; 0 draws every vsync. */
+    /**
+     * Seconds between frames: the game-sharing caps first, then the user's Settings caps; 0 draws every vsync. While UI
+     * motion runs (or within MotionTail of the last change or input) the rendering-off cap lifts to vsync so easing
+     * stays smooth; the Live and Destiny 2 caps and the user's caps still win.
+     */
     private double FrameInterval(bool suspended, bool renderingOff)
     {
         bool focused = ContainsFocus;
+        bool motion = MotionActive;
         int cap = livePage.IsAttached ? (focused ? 30 : 10)
             : suspended ? (focused ? 15 : 5)
-            : renderingOff ? (focused ? 30 : 10) : 0;
+            : renderingOff && !motion ? (focused ? 30 : 10) : 0;
         int user = focused ? settings.FpsFocused : settings.FpsBackground;
         if (user > 0) cap = cap == 0 ? user : Math.Min(cap, user);
         return cap > 0 ? 1.0 / cap : 0;
@@ -87,12 +92,23 @@ public sealed partial class StudioForm
     {
         int quality = (int)settings.ViewportQuality;
         ImGui.SetNextItemWidth(ImGui.CalcTextSize("Quality: Medium").X + ImGui.GetFrameHeight() + ImGui.GetStyle().FramePadding.X * 2);
+        // UE5 toolbar combos read as buttons: the raised Surface fill with an eased hover instead of the recessed Input well.
+        uint key = ImGui.GetID("##quality");
+        var fill = UiMotion.HoverColor(key, SolTheme.Surface, SolTheme.Hover, SolTheme.Pressed);
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, fill);
+        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, fill);
+        ImGui.PushStyleColor(ImGuiCol.Button, fill);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, fill);
+        // The colours stay pushed until EndCombo, so the popup window's begin and end see the same style stack.
         if (UiAuto.BeginCombo("##quality", "Quality: " + QualityNames[quality]))
         {
+            SolTheme.PopupShadow();
             for (int i = 0; i < QualityNames.Length; i++)
                 if (UiAuto.Selectable(QualityNames[i], i == quality) && i != quality) SetViewportQuality((ViewportQuality)i);
             UiAuto.EndCombo();
         }
+        ImGui.PopStyleColor(4);
+        UiMotion.TrackHover(key);
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(QualityTips[quality]);
     }
 

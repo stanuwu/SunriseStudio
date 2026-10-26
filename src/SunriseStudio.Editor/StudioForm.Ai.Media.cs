@@ -149,6 +149,22 @@ public sealed partial class StudioForm
             return (JsonObject?)new JsonObject { ["files"] = files, ["skipped"] = skipped };
         }, cancel);
 
+        /** Implements retail_port_audio: raw retail Wwise media bytes, not from a Sol package. */
+        public JsonObject? ExportWwiseBytes(byte[] bytes, uint tag, string folder, CancellationToken cancel)
+        {
+            var info = WemDecoder.Inspect(bytes);
+            var wave = WemDecoder.Decode(bytes, 0, cancel);
+            Directory.CreateDirectory(folder);
+            string path = Path.Combine(folder, $"{tag:X8}.wav");
+            AudioStemExport.Write(path, wave);
+            return new JsonObject
+            {
+                ["tag"] = Hex(tag), ["file"] = path, ["codec"] = info.Encoding,
+                ["sample_rate"] = wave.SampleRate, ["channels"] = wave.Channels,
+                ["seconds"] = Math.Round(wave.DurationSeconds, 3), ["bytes"] = bytes.Length
+            };
+        }
+
         /** Reads the USM bytes of a tag, or null. */
         private byte[]? Usm(uint tag)
         {

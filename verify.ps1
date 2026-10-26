@@ -29,18 +29,6 @@ function Invoke-Blender([string]$Failure, [string]$Script, [string[]]$Arguments)
 function New-Scratch([string]$Name) { Join-Path $Output ($Name + '-' + [Guid]::NewGuid().ToString('N')) }
 
 if (-not $SkipBuild) {
-    # Owner builds (RELEASING.md): where the private relay folder exists, compile the owner configuration of the
-    # projects that take its sources, into a folder of its own. The public build below runs last, so every check
-    # runs against public binaries: the checks must pass without the owner-only features.
-    $relayDir = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\09-solforge-private\relay'))
-    if (Test-Path -LiteralPath (Join-Path $relayDir 'Mcp/RelayTools.cs')) {
-        foreach ($ownerCheck in 'SunriseStudio.Mcp.Tests', 'SunriseStudio.Editor.Tests') {
-            Invoke-Dotnet "Owner build check failed: $ownerCheck" @('build', (Join-Path $PSScriptRoot "tests/$ownerCheck/$ownerCheck.csproj"),
-                '-c', 'Release', '-m:1', '-nr:false', '-p:BuildInParallel=false', '-p:UseSharedCompilation=false',
-                '-p:SolforgeRelay=true', "-p:SolforgeRelayDir=$relayDir", "-p:OutDir=$PSScriptRoot/obj/verify-owner/$ownerCheck/")
-        }
-    }
-    else { Write-Host "Owner build check skipped: no private relay folder at $relayDir." }
     & (Join-Path $PSScriptRoot 'build.ps1')
 }
 # The weapon checks are not in the solution, so they build here.

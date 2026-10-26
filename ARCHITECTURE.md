@@ -148,7 +148,7 @@ fixture source, not a project.
 
 | Studio.md subsystem | Exists today | To build |
 |---|---|---|
-| Solforge.App / Editor | `App`, `Editor` (WinForms + ImGui) | Rebrand, AI dropdown/terminal pane |
+| Solforge.App / Editor | `App`, `Editor` (WinForms + ImGui; UE5-style chrome on branch `ue5-ui`) | Rebrand; the AI terminal pane was removed for the separate Solforge AI app |
 | Solforge.Projects | `Projects`: `sunrise.project.json`, deltas, object edits, transactions | `.solproj` naming, `overlay/tags/*.tagpatch` layout, base-tag SHA256 snapshots |
 | Solforge.Packages | `Packages`: reader, catalog cache, Oodle, AES keys, writer | Memory-mapped indexer, entry-limit sharder into `w64_sol_custom_*` packages |
 | Solforge.Scene / Viewport | `Scene`, `Viewport`, `Rendering` (D3D11, gizmos, selection) | D3D12 (if wanted), PBR/cubemap/terrain tessellation per spec, spawn/flight-path markers beyond current set |
@@ -169,22 +169,90 @@ Real count is 14 libraries (incl. App), not 20.
   `127.0.0.1` with a random port over a plain `TcpListener` (no http.sys URL ACL), bearer token, `Mcp-Session-Id`, Origin check,
   GET SSE keep-alive; `AttentionLog`, `ObjectIndex` (fuzzy names; numbers exact; map-scoped), `ProjectFiles` (reads, search,
   overlay-only edit paths), `SolforgeTools` (11 read tools, 5 approve-gated) over `ISolforgeHost`. `Solforge.Mcp.Shim` builds
-  `solforge-mcp.exe`: stdio lines are POSTed to the server found in `%LOCALAPPDATA%\Solforge\mcp\server-<pid>.json`
-  (`--project` picks the Solforge with that project open). `publish.ps1` publishes it beside `Solforge.exe`.
-- **Editor:** `StudioPanelKind.AI` is the AI area in the editor dropdown (Window > AI workspace, Ctrl+Shift+A).
+  `solforge-mcp.exe`: `--sol` serves the one client-facing `sol` aggregate (Solforge plus sol-testkit, tiger-mcp and the
+  optional Gemini/ClinePass delegates), merging tools, resources, resource templates and prompts; its upstream list is
+  written to `%LOCALAPPDATA%\Solforge\mcp\sol-upstreams-<hash>.json`.
+  The `--project` mode remains the stdio bridge to the server found in `server-<pid>.json`. `publish.ps1` publishes the shim
+  beside `Solforge.exe`.
+- **Editor (superseded by "UE5 UI notes" below: the console is removed):** `StudioPanelKind.AI` is the AI area in the editor dropdown (Window > AI workspace, Ctrl+Shift+A).
   `Ai/ConPtyTerminal` (P/Invoke pseudo console), `Ai/VtScreen` (VT subset), `Ai/TerminalView` (ImGui draw; chars from the form
   KeyPress, terminal focus sets `WantTextInput` so shortcuts stay quiet). `StudioForm.Ai.cs` = header, Context panel, attention
   tracking; `StudioForm.Ai.Host.cs` = the tool host (UI-thread marshalling via `BeginInvoke`, context snapshot every 250 ms,
   visible list every 1 s, screenshots from `FrameRendered` + `CapturePng`, approvals, AI edits with Undo, mission-script hot reload).
   `AssetViewport.Ai.cs` adds `ScreenOrigin`/`ScreenSize`/`ScreenRect`; `LivePage.Ai.cs` adds `AiState`.
-  Engines start in no-prompt mode by default (`AiSkipPermissions`, Settings > AI; `EngineLaunch.SkipPermissionsArguments`): claude and agy `--dangerously-skip-permissions`, cline `--yolo` (limited tool set). Auto-allow below is the fallback.
-  The header's Auto-allow toggle (right of Folders, `AiAutoAllow` setting) runs on its own 100 ms UI timer, reads `VtScreen.Snapshot(30)` when the screen changed and sends Enter
-  once per prompt (after 250 ms stable, 550 ms for Claude Code, which may get one retry after a redraw) when `Solforge.Mcp.ApprovalPrompts` sees a claude/agy/cline allow prompt at the bottom with a one-time Yes/Allow highlighted.
-  Start/Restart resume the engine's last session for the folder when `AiResumeSessions` is on (default; right-click New session): claude `--continue` if `~/.claude/projects/<folder>/*.jsonl` exists,
-  agy `--conversation <id>` from `~/.gemini/antigravity-cli/history.jsonl`, cline `--id <id>` from `cline history --json` (3 s cap); helpers in `EngineLaunch`. New session always starts fresh.
-- **Configs:** written when a project is open: `<project>/.mcp.json` (Claude Code), `~/.cline/data/settings/cline_mcp_settings.json`
+  The AI workspace's only engine is now the custom Pi harness (`pi-cust.cmd`); Solforge writes one `sol` MCP entry to the project's `.pi/mcp.json` and starts it with `--append-system-prompt` plus `--continue` when Resume is on. The old Claude/Cline/agy launch helpers stay in `EngineLaunch.cs` and `EngineProviders.cs` for the remaining MCP delegate tools.
+  Start/Restart passes `--continue` when `AiResumeSessions` is on (default; New session starts fresh). The old per-engine session lookups remain for the MCP delegates.
+- **Configs:** written when a project is open: `<project>/.mcp.json` (Claude Code), `<project>/.pi/mcp.json` (Pi harness),
+  `~/.claude.json` (Claude Code user and matching project entries, when present), `~/.cline/data/settings/cline_mcp_settings.json`
   (+ the VS Code Cline extension settings if installed), `~/.gemini/antigravity/mcp_config.json` (Antigravity desktop) and
-  `~/.gemini/config/mcp_config.json` (the `agy` CLI, which also gets the open folders as `--add-dir`). Each runs the shim with
-  `--project`; tokens never go into config files.
+  `~/.gemini/config/mcp_config.json` (the `agy` CLI, which also gets the open folders as `--add-dir`). Each holds one
+  `sol` entry with `--sol --project <folder> --upstreams <local list>`; the old separate `solforge`, `gemini`, `clinepass`,
+  `sol-testkit` and `tiger-mcp` entries are removed. Tokens never go into config files.
 - **Checks:** `tests/SunriseStudio.Mcp.Tests` (in `verify.ps1`): stdio round trip through the shim, find_object fixture, attention
   log, project path rules, config generation.
+
+## UE5 UI notes (branch `ue5-ui`, docs/UI-UE5.md)
+
+Status: source only. It builds; nothing here has been launched or looked at. Compiling is not visual acceptance.
+
+- **Chrome:** `DrawEditor` draws a 30 px menu bar (`StudioForm.MenuBar.cs`: 16 px brand mark, File to Help, the project
+  name centred in muted text, the window buttons; the caption hit test covers row 1 only), a 40 px main toolbar
+  (`StudioForm.Toolbar.cs`: Back/Forward, Select/Move/Rotate/Scale, the Place dropdown, Build, Render, Shaders, Quality,
+  Detail, Lighting, Settings, and the right-aligned Solforge AI pill), the areas and a 24 px status bar (the busy stage over
+  a 3 px Accent line, the notice, the status text, the facts plus an "MCP" dot and call count). Each row keeps the "»"
+  overflow; the `TitleGroup` names are unchanged and `Tools`, `Place` and `SolforgeAi` are appended.
+- **Layout:** `StudioPanelKind` gains `Place`, `Output` and `Workflows` (appended). A leaf may hold several panels as tabs
+  (`StudioLayoutNode.Tabs`, `ActiveTab`; null keeps old saved layouts byte-identical). `Find`, `Show`, `SetPanel`, `Close`
+  and focus requests see tab members; `AddTab`, `CloseTab`, `SplitWith`, `MoveTabToNewArea` and `MergeIntoNeighbour` move
+  them. `LargestPanel` no longer protects the AI area. The new preset `Solforge (UE5)` (`DefaultPreset`) is the first-run
+  layout and what Reset layout restores; every older preset is unchanged, and `Default()` stays the fallback for a corrupt
+  saved layout.
+- **Area headers** (`StudioForm.PanelTabs.cs`): a 22 px strip of tabs (icon, 11 px semibold title, close "x" on hover in a
+  tabbed area) with the editor-type combo, collapse and the "..." Area menu (which gains "Move tab to new area" and "Merge
+  into neighbour") as compact icon buttons. Tabs drag with an ImGui payload typed `SOLFORGE_PANEL` (the kind name): onto a
+  header joins that area, onto a body's outer 25 % splits it; the zone under the pointer shows an Accent 20 % overlay.
+  Content fades in on first show and on a tab switch. Display titles are UE5 names (Viewport, Content Browser, Outliner,
+  Details, Output Log, Solforge AI); the persisted and MCP-facing names (`PanelTitle`) are unchanged.
+- **Content Browser drawer** (Ctrl+Space, `StudioForm.Layouts.cs`): slides with a UiMotion spring. A lone browser area is
+  removed and reinserted beside its old neighbour as before; a tabbed bottom dock holding it folds to a strip. The layout
+  changes only when the slide ends; Reduce motion makes it instant.
+- **Console removed:** the ConPTY terminal, the engine picker, Start/Stop, install cards, auto-allow (`aiAllowTimer`),
+  quota hand-off, terminal drag/drop and `ClaimAiKeyboard` are gone from the editor. The `Ai/` terminal classes,
+  `Solforge.Mcp/ApprovalPrompts.cs` and `AiConsoleAdapters.cs` are no longer compiled into the shipped assemblies
+  (`<Compile Remove>`); the Editor and Mcp test projects compile them for their checks. The engine helpers the delegates
+  use (`EngineLaunch`, `EngineCommands`, `EngineProviders`, `ClinePassProxy`) stay. `/automatic` stays registered; with no
+  watchdog all six tools refuse with `SolforgeTools.AutomaticUnavailable` ("Automatic nudges needed the removed in-editor
+  console. Use model workflows (start_model_workflow) instead."), and neither the server instructions nor SESSION.md
+  advertise it any more. `AiAutoAllow` is folded once into `AiAutoApproveRequests` on load; `get_editor_state` reports
+  `autoApproveRequests`. Screenshots from the UI go to the clipboard as a path; "Ask about this" copies a prompt.
+- **Standalone Solforge AI and the MCP** (`Solforge.Mcp/StandaloneRegistration.cs`): solforge-next's standalone overlay
+  never reads `solforge-ai-mcp.json` and drops rows named `solforge`; it only imports the `~/.claude.json` servers listed in
+  `importClaudeServers` of `<LOCALAPPDATA>\SolforgeNext\AiApp\_standalone\electron\solforge-standalone.json`. Settings >
+  Solforge AI > STANDALONE MCP > Register (confirmation; blocked for UI automation) writes `mcpServers.solforge-standalone`
+  (the shim run copy, `--sol --upstreams <sol-upstreams-default.json>`, no env) and adds that name to `importClaudeServers`.
+  `PublishStandaloneFiles` is serialised by a lock, writes every temp file under a unique name, and re-points an existing
+  registration at the current run copy. Editor launches with no project use `ProjectKey.EditorNoProject` (64 hex), never
+  the `_standalone` profile.
+- **Motion fixes:** area tabs ease the active fill and draw one sprung Accent top line per area; ImGui tab bars
+  (`TabUnderline`) draw the same top line, clipped to the bar; the fold drawer slides between the strip and the full share;
+  the status notice, load toast and pill badge fade out with their last content; the approval toast keeps its (disabled)
+  buttons while fading; spinner, progress sheen and shimmer honour Settings > Reduce motion and call
+  `UiMotion.KeepAnimating()` so frame pacing stays smooth; `SmoothScroll` handles tilt-wheel and Shift+wheel sideways.
+- **Solforge AI:** the toolbar pill (UiAuto-blocked, so MCP UI automation cannot launch or stop it) and Ctrl+Shift+A call
+  agent C's `LaunchOrFocusSolforgeAi`; its chevron menu offers Launch/Focus, Stop (Cancel while launching), the panel,
+  Re-check and Settings. `window.ai_workspace` / `show_panel ai_workspace` only show the AI panel. The AI panel
+  (`StudioForm.SolforgeAiPanel.cs`) shows C's status card, the approval cards, the last AI LOG lines, AI edits with Undo,
+  connected sessions and the context controls. `ApproveAsync` no longer opens a workspace: it raises the pill's badge and a
+  toast, and docks the AI panel as a bottom tab when the layout has none (worker sessions are never auto-approved).
+- **MCP from startup:** `OnShown` calls `EnsureAiService()` while `AiMcpEnabled`, then `SolforgeAiStartup()`, so a
+  standalone `solforge-mcp --sol` and Solforge AI find the editor with or without a project. `StartAiForProject` passes a
+  project switch to `SolforgeAiProjectChanged` (a closed project only after 2 s, since reopening the install adopts
+  Project = null for a moment) and rewrites the session files. `FormClosed` calls `StopFramePacing`, `ShutdownSolforgeAi`
+  and then `StopAiService` (the console used to stop the service from its own FormClosed hook).
+- **Output Log** (`StudioForm.OutputLog.cs`): status, notices, busy stages, errors and the MCP call log (the AI LOG plus
+  `AppendAiLog` lines from agent C), with a filter box, category toggles, Copy and Clear view (hides only).
+- **Place** (`StudioForm.PlacePanel.cs`): tiles over `CreationTypes` (New) and `StudioCategories`; a tile runs the same
+  `StartCreation` or opens the category in the Content Browser.
+- **Known test conflicts (tests were not edited or run):** the layout UI check expects Reset layout to equal the old
+  `Solforge` preset and the one-row title bar geometry; the shortcut check expects the AI terminal's Help rows, which were
+  removed with the console.

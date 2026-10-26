@@ -40,7 +40,7 @@ public sealed partial class StudioForm
     {
         if (!contentOpen) return;
         ImGui.SetNextWindowSize(new(Math.Min(1100 * scale, ClientSize.Width - 40), Math.Min(700 * scale, ClientSize.Height - 40)), ImGuiCond.FirstUseEver);
-        if (!ImGui.Begin("Content editors", ref contentOpen, ImGuiWindowFlags.NoCollapse)) { ImGui.End(); return; }
+        if (!ImGui.Begin("Content editors", ref contentOpen)) { ImGui.End(); return; }
         var store = ContentStoreOrNull();
         if (store is null) { ImGui.TextDisabled("Open or create a project first; content lives in <project>\\content."); ImGui.End(); return; }
         try

@@ -14,9 +14,19 @@ namespace Solforge.Mcp.Testkit;
 /** Where the testkit lives and which ports it uses. */
 public sealed class TestkitOptions
 {
-    public string Script { get; init; } = Path.Combine(Environment.GetEnvironmentVariable("SOL_ROOT") is { Length: > 0 } root ? root
-        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Desktop", "sol"),
-        "02-server", "solserver", "solserverbase", "project sol", "tools", "testkit", "mcp", "sol_testkit_mcp.py");
+    public string Script { get; init; } = DefaultScript();
+
+    /** SOL_ROOT, else the first Sol root on the desktop that has the script (the tree moved to "Project - Sol\sol"). */
+    private static string DefaultScript()
+    {
+        string desktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Desktop");
+        string[] roots = Environment.GetEnvironmentVariable("SOL_ROOT") is { Length: > 0 } root
+            ? [root]
+            : [Path.Combine(desktop, "Project - Sol", "sol"), Path.Combine(desktop, "sol")];
+        string[] scripts = [.. roots.Select(sol => Path.Combine(sol, "02-server", "solserver", "solserverbase", "project sol", "tools",
+            "testkit", "mcp", "sol_testkit_mcp.py"))];
+        return scripts.FirstOrDefault(File.Exists) ?? scripts[0];
+    }
     public string Python { get; init; } = "py";
     public string[] PythonArgs { get; init; } = ["-3"];
     public int PadPort { get; init; } = 48811;

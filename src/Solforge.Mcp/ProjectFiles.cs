@@ -57,7 +57,9 @@ public static class ProjectFiles
         var info = new FileInfo(path);
         if (!info.Exists) throw new FileNotFoundException($"No such file: {shown}");
         if (info.Length > MaximumRead) throw new IOException($"{shown} is {info.Length} bytes; the limit is {MaximumRead}.");
-        string[] lines = File.ReadAllLines(path);
+        // One read gives both the lines and the version, so the sha256 always matches the text returned.
+        byte[] bytes = File.ReadAllBytes(path);
+        string[] lines = Lines(bytes);
         offset = Math.Clamp(offset, 1, Math.Max(1, lines.Length));
         limit = Math.Clamp(limit, 1, 4000);
         var text = new StringBuilder();
@@ -65,12 +67,41 @@ public static class ProjectFiles
         return new JsonObject
         {
             ["path"] = shown, ["lines"] = lines.Length, ["from"] = offset,
-            ["to"] = Math.Min(lines.Length, offset - 1 + limit), ["text"] = text.ToString()
+            ["to"] = Math.Min(lines.Length, offset - 1 + limit), ["text"] = text.ToString(),
+            // UI-UE5 §5.5: the whole file's version; pass it back as expected_sha256 to apply_project_edit.
+            ["sha256"] = Sha256(bytes)
         };
     }
 
+    /** Lowercase hex SHA-256 of a file's bytes (its version for expected_sha256). */
+    public static string Sha256(byte[] bytes) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+
+    /** The version of a file on disk, or null when it does not exist or cannot be read. */
+    public static string? FileSha256(string path)
+    {
+        try { return File.Exists(path) && new FileInfo(path).Length <= MaximumRead ? Sha256(File.ReadAllBytes(path)) : null; }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /** True when expected (hex, any case) is the file's current version; a missing file matches only an empty expectation. */
+    public static bool VersionMatches(string path, string? expected) =>
+        string.IsNullOrWhiteSpace(expected) || string.Equals(FileSha256(path), expected.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /** The text lines of file bytes, as File.ReadAllLines splits them (BOM-aware). */
+    private static string[] Lines(byte[] bytes)
+    {
+        using var reader = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var lines = new List<string>();
+        while (reader.ReadLine() is { } line) lines.Add(line);
+        return [.. lines];
+    }
+
     /** Text search over the project and SDK roots, limited to the extension if given. */
-    public static JsonArray Search(string? projectRoot, IReadOnlyList<string> sdkRoots, string query, string? extension, int limit)
+    public static JsonArray Search(string? projectRoot, IReadOnlyList<string> sdkRoots, string query, string? extension, int limit) =>
+        Search(projectRoot, sdkRoots, query, extension, limit, Solforge.Harness.Credentials.CredentialGuard.IsCredentialPath);
+
+    /** Text search that never opens a file skip returns true for (the credential file guard). */
+    public static JsonArray Search(string? projectRoot, IReadOnlyList<string> sdkRoots, string query, string? extension, int limit, Func<string, bool> skip)
     {
         var results = new JsonArray();
         var roots = new List<(string Root, string Prefix)>();
@@ -80,6 +111,7 @@ public static class ProjectFiles
             foreach (string file in Files(root))
             {
                 if (extension is { Length: > 0 } && !file.EndsWith(extension.StartsWith('.') ? extension : "." + extension, StringComparison.OrdinalIgnoreCase)) continue;
+                if (skip(file)) continue;
                 string relative = prefix + Path.GetRelativePath(root, file).Replace('\\', '/');
                 if (relative.Contains(query, StringComparison.OrdinalIgnoreCase))
                     results.Add(new JsonObject { ["path"] = relative, ["line"] = 0, ["text"] = "(file name)" });

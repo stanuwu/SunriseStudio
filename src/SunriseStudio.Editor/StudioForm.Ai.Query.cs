@@ -163,7 +163,7 @@ public sealed partial class StudioForm
         ["textureCacheMiB"] = settings.TextureCacheMiB,
         ["fpsFocused"] = settings.FpsFocused, ["fpsBackground"] = settings.FpsBackground, ["uiScale"] = Math.Round(settings.UiScale, 2),
         ["memory"] = AiMemory(),
-        ["aiEngine"] = AiEngines[aiEngine].Name, ["aiAutoAllow"] = settings.AiAutoAllow, ["mcp"] = settings.AiMcpEnabled,
+        ["aiEngine"] = AiEngines[aiEngine].Name, ["autoApproveRequests"] = settings.AutoApproveRequests, ["mcp"] = settings.AiMcpEnabled,
         ["aiFolders"] = new JsonArray(settings.AiFolders.Select(folder => (JsonNode)folder).ToArray())
     };
 

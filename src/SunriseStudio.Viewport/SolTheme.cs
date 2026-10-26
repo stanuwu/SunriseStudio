@@ -5,69 +5,25 @@ using ImGuiNET;
 namespace SunriseStudio.Viewport;
 
 /**
- * Sol design language (Studio.md §3.10): the token set shared with the Sol website and launcher
- * (sol-launcher/src/sol.css), the bundled Chakra Petch / Inter faces and the draw helpers built on them.
- * Pages take colours from here instead of writing their own.
+ * Sol design language, UE5 edition (docs/UI-UE5.md §2): the token set, the bundled Chakra Petch / Inter faces and
+ * the draw helpers built on them. Pages take colours from here instead of writing their own. The token names from
+ * the Sol website palette are kept so every call site compiles; their values are the UE5 editor greys and blue
+ * accent. The token table lives in SolTheme.Tokens.cs.
  */
-public static unsafe class SolTheme
+public static unsafe partial class SolTheme
 {
-    // Tokens from the Project Sol website (sol-website/assets/site.css on the cyberpulse night theme), named as
-    // there; the launcher (sol-launcher) uses the same values. Neutral greys, no blue cast.
-    /** --bg: hsl(0 0% 5%). */
-    public static readonly Vector4 Bg = Hex(0x0d0d0d);
-    /** --bg2: night background-100, hsl(0 0% 10%). */
-    public static readonly Vector4 Bg2 = Hex(0x1a1a1a);
-    /** --panel: hsl(0 0% 9%). */
-    public static readonly Vector4 Panel = Hex(0x171717);
-    public static readonly Vector4 PanelTop = Hex(0x181818);
-    public static readonly Vector4 PanelBottom = Hex(0x141414);
-    /** The site's scrolled top bar, hsla(0 0% 7% / .96). */
-    public static readonly Vector4 Bar = Hex(0x121212);
-    /** Form field fill, hsla(0 0% 100% / .05); hovered and focused fields go to .08. */
-    public static readonly Vector4 Surface = White(.05f);
-    public static readonly Vector4 Surface2 = White(.08f);
-    /** --line and --line-strong. */
-    public static readonly Vector4 Line = White(.10f);
-    public static readonly Vector4 Line2 = White(.24f);
-    /** --text (night contrast-100, 98%). */
-    public static readonly Vector4 Text = Hex(0xfafafa);
-    /** --muted (night contrast-300, 75%): secondary text and resting icons. */
-    public static readonly Vector4 Muted = Hex(0xbfbfbf);
-    /** --faint (52%): hints and disabled text. */
-    public static readonly Vector4 Dim = Hex(0x858585);
-    /** One step under --faint, for rules and placeholder glyphs. */
-    public static readonly Vector4 Faint = Hex(0x5c5c5c);
-    /** --accent (--cpl-color-brand) and --accent-hi. */
-    public static readonly Vector4 Sun = Hex(0xffb648);
-    public static readonly Vector4 SunHi = Hex(0xffcb7a);
-    public static readonly Vector4 Sun2 = Hex(0xff7a2f);
-    public static readonly Vector4 SunGradStart = Hex(0xffe0a0);
-    public static readonly Vector4 SunGradEnd = Hex(0xff7a2f);
-    /** The light ends of sun-shimmer (#ffe0a0 -> sun -> sun-2 -> sun -> #ffe0a0). */
-    public static readonly Vector4 SunShimmerEdge = Hex(0xffe0a0);
-    /** Text on a sun fill: the site button's hsl(--cpl-color-black), 2%. */
-    public static readonly Vector4 AccentInk = Hex(0x050505);
-    /** Night background steps 200 and 300 (12%, 14%); 300 is the site's button fill. */
-    public static readonly Vector4 Step = Hex(0x1f1f1f);
-    public static readonly Vector4 ButtonFill = Hex(0x242424);
-    public static readonly Vector4 Ok = Hex(0x5fd38a);
-    public static readonly Vector4 Bad = Hex(0xf07a7a);
-
-    // Type scale and shapes, in pixels at 96 DPI. Body is Inter (the site's --font-body), headings and buttons
-    // Chakra Petch (--font-head). Cuts are the site's --cut, --cut-sm and --cut-xs chamfers; corners are never rounded.
-    public const float TitleSize = 17, HeadingSize = 14, BodySize = 13, HintSize = 12, LabelSize = 11, ButtonSize = 12.5f;
-    public const float Cut = 14, CutSmall = 8, CutTiny = 5, ControlHeight = 36, ControlSmall = 28;
-
     /** The DPI scale from the last Apply. */
     public static float Scale { get; private set; } = 1;
-    /** Chakra Petch 600 at body size: panel titles, tabs, mode buttons. */
+    /** Inter 600 at body size: panel section headings, emphasised labels and mode buttons. */
     public static ImFontPtr HeadingFont { get; private set; }
-    /** Chakra Petch 600 at button size: primary and secondary buttons. */
+    /** Inter 600 at button size: primary and secondary buttons. */
     public static ImFontPtr ButtonFont { get; private set; }
-    /** Chakra Petch 700 at label size: uppercase section headers. */
+    /** Inter 600 at label size: tabs, small upper-case section headers. */
     public static ImFontPtr LabelFont { get; private set; }
-    /** Chakra Petch 700 at title size: the SOLFORGE wordmark and dialog titles. */
+    /** Chakra Petch 600 at title size: start screen and dialog titles. */
     public static ImFontPtr TitleFont { get; private set; }
+    /** Chakra Petch 700 at title size: the SOLFORGE wordmark and the loading card. */
+    public static ImFontPtr BrandFont { get; private set; }
     /** Inter 600 at body size: emphasised body text. */
     public static ImFontPtr StrongFont { get; private set; }
 
@@ -80,8 +36,6 @@ public static unsafe class SolTheme
     [StructLayout(LayoutKind.Sequential)]
     private struct Vertex { public Vector2 Position; public Vector2 Uv; public uint Color; }
 
-    private static Vector4 Hex(uint rgb) => new(((rgb >> 16) & 0xFF) / 255f, ((rgb >> 8) & 0xFF) / 255f, (rgb & 0xFF) / 255f, 1);
-    private static Vector4 White(float alpha) => new(1, 1, 1, alpha);
     public static Vector4 Alpha(Vector4 color, float alpha) => color with { W = alpha };
     public static uint U32(Vector4 color) => ImGui.GetColorU32(color);
 
@@ -91,15 +45,17 @@ public static unsafe class SolTheme
      */
     public static ImFontPtr? AddFonts(ImFontAtlasPtr fonts, float controllerBodySize)
     {
-        HeadingFont = default; ButtonFont = default; LabelFont = default; TitleFont = default; StrongFont = default;
+        HeadingFont = default; ButtonFont = default; LabelFont = default; TitleFont = default; StrongFont = default; BrandFont = default;
         if (!LoadFaces() || faces is not { } loaded) return null;
         float scale = Math.Max(1, controllerBodySize / 16f);
         AddFace(fonts, loaded[0], BodySize * scale); // first face: ImGui's default font
         StrongFont = AddFace(fonts, loaded[1], BodySize * scale);
-        HeadingFont = AddFace(fonts, loaded[2], HeadingSize * scale);
-        ButtonFont = AddFace(fonts, loaded[2], ButtonSize * scale);
-        LabelFont = AddFace(fonts, loaded[3], LabelSize * scale);
-        TitleFont = AddFace(fonts, loaded[3], TitleSize * scale);
+        // UE5 headings are the body face at body size, semibold: one atlas entry serves both.
+        HeadingFont = StrongFont;
+        ButtonFont = AddFace(fonts, loaded[1], ButtonSize * scale);
+        LabelFont = AddFace(fonts, loaded[1], LabelSize * scale);
+        TitleFont = AddFace(fonts, loaded[2], TitleSize * scale);
+        BrandFont = AddFace(fonts, loaded[3], TitleSize * scale);
         return TitleFont;
     }
 
@@ -143,7 +99,7 @@ public static unsafe class SolTheme
         return true;
     }
 
-    /** Sol colours, shapes and sizes on the current context; safe to call again on a DPI change. */
+    /** UE5 colours, shapes and sizes on the current context; safe to call again on a DPI change. */
     public static void Apply(float scale)
     {
         Scale = Math.Max(1, scale);
@@ -153,28 +109,31 @@ public static unsafe class SolTheme
         *style.NativePtr = *defaults;
         ImGuiNative.ImGuiStyle_destroy(defaults);
         ImGui.StyleColorsDark();
-        style.WindowPadding = new(12, 10);
-        // Body text plus this padding gives the launcher's small control height.
-        style.FramePadding = new(10, (ControlSmall - BodySize) / 2);
-        style.ItemSpacing = new(8, 6);
-        style.ItemInnerSpacing = new(6, 4);
-        // Square corners everywhere; chamfers are drawn by the helpers below.
+        style.WindowPadding = new(8, 8);
+        // The spec's compact padding (docs/UI-UE5.md §2.2); with 13 px body text a frame is about 19-20 px tall.
+        style.FramePadding = new(6, 3);
+        style.ItemSpacing = new(6, 4);
+        style.ItemInnerSpacing = new(4, 4);
+        style.IndentSpacing = 14;
+        style.CellPadding = new(4, 2);
+        // Rounded controls, square areas: panels meet edge to edge.
         style.WindowRounding = 0;
         style.ChildRounding = 0;
-        style.PopupRounding = 0;
-        style.FrameRounding = 0;
-        style.GrabRounding = 0;
-        style.TabRounding = 0;
-        style.ScrollbarRounding = 0;
+        style.PopupRounding = RoundingPopup;
+        style.FrameRounding = Rounding;
+        style.GrabRounding = Rounding;
+        style.TabRounding = RoundingTab;
+        style.ScrollbarRounding = RoundingScrollbar;
         style.WindowBorderSize = 0;
         style.ChildBorderSize = 1;
         style.PopupBorderSize = 1;
-        style.FrameBorderSize = 1;
+        // The Input fill gives fields their contrast, so frames carry no border.
+        style.FrameBorderSize = 0;
         style.TabBorderSize = 0;
         style.TabBarBorderSize = 1;
         style.TabBarOverlineSize = 2;
         style.ScrollbarSize = 10;
-        style.GrabMinSize = 10;
+        style.GrabMinSize = 8;
         style.SeparatorTextBorderSize = 1;
         style.SeparatorTextPadding = new(0, 4);
         var colors = style.Colors;
@@ -184,89 +143,90 @@ public static unsafe class SolTheme
         Set(ImGuiCol.TextDisabled, Dim);
         Set(ImGuiCol.WindowBg, Panel);
         Set(ImGuiCol.ChildBg, Panel);
-        // The site's dropdown option fill.
-        Set(ImGuiCol.PopupBg, Alpha(Hex(0x151515), .98f));
-        // Thin --line borders, as the site's cards; focus and selection add the sun.
-        Set(ImGuiCol.Border, Line);
+        Set(ImGuiCol.PopupBg, Popup);
+        Set(ImGuiCol.Border, BorderHi);
         Set(ImGuiCol.BorderShadow, clear);
-        Set(ImGuiCol.FrameBg, Surface);
-        Set(ImGuiCol.FrameBgHovered, Surface2);
-        Set(ImGuiCol.FrameBgActive, Alpha(Sun, .14f));
+        Set(ImGuiCol.FrameBg, Input);
+        Set(ImGuiCol.FrameBgHovered, InputHover);
+        Set(ImGuiCol.FrameBgActive, Input);
         Set(ImGuiCol.TitleBg, Bar);
         Set(ImGuiCol.TitleBgActive, Bar);
         Set(ImGuiCol.TitleBgCollapsed, Bar);
         Set(ImGuiCol.MenuBarBg, Bar);
         Set(ImGuiCol.ScrollbarBg, clear);
-        Set(ImGuiCol.ScrollbarGrab, Line2);
-        Set(ImGuiCol.ScrollbarGrabHovered, White(.22f));
-        Set(ImGuiCol.ScrollbarGrabActive, Sun);
-        Set(ImGuiCol.CheckMark, Sun);
-        Set(ImGuiCol.SliderGrab, Sun);
-        Set(ImGuiCol.SliderGrabActive, Sun2);
-        Set(ImGuiCol.Button, ButtonFill);
-        Set(ImGuiCol.ButtonHovered, Hex(0x333333)); // background-600, 20%
-        Set(ImGuiCol.ButtonActive, Alpha(Sun, .24f));
-        // Selection is a faint sun wash; helpers add the sun bar or underline.
-        Set(ImGuiCol.Header, Alpha(Sun, .12f));
-        Set(ImGuiCol.HeaderHovered, Surface2);
-        Set(ImGuiCol.HeaderActive, Alpha(Sun, .2f));
+        Set(ImGuiCol.ScrollbarGrab, ScrollGrab);
+        Set(ImGuiCol.ScrollbarGrabHovered, ScrollGrabHover);
+        Set(ImGuiCol.ScrollbarGrabActive, ScrollGrabActive);
+        Set(ImGuiCol.CheckMark, Accent);
+        Set(ImGuiCol.SliderGrab, Accent);
+        Set(ImGuiCol.SliderGrabActive, AccentHover);
+        Set(ImGuiCol.Button, Surface);
+        Set(ImGuiCol.ButtonHovered, Hover);
+        Set(ImGuiCol.ButtonActive, Pressed);
+        // Selected rows are a blue wash; hovered rows the hover grey.
+        Set(ImGuiCol.Header, Selection);
+        Set(ImGuiCol.HeaderHovered, Hover);
+        Set(ImGuiCol.HeaderActive, Selection);
         Set(ImGuiCol.Separator, Line);
-        Set(ImGuiCol.SeparatorHovered, Sun);
-        Set(ImGuiCol.SeparatorActive, Sun);
+        Set(ImGuiCol.SeparatorHovered, Alpha(Accent, .6f));
+        Set(ImGuiCol.SeparatorActive, Accent);
         Set(ImGuiCol.ResizeGrip, clear);
-        Set(ImGuiCol.ResizeGripHovered, Alpha(Sun, .5f));
-        Set(ImGuiCol.ResizeGripActive, Sun);
-        Set(ImGuiCol.Tab, clear);
-        Set(ImGuiCol.TabHovered, Surface2);
-        Set(ImGuiCol.TabSelected, Surface);
-        Set(ImGuiCol.TabSelectedOverline, Sun);
-        Set(ImGuiCol.TabDimmed, clear);
-        Set(ImGuiCol.TabDimmedSelected, Surface);
-        Set(ImGuiCol.TabDimmedSelectedOverline, Alpha(Sun, .5f));
-        Set(ImGuiCol.PlotLines, Dim);
-        Set(ImGuiCol.PlotLinesHovered, Sun);
-        Set(ImGuiCol.PlotHistogram, Sun);
-        Set(ImGuiCol.PlotHistogramHovered, Sun2);
-        Set(ImGuiCol.TableHeaderBg, Bg2);
-        Set(ImGuiCol.TableBorderStrong, Line2);
-        Set(ImGuiCol.TableBorderLight, Line);
+        Set(ImGuiCol.ResizeGripHovered, Alpha(Accent, .5f));
+        Set(ImGuiCol.ResizeGripActive, Accent);
+        Set(ImGuiCol.Tab, Header);
+        Set(ImGuiCol.TabHovered, Hover);
+        Set(ImGuiCol.TabSelected, Panel);
+        Set(ImGuiCol.TabSelectedOverline, Accent);
+        Set(ImGuiCol.TabDimmed, Header);
+        Set(ImGuiCol.TabDimmedSelected, Panel);
+        Set(ImGuiCol.TabDimmedSelectedOverline, Alpha(Accent, .5f));
+        Set(ImGuiCol.PlotLines, Muted);
+        Set(ImGuiCol.PlotLinesHovered, Accent);
+        Set(ImGuiCol.PlotHistogram, Accent);
+        Set(ImGuiCol.PlotHistogramHovered, AccentHover);
+        Set(ImGuiCol.TableHeaderBg, Header);
+        Set(ImGuiCol.TableBorderStrong, Line);
+        Set(ImGuiCol.TableBorderLight, TableLine);
         Set(ImGuiCol.TableRowBg, clear);
-        Set(ImGuiCol.TableRowBgAlt, White(.02f));
-        Set(ImGuiCol.TextLink, Sun);
-        Set(ImGuiCol.TextSelectedBg, Alpha(Sun, .28f));
-        Set(ImGuiCol.DragDropTarget, Sun);
-        Set(ImGuiCol.NavCursor, Sun);
-        Set(ImGuiCol.NavWindowingHighlight, Sun);
-        Set(ImGuiCol.NavWindowingDimBg, Alpha(Bg, .6f));
-        Set(ImGuiCol.ModalWindowDimBg, Alpha(Bg, .6f));
+        Set(ImGuiCol.TableRowBgAlt, White(.015f));
+        Set(ImGuiCol.TextLink, AccentHover);
+        Set(ImGuiCol.TextSelectedBg, Selection);
+        Set(ImGuiCol.DragDropTarget, Accent);
+        Set(ImGuiCol.NavCursor, Accent);
+        Set(ImGuiCol.NavWindowingHighlight, Accent);
+        Set(ImGuiCol.NavWindowingDimBg, new(0, 0, 0, .5f));
+        Set(ImGuiCol.ModalWindowDimBg, new(0, 0, 0, .5f));
         style.ScaleAllSizes(Scale);
         ImGui.GetIO().FontGlobalScale = 1;
     }
 
     // ---- Draw helpers ----
 
-    /** The launcher's --chamfer polygon: top-left and bottom-right corners cut. */
+    /**
+     * Formerly the launcher's chamfer polygon. UE5 shapes are rounded rectangles: the path is a rounded rect whose
+     * radius is cut when it is positive (already scaled), otherwise the control rounding. Callers do not change.
+     */
     public static void ChamferPath(ImDrawListPtr draw, Vector2 min, Vector2 max, float cut)
     {
-        cut = Math.Clamp(cut, 0, Math.Min(max.X - min.X, max.Y - min.Y) * .5f);
-        if (cut <= 0) { draw.PathRect(min, max); return; }
-        draw.PathLineTo(new(min.X + cut, min.Y));
-        draw.PathLineTo(new(max.X, min.Y));
-        draw.PathLineTo(new(max.X, max.Y - cut));
-        draw.PathLineTo(new(max.X - cut, max.Y));
-        draw.PathLineTo(new(min.X, max.Y));
-        draw.PathLineTo(new(min.X, min.Y + cut));
+        float radius = cut > 0 ? cut : Rounding * Scale;
+        radius = Math.Clamp(radius, 0, Math.Min(max.X - min.X, max.Y - min.Y) * .5f);
+        draw.PathRect(min, max, radius);
     }
 
-    /** A chamfered box; a zero colour skips the fill or the border. Cut is in unscaled pixels. */
+    /** A rounded box; a zero colour skips the fill or the border. Cut is in unscaled pixels; 0 uses the control rounding. */
     public static void ChamferFrame(ImDrawListPtr draw, Vector2 min, Vector2 max, float cut, uint fill, uint border = 0)
     {
         if (max.X - min.X < 1 || max.Y - min.Y < 1) return;
         if (fill != 0) { ChamferPath(draw, min, max, cut * Scale); draw.PathFillConvex(fill); }
-        if (border != 0) { ChamferPath(draw, min, max, cut * Scale); draw.PathStroke(border, ImDrawFlags.Closed, 1); }
+        if (border != 0)
+        {
+            // Half-pixel inset keeps the 1 px stroke crisp and inside the box.
+            ChamferPath(draw, min + new Vector2(.5f), max - new Vector2(.5f), cut * Scale);
+            draw.PathStroke(border, ImDrawFlags.Closed, 1);
+        }
     }
 
-    /** A chamfered box filled with sun-grad (#ffe0a0 -> #ffb648 -> #ff7a2f, left to right). */
+    /** A rounded box filled with the accent ramp (accent hover -> accent -> accent pressed, left to right). */
     public static void ChamferGradient(ImDrawListPtr draw, Vector2 min, Vector2 max, float cut, float alpha = 1)
     {
         if (max.X - min.X < 1 || max.Y - min.Y < 1) return;
@@ -287,20 +247,21 @@ public static unsafe class SolTheme
     }
 
     /**
-     * The launcher's .dl-bar: a pill filled with #ffe0a0 -> sun -> sun-2 along x, drawn as slices so the middle
-     * stop holds. A sheen in [0, 1) sweeps a pale band across it; a negative sheen leaves it still.
+     * A progress pill: the accent ramp along x (or the brand ramp for the loading card), drawn as slices so the
+     * middle stop holds. A sheen in [0, 1) sweeps a pale band across it; a negative sheen leaves it still.
      */
-    public static void ProgressFill(ImDrawListPtr draw, Vector2 min, Vector2 max, float sheen = -1)
+    public static void ProgressFill(ImDrawListPtr draw, Vector2 min, Vector2 max, float sheen = -1, bool brand = false)
     {
         float width = max.X - min.X, height = max.Y - min.Y, radius = height / 2;
         if (width < 1 || height < 1) return;
-        if (width <= height) { draw.AddRectFilled(min, max, U32(SunGradStart), radius); return; }
+        Vector4 start = brand ? BrandEdge : AccentHover, middle = brand ? Brand : Accent, end = brand ? Brand2 : AccentActive;
+        if (width <= height) { draw.AddRectFilled(min, max, U32(start), radius); return; }
         float band = Math.Max(height * 8, width * .18f), center = min.X - band + (width + band * 2) * sheen;
         Vector4 At(float x)
         {
             float t = (x - min.X) / width, u = (x - center) / band;
-            var color = t < .5f ? Vector4.Lerp(SunGradStart, Sun, t * 2) : Vector4.Lerp(Sun, Sun2, (t - .5f) * 2);
-            return sheen < 0 || u <= -1 || u >= 1 ? color : Vector4.Lerp(color, Text, (1 - u * u) * (1 - u * u) * .45f);
+            var color = t < .5f ? Vector4.Lerp(start, middle, t * 2) : Vector4.Lerp(middle, end, (t - .5f) * 2);
+            return sheen < 0 || u <= -1 || u >= 1 ? color : Vector4.Lerp(color, TextStrong, (1 - u * u) * (1 - u * u) * .45f);
         }
         float left = min.X + radius, right = max.X - radius, y = min.Y + radius;
         draw.AddCircleFilled(new(left, y), radius, U32(At(left)), 12);
@@ -315,8 +276,8 @@ public static unsafe class SolTheme
     }
 
     /**
-     * The panel gradient (#13151d -> #0d0e14, top to bottom) behind the current window's content.
-     * A window that pushed its own background (a splitter, an overlay) keeps it.
+     * The panel fill behind the current window's content. PanelTop and PanelBottom both equal Panel, so this is a
+     * flat fill (UE5 chrome has no gradients). A window that pushed its own background (a splitter, an overlay) keeps it.
      */
     public static void PanelGradient()
     {
@@ -324,20 +285,44 @@ public static unsafe class SolTheme
         var min = ImGui.GetWindowPos();
         var max = min + ImGui.GetWindowSize();
         uint top = U32(PanelTop), bottom = U32(PanelBottom);
-        ImGui.GetWindowDrawList().AddRectFilledMultiColor(min, max, top, top, bottom, bottom);
+        if (top == bottom) ImGui.GetWindowDrawList().AddRectFilled(min, max, top);
+        else ImGui.GetWindowDrawList().AddRectFilledMultiColor(min, max, top, top, bottom, bottom);
     }
 
-    /** Flat bg-2 with a top hairline: the status bar. */
+    /** Flat bar fill with a 1 px border line on top: the status bar. */
     public static void StatusBackground()
     {
         var min = ImGui.GetWindowPos();
         var max = min + ImGui.GetWindowSize();
         var draw = ImGui.GetWindowDrawList();
-        draw.AddRectFilled(min, max, U32(Bg2));
-        draw.AddLine(min, new(max.X, min.Y), U32(Line), 1);
+        draw.AddRectFilled(min, max, U32(Bar));
+        draw.AddLine(min, new(max.X, min.Y), U32(Border), 1);
     }
 
-    /** Draws text with letter spacing, as the launcher's uppercase labels; returns its width. */
+    /**
+     * The soft popup shadow: two rings outside the current window (25 % and 10 % black), drawn on its own draw list
+     * with the clip lifted so the ring can sit outside it. Call right after BeginPopup, BeginMenu, BeginCombo or
+     * BeginTooltip returns true.
+     */
+    public static void PopupShadow()
+    {
+        var min = ImGui.GetWindowPos();
+        PopupShadow(ImGui.GetWindowDrawList(), min, min + ImGui.GetWindowSize());
+    }
+
+    /** The popup shadow around a rectangle; only the ring outside the rectangle is drawn, so its contents stay clear. */
+    public static void PopupShadow(ImDrawListPtr draw, Vector2 min, Vector2 max)
+    {
+        if (max.X - min.X < 1 || max.Y - min.Y < 1) return;
+        float s = Scale, radius = RoundingPopup * s;
+        var drop = new Vector2(0, 1 * s);
+        draw.PushClipRectFullScreen();
+        draw.AddRect(min - new Vector2(1.5f * s) + drop, max + new Vector2(1.5f * s) + drop, U32(new(0, 0, 0, .25f)), radius + 1.5f * s, ImDrawFlags.None, 2 * s);
+        draw.AddRect(min - new Vector2(3.5f * s) + drop * 2, max + new Vector2(3.5f * s) + drop * 2, U32(new(0, 0, 0, .10f)), radius + 3.5f * s, ImDrawFlags.None, 3 * s);
+        draw.PopClipRect();
+    }
+
+    /** Draws text with letter spacing, as the upper-case labels; returns its width. */
     public static float TrackedText(ImDrawListPtr draw, Vector2 position, uint color, string text, float tracking)
     {
         float x = position.X;
@@ -350,17 +335,17 @@ public static unsafe class SolTheme
         return x - position.X;
     }
 
-    /** sun-shimmer at t; the gradient tiles, so moving t sweeps it as the launcher's 6 s shimmer does. */
+    /** The brand shimmer at t; the gradient tiles, so moving t sweeps it as the launcher's 6 s shimmer does. */
     public static Vector4 Shimmer(float t)
     {
         t = (t % 1 + 1) % 1 * 4;
         int stop = Math.Min(3, (int)t);
-        var (from, to) = stop switch { 0 => (SunShimmerEdge, Sun), 1 => (Sun, Sun2), 2 => (Sun2, Sun), _ => (Sun, SunShimmerEdge) };
+        var (from, to) = stop switch { 0 => (BrandEdge, Brand), 1 => (Brand, Brand2), 2 => (Brand2, Brand), _ => (Brand, BrandEdge) };
         return Vector4.Lerp(from, to, t - stop);
     }
 
     /**
-     * Tracked text filled with sun-shimmer, as the launcher's h1 span: the text spans half the gradient
+     * Tracked text filled with the brand shimmer, as the launcher's h1 span: the text spans half the gradient
      * (background-size 200%) and phase in [0, 1) is the sweep. Returns its width.
      */
     public static float ShimmerText(ImDrawListPtr draw, Vector2 position, string text, float tracking, float phase)
@@ -385,91 +370,102 @@ public static unsafe class SolTheme
         return width + tracking * Math.Max(0, text.Length - 1);
     }
 
-    /** Uppercase Chakra Petch label in sun over a hairline rule, as the launcher's group headers. */
+    /** An 11 px semibold upper-case label in muted grey over a 1 px separator: a group header. */
     public static void SectionHeader(string text, string tooltip = "")
     {
         bool font = PushFont(LabelFont);
         string label = text.ToUpperInvariant();
-        float tracking = ImGui.GetFontSize() * .2f;
+        float tracking = ImGui.GetFontSize() * .08f;
         var draw = ImGui.GetWindowDrawList();
-        ImGui.Dummy(new(0, 4 * Scale));
+        ImGui.Dummy(new(0, Space2));
         var start = ImGui.GetCursorScreenPos();
         float width = Math.Max(1, ImGui.GetContentRegionAvail().X);
-        float height = ImGui.GetTextLineHeight() + 5 * Scale;
+        float height = ImGui.GetTextLineHeight() + Space3;
         ImGui.Dummy(new(width, height));
-        TrackedText(draw, start, U32(Sun), label, tracking);
+        TrackedText(draw, start, U32(Muted), label, tracking);
         draw.AddLine(new(start.X, start.Y + height - 1), new(start.X + width, start.Y + height - 1), U32(Line), 1);
         if (font) ImGui.PopFont();
         if (tooltip.Length != 0 && ImGui.IsItemHovered()) ImGui.SetTooltip(tooltip);
     }
 
-    /** A collapsing group drawn as a section header with a fold arrow; the label's id is kept. */
+    /**
+     * A collapsing group drawn as a UE5 Details category: a Header strip, an 11 px semibold upper-case label and a
+     * chevron that rotates by animation. The label's id is kept.
+     */
     public static bool CollapsingSection(string label, ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.None)
     {
         int split = label.IndexOf("##", StringComparison.Ordinal);
         string shown = (split < 0 ? label : label[..split]).ToUpperInvariant();
         bool font = PushFont(LabelFont);
-        ImGui.PushStyleColor(ImGuiCol.Header, Vector4.Zero);
-        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, Surface);
-        ImGui.PushStyleColor(ImGuiCol.HeaderActive, Surface2);
-        ImGui.PushStyleColor(ImGuiCol.Text, Sun);
+        ImGui.PushStyleColor(ImGuiCol.Header, Header);
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, Hover);
+        ImGui.PushStyleColor(ImGuiCol.HeaderActive, Pressed);
+        // A clear text colour hides ImGui's own arrow; the chevron and the tracked label are drawn below.
+        ImGui.PushStyleColor(ImGuiCol.Text, Vector4.Zero);
         // The visible text is drawn tracked below; the whole original label stays in the id, so ids stay unique.
         bool open = UiAuto.CollapsingHeader("##" + label, flags);
         ImGui.PopStyleColor(4);
+        uint id = ImGui.GetItemID();
+        bool hovered = ImGui.IsItemHovered();
         var min = ImGui.GetItemRectMin();
         var max = ImGui.GetItemRectMax();
         var draw = ImGui.GetWindowDrawList();
-        float arrow = ImGui.GetFontSize() + ImGui.GetStyle().FramePadding.X * 2;
+        float size = ImGui.GetFontSize();
+        float arrow = size + ImGui.GetStyle().FramePadding.X * 2;
         float textTop = min.Y + (max.Y - min.Y - ImGui.GetTextLineHeight()) / 2;
-        TrackedText(draw, new(min.X + arrow, textTop), U32(Sun), shown, ImGui.GetFontSize() * .2f);
-        draw.AddLine(new(min.X, max.Y - 1), new(max.X, max.Y - 1), U32(Line), 1);
+        var chevronCenter = new Vector2(min.X + ImGui.GetStyle().FramePadding.X + size * .5f, (min.Y + max.Y) * .5f);
+        var tint = UiMotion.EaseColor(UiMotion.Mix(id, 0x7E11u), hovered ? TextStrong : Text);
+        UiMotion.DrawChevron(draw, chevronCenter, size * .5f, UiMotion.Chevron(id, open), U32(tint));
+        TrackedText(draw, new(min.X + arrow, textTop), U32(tint), shown, size * .08f);
         if (font) ImGui.PopFont();
         return open;
     }
 
-    /** The site's primary button: chamfered brand fill, accent-ink uppercase Chakra Petch label. */
+    /** The primary button: rounded Accent fill, white semibold label; its fill eases between rest, hover and pressed. */
     public static bool PrimaryButton(string label, Vector2 size = default)
     {
         int split = label.IndexOf("##", StringComparison.Ordinal);
-        string shown = (split < 0 ? label : label[..split]).ToUpperInvariant();
+        string shown = split < 0 ? label : label[..split];
         // One body-font frame tall, like the controls beside it; the smaller button face would make it shorter.
         if (size.Y <= 0) size.Y = ImGui.GetFrameHeight();
         bool font = PushFont(ButtonFont);
-        float tracking = ImGui.GetFontSize() * .1f;
-        float textWidth = TrackedWidth(shown, tracking);
-        if (size.X <= 0) size.X = textWidth + 32 * Scale;
+        float textWidth = ImGui.CalcTextSize(shown).X;
+        if (size.X <= 0) size.X = textWidth + PrimaryPadding * 2 * Scale;
         bool clicked = UiAuto.InvisibleButton(label, Vector2.Max(size, Vector2.One));
         bool hovered = ImGui.IsItemHovered(), held = ImGui.IsItemActive();
         var min = ImGui.GetItemRectMin();
         var max = ImGui.GetItemRectMax();
-        if (held) { min.Y += 1; max.Y += 1; }
         var draw = ImGui.GetWindowDrawList();
-        // The site's .btn.primary: flat brand fill, inverted to --text on hover, --accent-hi while pressed.
-        var fill = held ? SunHi : hovered ? Text : Sun;
-        ChamferFrame(draw, min, max, CutSmall, U32(fill));
+        var fill = UiMotion.EaseColor(ImGui.GetItemID(), held ? AccentActive : hovered ? AccentHover : Accent, 35f);
+        ChamferFrame(draw, min, max, 0, U32(fill));
         var textPosition = new Vector2(min.X + (max.X - min.X - textWidth) / 2, min.Y + (max.Y - min.Y - ImGui.GetTextLineHeight()) / 2);
-        TrackedText(draw, textPosition, U32(AccentInk), shown, tracking);
+        draw.AddText(textPosition, U32(AccentInk), shown);
         if (font) ImGui.PopFont();
         return clicked;
     }
+
+    /** Horizontal padding each side of a PrimaryButton label, in unscaled pixels. */
+    private const float PrimaryPadding = 14;
 
     /** The width PrimaryButton gives the label, for laying out a row before drawing it. */
     public static float PrimaryButtonWidth(string label)
     {
         int split = label.IndexOf("##", StringComparison.Ordinal);
-        string shown = (split < 0 ? label : label[..split]).ToUpperInvariant();
+        string shown = split < 0 ? label : label[..split];
         bool font = PushFont(ButtonFont);
-        float width = TrackedWidth(shown, ImGui.GetFontSize() * .1f) + 32 * Scale;
+        float width = ImGui.CalcTextSize(shown).X + PrimaryPadding * 2 * Scale;
         if (font) ImGui.PopFont();
         return width;
     }
 
-    /** A small mode button (Object / Asset): no fill when active, a sun underline instead. */
+    /** A small mode button (Object / Asset): no fill, its label easing to strong text and an accent underline when active. */
     public static bool ModeButton(string label, bool active)
     {
         bool font = PushFont(HeadingFont);
+        uint id = ImGui.GetID(label);
+        var text = UiMotion.EaseColor(UiMotion.Mix(id, 0x40DEu), active ? TextStrong : Muted);
         ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
-        ImGui.PushStyleColor(ImGuiCol.Text, active ? Text : Dim);
+        ImGui.PushStyleColor(ImGuiCol.Text, text);
         bool clicked = UiAuto.SmallButton(label);
         ImGui.PopStyleColor(2);
         if (font) ImGui.PopFont();
@@ -477,62 +473,76 @@ public static unsafe class SolTheme
         return clicked;
     }
 
-    /** A 2 px sun line under the last item: the active tab or mode. */
+    /** A 2 px accent line under the last item: the active tab or mode. */
     public static void Underline()
     {
         var min = ImGui.GetItemRectMin();
         var max = ImGui.GetItemRectMax();
-        ImGui.GetWindowDrawList().AddRectFilled(new(min.X, max.Y - 2 * Scale), max, U32(Sun));
+        ImGui.GetWindowDrawList().AddRectFilled(new(min.X, max.Y - 2 * Scale), max, U32(Accent));
     }
 
-    /** A 3 px sun bar on the left of a row: the selected list row. */
+    /** A 2 px accent bar on the left of a row: the selected list row. */
     public static void LeftBar(ImDrawListPtr draw, Vector2 min, Vector2 max)
-        => draw.AddRectFilled(min, new(min.X + 3 * Scale, max.Y), U32(Sun));
+        => draw.AddRectFilled(min, new(min.X + 2 * Scale, max.Y), U32(Accent));
 
-    /** The launcher's title notch: a small sun-grad tab with its bottom-left corner cut, before a panel title. */
+    /** Formerly the launcher's title notch; UE5 headers carry a thin accent tick instead. */
     public static void TitleNotch(ImDrawListPtr draw, Vector2 min, float height)
-    {
-        float width = 6 * Scale;
-        int first = draw.VtxBuffer.Size;
-        draw.PathLineTo(min);
-        draw.PathLineTo(new(min.X + width, min.Y));
-        draw.PathLineTo(new(min.X + width, min.Y + height * .7f));
-        draw.PathLineTo(new(min.X + width * .4f, min.Y + height));
-        draw.PathLineTo(new(min.X, min.Y + height));
-        draw.PathFillConvex(U32(Sun));
-        var vertices = (Vertex*)(void*)draw.VtxBuffer.Data;
-        for (int i = first; i < draw.VtxBuffer.Size; i++)
-        {
-            float t = Math.Clamp((vertices[i].Position.Y - min.Y) / Math.Max(1, height), 0, 1);
-            uint rgb = ImGui.ColorConvertFloat4ToU32(Vector4.Lerp(SunGradStart, SunGradEnd, t) with { W = 1 }) & 0x00FFFFFF;
-            vertices[i].Color = (vertices[i].Color & 0xFF000000) | rgb;
-        }
-    }
+        => draw.AddRectFilled(min, new(min.X + 2 * Scale, min.Y + height), U32(Accent), Scale);
 
-    /** Space a panel header leaves for its title notch. */
-    public static float HeaderIndent => 12 * Scale;
+    /** Space a panel header leaves before its title. */
+    public static float HeaderIndent => Space3;
+
+    /** The compact panel header height (22 px at 100 %). */
+    public static float PanelHeaderHeight => PanelHeaderSize * Scale;
 
     /**
-     * A panel header in the launcher's drawer style: hairline below the header window, sun notch, and the
-     * uppercase Chakra Petch title drawn where the next item (an editor combo with an empty preview) sits.
+     * A compact UE5 panel header: the header window reads as a Header strip with one active tab (Panel fill, 2 px
+     * Accent top line, joined to the body) holding the 11 px semibold title. The title is drawn where the next item
+     * (an editor combo with an empty preview) sits, clipped to itemWidth.
      */
     public static void PanelHeader(string title, float itemWidth)
     {
         var draw = ImGui.GetWindowDrawList();
         var windowMin = ImGui.GetWindowPos();
         var windowMax = windowMin + ImGui.GetWindowSize();
-        draw.AddLine(new(windowMin.X, windowMax.Y - 1), new(windowMax.X, windowMax.Y - 1), U32(Line), 1);
+        draw.AddRectFilled(windowMin, windowMax, U32(Header));
         var at = ImGui.GetCursorScreenPos();
+        bool font = PushFont(LabelFont);
+        float textWidth = ImGui.CalcTextSize(title).X;
+        float tabWidth = Math.Min(textWidth + Space4 * 2, Math.Max(Space4 * 2, itemWidth + HeaderIndent));
+        var tabMin = new Vector2(windowMin.X + Math.Max(0, at.X - windowMin.X - Space2), windowMin.Y);
+        var tabMax = new Vector2(tabMin.X + tabWidth, windowMax.Y);
+        draw.AddRectFilled(tabMin, tabMax, U32(Panel), RoundingTab * Scale, ImDrawFlags.RoundCornersTop);
+        draw.AddRectFilled(tabMin, new(tabMax.X, tabMin.Y + 2 * Scale), U32(Accent), RoundingTab * Scale, ImDrawFlags.RoundCornersTop);
         float frame = ImGui.GetFrameHeight();
-        TitleNotch(draw, new(at.X, at.Y + frame * .22f), frame * .56f);
-        bool font = PushFont(HeadingFont);
-        var textAt = new Vector2(at.X + HeaderIndent + ImGui.GetStyle().FramePadding.X, at.Y + (frame - ImGui.GetTextLineHeight()) / 2);
-        var clipMax = new Vector2(Math.Max(textAt.X, at.X + HeaderIndent + itemWidth - frame), at.Y + frame);
-        draw.PushClipRect(at, clipMax, true);
-        TrackedText(draw, textAt, U32(Text), title.ToUpperInvariant(), ImGui.GetFontSize() * .14f);
+        var textAt = new Vector2(tabMin.X + Space4, at.Y + (frame - ImGui.GetTextLineHeight()) / 2);
+        draw.PushClipRect(tabMin, tabMax, true);
+        draw.AddText(textAt, U32(TextStrong), title);
         draw.PopClipRect();
         if (font) ImGui.PopFont();
         ImGui.SetCursorScreenPos(new(at.X + HeaderIndent, at.Y));
+    }
+
+    /**
+     * One compact tab of a tabbed area header: Header fill and muted label when inactive, Panel fill with a 2 px Accent
+     * top line and strong label when active. hover in [0, 1] (an eased value) lifts an inactive tab toward Hover.
+     * accentLine false leaves the top line to the caller (area tabs draw one sprung line that slides between tabs);
+     * activeBlend in [0, 1], when given, eases the fill from the inactive fill to Panel instead of switching it.
+     */
+    public static void PanelTab(ImDrawListPtr draw, Vector2 min, Vector2 max, string label, bool active, float hover = 0,
+        bool accentLine = true, float activeBlend = -1)
+    {
+        float radius = RoundingTab * Scale;
+        var resting = Vector4.Lerp(Header, Hover, Math.Clamp(hover, 0, 1));
+        var fill = activeBlend >= 0 ? Vector4.Lerp(resting, Panel, Math.Clamp(activeBlend, 0, 1)) : active ? Panel : resting;
+        draw.AddRectFilled(min, max, U32(fill), radius, ImDrawFlags.RoundCornersTop);
+        if (active && accentLine) draw.AddRectFilled(min, new(max.X, min.Y + 2 * Scale), U32(Accent), radius, ImDrawFlags.RoundCornersTop);
+        bool font = PushFont(LabelFont);
+        var textAt = new Vector2(min.X + Space4, min.Y + (max.Y - min.Y - ImGui.GetTextLineHeight()) / 2);
+        draw.PushClipRect(min, max, true);
+        draw.AddText(textAt, U32(active ? TextStrong : Vector4.Lerp(Muted, Text, Math.Clamp(hover, 0, 1))), label);
+        draw.PopClipRect();
+        if (font) ImGui.PopFont();
     }
 
     /** Colours for a header combo that reads as a title; pop 3 after the combo (and its EndCombo). */
@@ -543,10 +553,13 @@ public static unsafe class SolTheme
         ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
     }
 
-    /** A viewport label chip: panel fill, line-2 border, sun border when the pointer is over it. */
+    /** A viewport label chip: translucent panel fill, highlight border, accent border when the pointer is over it. */
     public static void Chip(ImDrawListPtr draw, Vector2 min, Vector2 max, bool hovered)
-        => ChamferFrame(draw, min, max, CutSmall * .5f, U32(Alpha(Panel, .92f)), U32(hovered ? Sun : Line2));
+        => ChamferFrame(draw, min, max, 0, U32(Alpha(Panel, .92f)), U32(hovered ? Accent : BorderHi));
 
-    /** Icon tint: muted at rest, text on hover, sun when active. */
-    public static uint IconTint(bool active, bool hovered) => U32(active ? Sun : hovered ? Text : Muted);
+    /** Icon tint: text at rest, strong text on hover, accent when toggled on. */
+    public static uint IconTint(bool active, bool hovered) => U32(IconTintColor(active, hovered));
+
+    /** The icon tint as a colour, for easing between states. */
+    public static Vector4 IconTintColor(bool active, bool hovered) => active ? Accent : hovered ? TextStrong : Text;
 }

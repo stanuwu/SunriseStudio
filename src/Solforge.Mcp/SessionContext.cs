@@ -30,6 +30,7 @@ public static class SessionContext
         text.AppendLine($"- Solforge MCP server: {(facts.McpOn ? "on (server name solforge)" : "off; turn it on in Settings > AI")}");
         text.AppendLine();
         text.AppendLine("This is a snapshot from when the session started; call get_editor_state and get_context for the current state.");
+        text.AppendLine("If .solforge/HANDOFF.md exists, read it before continuing the work transferred from the previous AI console.");
         text.AppendLine();
         AppendSkills(text, facts.Skills);
         if (facts.Tools.Count > 0)
@@ -43,7 +44,7 @@ public static class SessionContext
             text.AppendLine();
             text.AppendLine(SolforgeTools.SelfServiceHint);
             text.AppendLine();
-            text.AppendLine("## Automatic mode");
+            text.AppendLine("## Long goals");
             text.AppendLine();
             text.AppendLine(SolforgeTools.AutomaticHint);
         }
@@ -67,7 +68,7 @@ public static class SessionContext
         text.AppendLine("## Solforge");
         text.AppendLine();
         text.AppendLine("This folder is a Solforge (Project Sol editor) project. .solforge/SESSION.md holds the session context; the solforge " +
-            "MCP tools read and edit what Solforge has open.");
+            "MCP tools read and edit what Solforge has open. If .solforge/HANDOFF.md exists, read it before continuing transferred work.");
         text.AppendLine();
         AppendSkills(text, skills);
         text.Append(End);

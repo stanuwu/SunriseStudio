@@ -212,7 +212,7 @@ internal sealed class TerminalView : IDisposable
         if (hovered) { scroll = Math.Max(0, scroll + (int)(ImGui.GetIO().MouseWheel * 3)); }
         if (Terminal is not { } terminal)
         {
-            draw.AddText(origin + new Vector2(8), SolTheme.U32(SolTheme.Dim), Failure ?? "Pick an engine and press Start.");
+            draw.AddText(origin + new Vector2(8), SolTheme.U32(SolTheme.Dim), Failure ?? "Press Start to run the Pi harness.");
             return;
         }
         ImGui.PushFont(font);

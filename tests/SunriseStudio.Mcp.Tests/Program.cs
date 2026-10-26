@@ -19,11 +19,15 @@ try
     ProjectPaths();
     checks.Add("project files resolve inside the project only; packages, manifest and build output are not editable");
     Configs();
-    checks.Add("client configs: .mcp.json, Cline, Antigravity desktop and CLI get the solforge stdio entry; an empty agy file merges without .bak; other servers survive; rewrite is idempotent");
+    checks.Add("client configs: .mcp.json, Cline, Antigravity desktop and CLI get the one sol aggregate entry; an empty agy file merges without .bak; other servers survive; rewrite is idempotent");
     CommandResolution();
     checks.Add("engine commands resolve on PATH + PATHEXT like cmd: .cmd beats npm's bare script, folders with spaces, missing is null");
     ClaudeLaunch();
     checks.Add("Claude launch: --mcp-config, --settings hook, --append-system-prompt and --add-dir survive argv parsing with spaced paths; agy gets the same --add-dir folders");
+    PiHarness();
+    checks.Add("Pi harness: discovers pi-cust.cmd from a configured path, a folder, the Desktop build or PATH; launches with Solforge's prompt and --continue; its MCP file holds one sol aggregate entry and no carried credentials");
+    AiConsoleAdapterChecks.Run(Path.Combine(scratch, "ai-consoles"));
+    checks.Add("AI consoles: Claude Code, Cline, Codex and OpenCode are registered; quota detection filters ordinary text; Codex/OpenCode receive idempotent project MCP config while user settings survive");
     Providers();
     checks.Add("providers: Cline 'Claude Code subscription' passes -P claude-code -m sonnet and strips Anthropic keys; ClinePass passes -P cline-pass; gateway sets only the base URL; agy has no presets");
     ResumeSessions();
@@ -49,6 +53,8 @@ try
     checks.Add("viewport feed: luminance grid, unchanged captures add no frame and skip encoding, change text says how much and where, ids, since, ring capacity, wait_for_change wakes and times out");
     ReferenceCheck();
     checks.Add("reference library: found above the project, index.json plus unindexed front matter, ranked search with tag filter, read by path or url with paging, half-written index and path escapes are safe");
+    await JobChecks();
+    checks.Add("per-call deadline: a slow tool replies pending with a job id instead of blocking, a repeat call attaches without rerunning, mcp_job waits for and returns the result, lists and cancels jobs");
     await StdioRoundTrip();
     checks.Add("initialize, tools/list (all tools with object schemas), tools/call, get_open_documents, mission, read_panel and reference tools round trip over the stdio shim");
     checks.Add("ui and viewport tools: list_ui_controls pages, ui_* resolve before asking and wait for approval, an approved ui_set_checked reaches the host, get_viewport_frame sends JPEG plus text and skips the image for a known id, wait_for_viewport_change times out, /viewport pages need the view key");
@@ -67,7 +73,7 @@ try
     await AutomaticChecks.Run(Path.Combine(scratch, "automatic"), new FixtureHost(dataProject));
     checks.Add("automatic mode: /automatic parsing, start prompt, idle nudge with progress and remaining, repeat and stuck nudges change tactic, prompt and busy screens wait, goal_complete, goal_blocked, stop, nudge and time limits, nesting guard, saved goal resume, and the automatic_*/goal_* tools with no approve click");
     await McpSetChecks.Run(Path.Combine(scratch, "mcp-set"), FindShim());
-    checks.Add("Sol MCP set: solforge, gemini and clinepass run the current shim; .mcp.json servers above the project and sol-testkit/tiger-mcp from the user's configs are carried; Claude's --mcp-config holds them all; agy and Cline merges keep the user's own servers and refresh old shim entries; run copy of solforge-mcp; missing exe/script checks and the initialize probe");
+    checks.Add("Sol MCP set: solforge, gemini and clinepass remain upstreams; .mcp.json servers above the project and sol-testkit/tiger-mcp from the user's configs are carried; every client gets one sol aggregate; the aggregate lists and routes upstream tools, resources, resource templates and prompts; run copy of solforge-mcp; missing exe/script checks and the initialize probe");
     await MultiAgentChecks.Run();
     checks.Add("multi-agent: sessions from initialize clientInfo and the shim pid header, dead and idle sessions dropped, open_map/close_map refuse another session's recent map unless force (expiry, same session, UI change, mission-only claim), builds and deploys say who started them, map=<tag> reads answer from a background view without touching the UI map, get_sessions");
     await CommandChecks.Run(Path.Combine(scratch, "commands"), new FixtureHost(dataProject));
@@ -177,28 +183,29 @@ void Configs()
     Expect(written.Select(item => item.Client).SequenceEqual(
         ["Claude Code", "Cline", "Cline (VS Code)", "Antigravity (desktop)", "Antigravity CLI"]), "clients");
     Expect(written[^1].Path == agy && !File.Exists(agy + ".bak"), "agy file without .bak");
-    var agyEntry = new JsonObject { ["args"] = new JsonArray("--project", project), ["command"] = shim, ["disabled"] = false };
-    Expect(JsonNode.DeepEquals(JsonNode.Parse(File.ReadAllText(agy))?["mcpServers"]?["solforge"], agyEntry), "agy entry");
+    var agyEntry = SolMcpServers.ClientEntry(project, shim, null);
+    agyEntry["disabled"] = false;
+    Expect(JsonNode.DeepEquals(JsonNode.Parse(File.ReadAllText(agy))?["mcpServers"]?["sol"], agyEntry), "agy entry");
     var claude = JsonNode.Parse(File.ReadAllText(Path.Combine(project, ".mcp.json")))!;
     Expect(claude["mcpServers"]?["other"]?["command"]?.ToString() == "x" && claude["keep"]?.GetValue<int>() == 1, "kept other entries");
-    var entry = claude["mcpServers"]?["solforge"];
+    var entry = claude["mcpServers"]?["sol"];
     Expect(entry?["command"]?.ToString() == shim && entry?["type"]?.ToString() == "stdio", "claude entry");
-    Expect(entry?["args"]?.AsArray().Select(node => node?.ToString()).SequenceEqual(["--project", project]) == true, "project scope");
+    Expect(entry?["args"]?.AsArray().Select(node => node?.ToString()).SequenceEqual(["--sol", "--project", project]) == true, "project scope");
     foreach (var item in written.Skip(1))
-        Expect(JsonNode.Parse(File.ReadAllText(item.Path))?["mcpServers"]?["solforge"]?["command"]?.ToString() == shim, item.Client);
+        Expect(JsonNode.Parse(File.ReadAllText(item.Path))?["mcpServers"]?["sol"]?["command"]?.ToString() == shim, item.Client);
     var stamps = written.Select(item => File.GetLastWriteTimeUtc(item.Path)).ToArray();
     McpClientConfigs.WriteAll(project, shim, home, appData);
     Expect(written.Select(item => File.GetLastWriteTimeUtc(item.Path)).SequenceEqual(stamps), "idempotent");
     // Whitespace counts as empty; a damaged file is kept as .bak and replaced.
-    var solforge = new JsonObject { ["command"] = shim };
+    var sol = new JsonObject { ["command"] = shim };
     string blank = Path.Combine(scratch, "blank.json"), damaged = Path.Combine(scratch, "damaged.json");
     File.WriteAllText(blank, "  \n");
-    McpClientConfigs.Merge(blank, solforge.DeepClone().AsObject());
-    Expect(!File.Exists(blank + ".bak") && JsonNode.Parse(File.ReadAllText(blank))?["mcpServers"]?["solforge"] is not null, "blank merges");
+    McpClientConfigs.Merge(blank, sol.DeepClone().AsObject());
+    Expect(!File.Exists(blank + ".bak") && JsonNode.Parse(File.ReadAllText(blank))?["mcpServers"]?["sol"] is not null, "blank merges");
     File.WriteAllText(damaged, "{not json");
-    McpClientConfigs.Merge(damaged, solforge.DeepClone().AsObject());
+    McpClientConfigs.Merge(damaged, sol.DeepClone().AsObject());
     Expect(File.Exists(damaged + ".bak") && File.ReadAllText(damaged + ".bak") == "{not json"
-        && JsonNode.Parse(File.ReadAllText(damaged))?["mcpServers"]?["solforge"] is not null, "damaged kept as .bak");
+        && JsonNode.Parse(File.ReadAllText(damaged))?["mcpServers"]?["sol"] is not null, "damaged kept as .bak");
 }
 
 async Task StdioRoundTrip()
@@ -245,7 +252,7 @@ async Task StdioRoundTrip()
     {
         var initialized = await Call(1, "initialize", new JsonObject { ["protocolVersion"] = "2025-06-18", ["capabilities"] = new JsonObject(),
             ["clientInfo"] = new JsonObject { ["name"] = "checks", ["version"] = "1" } });
-        Expect(initialized["serverInfo"]?["name"]?.ToString() == "solforge" && initialized["capabilities"]?["tools"] is not null, "initialize");
+        Expect(initialized["serverInfo"]?["name"]?.ToString() == "sol" && initialized["capabilities"]?["tools"] is not null, "initialize");
         await process.StandardInput.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
         var tools = (await Call(2, "tools/list"))["tools"]!.AsArray();
         string[] expected = ["get_context", "get_open_documents", "find_object", "get_object", "get_viewport_screenshot", "list_visible", "get_attention_log",
@@ -263,17 +270,17 @@ async Task StdioRoundTrip()
             "list_content_families", "list_content", "get_content", "validate_content", "get_subclass_layout", "check_subclass_build", "get_help",
             "create_content", "update_content", "delete_content", "export_content",
             "list_ui_controls", "ui_invoke", "ui_set_value", "ui_set_checked", "ui_select",
-            "get_viewport_frame", "get_viewport_frames", "wait_for_viewport_change", "read_screen_text", "get_viewport_stream", .. SolforgeTools.OwnerToolNames,
+            "get_viewport_frame", "get_viewport_frames", "wait_for_viewport_change", "read_screen_text", "get_viewport_stream",
             "get_player_position", "wait_for_player_near",
             "list_graph_node_types", "list_graphs", "get_graph", "compile_graph", "create_mission_script", "create_graph", "edit_graph", "apply_graph",
             "list_mission_lib_calls", "insert_mission_lib_call",
             "list_shaders", "get_shader", "list_animations", "get_animation", "list_audio", "get_audio", .. SolforgeTools.AutomaticTools,
             .. SolforgeTools.CommandToolNames, "mission_coverage", .. SolforgeTools.MissionHostToolNames, .. SolforgeTools.ItemSourceToolNames,
-            .. SolforgeTools.RetailToolNames];
+            .. SolforgeTools.RetailToolNames, McpJobs.ToolName];
 
         string[] actions = ["select_object", "focus_camera", "highlight", "open_file", "apply_project_edit", "open_map", "open_asset",
             "set_viewport_rendering", "edit_placement", "edit_bounds", "revert_object_edit", "apply_item_edit", "apply_vendor_edit",
-            "start_creation", "replace_texture_pixels", "build_project", "set_settings", "set_mod_details", "close_map", "close_asset", "open_project", "create_project", "close_project", "build_to_folder", "update_running_game", "reload_mission_scripts", "rename_function", "ui_invoke", "ui_set_value", "ui_set_checked", "ui_select", .. SolforgeTools.OwnerToolNames, "create_content", "update_content", "delete_content", "export_content", "create_mission_script", "create_graph", "edit_graph", "apply_graph", "insert_mission_lib_call", "revert_to_base", .. SolforgeTools.RetailActionTools, .. SolforgeTools.CommandToolNames.Where(name => name != "list_commands")];
+            "start_creation", "replace_texture_pixels", "build_project", "set_settings", "set_mod_details", "close_map", "close_asset", "open_project", "create_project", "close_project", "build_to_folder", "update_running_game", "reload_mission_scripts", "rename_function", "ui_invoke", "ui_set_value", "ui_set_checked", "ui_select", "create_content", "update_content", "delete_content", "export_content", "create_mission_script", "create_graph", "edit_graph", "apply_graph", "insert_mission_lib_call", "revert_to_base", .. SolforgeTools.RetailActionTools, .. SolforgeTools.CommandToolNames.Where(name => name != "list_commands")];
         Expect(tools.Select(tool => tool?["name"]?.ToString()).SequenceEqual(expected), "tool names: " + string.Join(",", tools.Select(tool => tool?["name"])));
         foreach (var tool in tools)
         {
@@ -395,7 +402,6 @@ async Task StdioRoundTrip()
         Expect(still["changed"]?.GetValue<bool>() == false && still["latest"]?.GetValue<long>() == 1, "wait_for_viewport_change times out on a still view");
         var streamInfo = Body(await Call(49, "tools/call", new JsonObject { ["name"] = "get_viewport_stream", ["arguments"] = new JsonObject() }));
         Expect(streamInfo["status"] is not null && streamInfo["fps"] is not null, "get_viewport_stream: " + streamInfo.ToJsonString());
-        OwnerChecks.StreamInfo(streamInfo.AsObject());
         // Player position.
         var player = Body(await Call(50, "tools/call", new JsonObject { ["name"] = "get_player_position", ["arguments"] = new JsonObject() }));
         Expect(player["source"]?.ToString() == "recorder" && host.Queries.Contains("get_player_position"), "get_player_position reaches the host");
@@ -463,10 +469,10 @@ async Task GenericClient(FixtureHost host, McpHttpServer server, string shim, st
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
         start.Environment["SOLFORGE_MCP_DISCOVERY"] = discovery;
         start.Environment["PYTHONIOENCODING"] = "utf-8";
-        Process? process;
-        try { process = Process.Start(start); }
+        Process process;
+        try { process = Process.Start(start)!; }
         catch (System.ComponentModel.Win32Exception) { Console.WriteLine("SKIP generic client: python is not on PATH"); return null; }
-        using var _ = process!;
+        using var _ = process;
         var output = process.StandardOutput.ReadToEndAsync();
         var errors = process.StandardError.ReadToEndAsync();
         if (!process.WaitForExit(60_000)) { process.Kill(); Expect(false, "generic client hung: " + await errors); }
@@ -478,7 +484,7 @@ async Task GenericClient(FixtureHost host, McpHttpServer server, string shim, st
     {
         if (result is null) continue;
         var tools = result["tools"]!.AsArray().Select(node => node!.ToString()).ToArray();
-        Expect(result["server"]?.ToString() == "solforge" && tools.Contains("ui_invoke") && tools.Contains("wait_for_viewport_change")
+        Expect(result["server"]?.ToString() == "sol" && tools.Contains("ui_invoke") && tools.Contains("wait_for_viewport_change")
             && result["schemas"]?.GetValue<bool>() == true, "generic client sees the tools: " + result.ToJsonString());
         Expect(result["mimes"]?[0]?.ToString() == "image/jpeg" && result["frameText"]?.ToString().Contains("\"frame\"", StringComparison.Ordinal) == true,
             "generic client gets the frame with its text");
@@ -630,7 +636,6 @@ static void ViewportFeedChecks()
     Expect(feed.WaitForChangeAsync(3, TimeSpan.Zero, CancellationToken.None).Result?.Id == 5, "an old id returns the newest frame at once");
     Expect(new ViewportFrame(1, DateTimeOffset.UnixEpoch, 1, 1, [0xFF, 0xD8, 0xFF], 1, "x").Jpeg.Length == 3
         && McpToolResult.MimeType([0xFF, 0xD8, 0xFF]) == "image/jpeg" && McpToolResult.MimeType([0x89, 0x50]) == "image/png", "image MIME types");
-    OwnerChecks.Feed(feed);
 }
 
 void CommandResolution()
@@ -660,9 +665,9 @@ void ClaudeLaunch()
     File.WriteAllText(Path.Combine(top, "10-Project Sol", "CLAUDE.md"), "rules");
     string shim = Path.Combine(scratch, "Solforge App", "solforge-mcp.exe");
     var files = EngineLaunch.WriteClaudeFiles(project, shim, Path.Combine(scratch, "mcp"));
-    var config = JsonNode.Parse(File.ReadAllText(files.McpConfig))!["mcpServers"]?["solforge"];
+    var config = JsonNode.Parse(File.ReadAllText(files.McpConfig))!["mcpServers"]?["sol"];
     Expect(config?["command"]?.ToString() == shim && config?["type"]?.ToString() == "stdio"
-        && config?["args"]?.AsArray().Select(node => node?.ToString()).SequenceEqual(["--project", project]) == true, "mcp-config entry");
+        && config?["args"]?.AsArray().Select(node => node?.ToString()).SequenceEqual(["--sol", "--project", project]) == true, "mcp-config entry");
     string? hook = JsonNode.Parse(File.ReadAllText(files.Settings))?["hooks"]?["UserPromptSubmit"]?[0]?["hooks"]?[0]?["command"]?.ToString();
     Expect(hook == $"\"{shim.Replace('\\', '/')}\" --context --project \"{project.Replace('\\', '/')}\"", "prompt hook: " + hook);
     // The scratch folder stands in for the user profile: ancestors stop below it.
@@ -686,6 +691,52 @@ void ClaudeLaunch()
     Expect(agy == $"--add-dir \"{game}\" --add-dir \"{ancestor}\"", "agy arguments: " + agy);
     Expect(Argv("agy.exe " + agy).Skip(1).SequenceEqual(["--add-dir", game, "--add-dir", ancestor]), "agy argv");
     Expect(EngineLaunch.AgyArguments([]).Length == 0, "agy without folders");
+}
+
+void PiHarness()
+{
+    string desktop = Path.Combine(scratch, "pi desktop");
+    string launcher = Path.Combine(desktop, "pi-cust", "pi-cust-harness-build", "build-1", "pi-cust.cmd");
+    Directory.CreateDirectory(Path.GetDirectoryName(launcher)!);
+    File.WriteAllText(launcher, "@echo off\r\n");
+    string? prior = Environment.GetEnvironmentVariable("PI_CUST_HARNESS");
+    string? priorPath = Environment.GetEnvironmentVariable("PI_CUST_HARNESS_PATH");
+    try
+    {
+        Environment.SetEnvironmentVariable("PI_CUST_HARNESS", null);
+        Environment.SetEnvironmentVariable("PI_CUST_HARNESS_PATH", null);
+        Expect(EngineCommands.FindPiHarness(launcher, "", desktop) == launcher, "configured launcher");
+        Expect(EngineCommands.FindPiHarness(Path.GetDirectoryName(launcher), "", Path.Combine(scratch, "none")) == launcher, "launcher folder");
+        Expect(EngineCommands.FindPiHarness(null, "", desktop) == launcher, "default Desktop build");
+        Expect(EngineCommands.FindPiHarness(null, "", Path.Combine(scratch, "none")) is null, "missing launcher");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("PI_CUST_HARNESS", prior);
+        Environment.SetEnvironmentVariable("PI_CUST_HARNESS_PATH", priorPath);
+    }
+    string fresh = EngineLaunch.PiArguments(false), resumed = EngineLaunch.PiArguments(true);
+    Expect(fresh.StartsWith("--append-system-prompt ", StringComparison.Ordinal) && !fresh.Contains("--continue", StringComparison.Ordinal)
+        && resumed.EndsWith("--continue", StringComparison.Ordinal), "Pi launch arguments");
+    Expect(Argv("pi-cust.cmd " + fresh).Skip(1).SequenceEqual(["--append-system-prompt", EngineLaunch.PiSystemPrompt]),
+        "Pi system prompt argv");
+    Expect(!EngineLaunch.PiSystemPrompt.Contains('"') && !EngineLaunch.PiSystemPrompt.Contains('%'), "Pi prompt is safe through cmd");
+    Expect(EngineLaunch.SkipPermissionsArguments("pi-cust").Length == 0, "Pi has no skip-permissions flag");
+    string folder = Path.Combine(scratch, "pi project");
+    var servers = new[]
+    {
+        new SolMcpServers.Server("solforge", @"C:\Solforge\solforge-mcp.exe", ["--project", folder], new JsonObject(), true, "Solforge"),
+        new("gemini", @"C:\Solforge\solforge-mcp.exe", ["--gemini"], new JsonObject(), true, "Solforge"),
+        new("mine", "mine.exe", [], new JsonObject { ["TOKEN"] = "secret" }, false, ".mcp.json")
+    };
+    McpClientConfigs.WritePi(folder, servers);
+    string piText = File.ReadAllText(Path.Combine(folder, ".pi", "mcp.json"));
+    var pi = JsonNode.Parse(piText)!["mcpServers"]!.AsObject();
+    var piArgs = pi["sol"]?["args"]?.AsArray().Select(node => node?.ToString()).ToArray() ?? [];
+    Expect(pi.Count == 1 && pi["sol"]?["type"]?.ToString() == "stdio" && pi["sol"]?["exposure"]?.ToString() == "direct"
+        && pi["sol"]?["command"]?.ToString() == @"C:\Solforge\solforge-mcp.exe"
+        && piArgs.Contains("--sol") && piArgs.Contains("--project") && piArgs.Contains("--upstreams")
+        && pi["gemini"] is null && pi["mine"] is null && !piText.Contains("secret", StringComparison.Ordinal), "Pi MCP config");
 }
 
 void Providers()
@@ -738,10 +789,10 @@ void DualEngines()
     Expect(JsonNode.Parse(File.ReadAllText(plain.McpConfig))!["mcpServers"]?[AgyDelegate.ServerName] is null
         && !EngineLaunch.ClaudeArguments(plain, []).Contains("ask_gemini"), "no gemini unless asked");
     var both = EngineLaunch.WriteClaudeFiles(project, shim, Path.Combine(scratch, "dual-mcp-b"), gemini: true);
-    var gemini = JsonNode.Parse(File.ReadAllText(both.McpConfig))!["mcpServers"]?[AgyDelegate.ServerName];
-    Expect(gemini?["command"]?.ToString() == shim && gemini?["args"]?[0]?.ToString() == "--gemini"
+    var bothServers = JsonNode.Parse(File.ReadAllText(both.McpConfig))!["mcpServers"]!.AsObject();
+    Expect(bothServers.Count == 1 && bothServers["sol"] is not null && both.Gemini
         && Argv("claude.exe " + EngineLaunch.ClaudeArguments(both, [])).Contains(EngineLaunch.SystemPrompt + " " + EngineLaunch.GeminiPrompt),
-        "gemini server + prompt");
+        "gemini in sol + prompt");
     Expect(!EngineLaunch.GeminiPrompt.Contains('"') && !EngineLaunch.GeminiPrompt.Contains('%')
         && !EngineLaunch.HandoffPrompt.Contains('"') && !EngineLaunch.HandoffPrompt.Contains('%'), "prompts are safe through cmd");
     Expect(Argv("claude.exe " + EngineLaunch.WithPrompt("claude", "--add-dir x", EngineLaunch.HandoffPrompt)).Skip(1)
@@ -843,11 +894,10 @@ void ClinePassEngines()
     Expect(JsonNode.Parse(File.ReadAllText(plain.McpConfig))!["mcpServers"]?[ClineDelegate.ServerName] is null
         && !EngineLaunch.ClaudeArguments(plain, []).Contains("ask_clinepass"), "no clinepass unless asked");
     var both = EngineLaunch.WriteClaudeFiles(project, shim, Path.Combine(scratch, "clinepass-mcp-b"), gemini: true, clinePass: true);
-    var servers = JsonNode.Parse(File.ReadAllText(both.McpConfig))!["mcpServers"]!;
-    Expect(servers[ClineDelegate.ServerName]?["command"]?.ToString() == shim && servers[ClineDelegate.ServerName]?["args"]?[0]?.ToString() == "--clinepass"
-        && servers[AgyDelegate.ServerName] is not null
+    var servers = JsonNode.Parse(File.ReadAllText(both.McpConfig))!["mcpServers"]!.AsObject();
+    Expect(servers.Count == 1 && servers["sol"] is not null && both.Gemini && both.ClinePass
         && Argv("claude.exe " + EngineLaunch.ClaudeArguments(both, [])).Contains(
-            EngineLaunch.SystemPrompt + " " + EngineLaunch.GeminiPrompt + " " + EngineLaunch.ClinePassPrompt), "clinepass server + prompt");
+            EngineLaunch.SystemPrompt + " " + EngineLaunch.GeminiPrompt + " " + EngineLaunch.ClinePassPrompt), "clinepass in sol + prompt");
     Expect(!EngineLaunch.ClinePassPrompt.Contains('"') && !EngineLaunch.ClinePassPrompt.Contains('%'), "clinepass prompt is safe through cmd");
 
     // "Claude Code on ClinePass": no Claude login reaches the run; the editor adds the translator's URL and local token.
@@ -1323,6 +1373,57 @@ void ReferenceCheck()
     Expect(ReferenceLibrary.Read(folder, "../../secret.md", null, 1, 10) is null, "path escape refused");
     File.WriteAllText(Path.Combine(folder, "index.json"), "[{\"path\": \"unreal/repl");
     Expect(ReferenceLibrary.Load(folder).Count == 2, "half-written index.json");
+}
+
+static async Task JobChecks()
+{
+    int runs = 0;
+    var gate = new TaskCompletionSource();
+    var slow = new McpTool("slow_tool", "waits for the gate", McpJson.Schema(("x", "integer", "anything", false)), false, async (args, cancel) =>
+    {
+        Interlocked.Increment(ref runs);
+        McpJobs.Report("halfway");
+        await gate.Task.WaitAsync(cancel);
+        return McpToolResult.Text("done " + McpJson.Int(args, "x", 0));
+    });
+    var forever = new McpTool("forever_tool", "never ends unless cancelled", McpJson.Schema(), false, async (_, cancel) =>
+    {
+        await Task.Delay(Timeout.Infinite, cancel);
+        return McpToolResult.Text("unreachable");
+    });
+    var jobs = new McpJobs { Deadline = TimeSpan.FromMilliseconds(300) };
+    var dispatcher = new McpDispatcher([slow, forever], "0.1.0", "checks", jobs);
+    Expect(dispatcher.Tools.Select(tool => tool.Name).SequenceEqual(["slow_tool", "forever_tool", McpJobs.ToolName]), "mcp_job is listed last");
+    async Task<JsonNode> Call(string name, JsonObject arguments)
+    {
+        string? reply = await dispatcher.HandleAsync(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = "tools/call",
+            ["params"] = new JsonObject { ["name"] = name, ["arguments"] = arguments } }.ToJsonString(), CancellationToken.None);
+        return JsonNode.Parse(reply!)!["result"]!;
+    }
+    static string Text(JsonNode result) => result["content"]![0]!["text"]!.ToString();
+    var clock = Stopwatch.StartNew();
+    var first = JsonNode.Parse(Text(await Call("slow_tool", new JsonObject { ["x"] = 7 })))!;
+    Expect(clock.Elapsed < TimeSpan.FromSeconds(10) && first["pending"]?.GetValue<bool>() == true && first["job"]?.ToString() is { Length: > 0 }
+        && first["progress"]?.ToString() == "halfway", "pending reply: " + first.ToJsonString());
+    string job = first["job"]!.ToString();
+    var again = JsonNode.Parse(Text(await Call("slow_tool", new JsonObject { ["x"] = 7 })))!;
+    Expect(again["job"]?.ToString() == job && again["attached"]?.GetValue<bool>() == true && runs == 1, "a repeat attaches: " + again.ToJsonString());
+    var listed = JsonNode.Parse(Text(await Call(McpJobs.ToolName, new JsonObject())))!;
+    Expect(listed["jobs"]?.AsArray().Any(row => row?["job"]?.ToString() == job && row["state"]?.ToString() == "running") == true, "jobs listed: " + listed.ToJsonString());
+    gate.SetResult();
+    var done = await Call(McpJobs.ToolName, new JsonObject { ["job"] = job, ["wait"] = 5 });
+    Expect(Text(done) == "done 7" && done["isError"]?.GetValue<bool>() == false, "mcp_job returns the tool's result: " + done.ToJsonString());
+    var fresh = await Call("slow_tool", new JsonObject { ["x"] = 7 });
+    Expect(Text(fresh) == "done 7" && runs == 2, "after collection a repeat runs again");
+    var quick = await Call("slow_tool", new JsonObject { ["x"] = 8 });
+    Expect(Text(quick) == "done 8", "a call inside the deadline answers directly");
+    var stuck = JsonNode.Parse(Text(await Call("forever_tool", new JsonObject())))!;
+    Expect(stuck["pending"]?.GetValue<bool>() == true, "forever_tool goes pending");
+    await Call(McpJobs.ToolName, new JsonObject { ["job"] = stuck["job"]!.ToString(), ["cancel"] = true });
+    var cancelled = await Call(McpJobs.ToolName, new JsonObject { ["job"] = stuck["job"]!.ToString(), ["wait"] = 5 });
+    Expect(cancelled["isError"]?.GetValue<bool>() == true && Text(cancelled).Contains("cancelled", StringComparison.Ordinal), "cancel stops the job: " + cancelled.ToJsonString());
+    Expect(jobs.DeadlineFor(new JsonObject { ["timeout"] = 30 }) == TimeSpan.FromSeconds(45) && jobs.DeadlineFor(new JsonObject()) == jobs.Deadline
+        && jobs.DeadlineFor(new JsonObject { ["timeout"] = 9999 }) == jobs.MaximumDeadline, "a tool's own timeout extends the deadline, capped");
 }
 
 /** A small EDZ-like mission and the Lua folders that name its slots. */

@@ -124,7 +124,7 @@ public static class EditorCommands
         // Window
         new("window.layout", "Window > Layouts", CommandInput.Choice, "Apply a layout preset.", null, Layouts),
         new("window.asset_browser", "Window > Asset browser drawer", CommandInput.None, "Toggle the asset browser drawer.", "show_panel"),
-        new("window.ai_workspace", "Window > AI workspace", CommandInput.None, "Show the AI workspace.", "show_panel"),
+        new("window.ai_workspace", "Window > Solforge AI panel", CommandInput.None, "Show the Solforge AI panel (requests, edits, context); never launches the Solforge AI app.", "show_panel"),
         new("window.content_editors", "Window > Content editors", CommandInput.None, "Show the Content editors window.", "show_panel"),
         new("window.panel", "Window > Panels", CommandInput.Choice, "Show a dock panel by its title.", "show_panel",
             ["Workspace", "Asset browser", "Inspector", "Project changes", "Object tree", "Graph", "AI", "Local Server"]),

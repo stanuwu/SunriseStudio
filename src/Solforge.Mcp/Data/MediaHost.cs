@@ -23,6 +23,12 @@ public interface ISolforgeMediaHost
     Task<JsonObject?> DescribeAudio(uint tag, CancellationToken cancel);
     /** Decodes one media id (or every media of the tag when null) to PCM16 WAV in folder; {files, skipped}. */
     Task<JsonObject?> ExportAudioWav(uint tag, uint? media, string folder, CancellationToken cancel);
+    /**
+     * Decodes raw Wwise media bytes that are not in a Sol package (a retail dump payload) to PCM16 WAV in
+     * folder; {files, codec, sample_rate, channels, seconds}. Throws InvalidDataException with a readable
+     * message when the bytes are not a decodable Wwise stream.
+     */
+    JsonObject? ExportWwiseBytes(byte[] bytes, uint tag, string folder, CancellationToken cancel);
     /** USM container facts: file name, streams with codec, size, resolution, frame rate, audio format. */
     Task<JsonObject?> DescribeVideo(uint tag, CancellationToken cancel);
     /** Demuxes the USM: MPEG video (.m2v), audio tracks (.adx and decoded .wav), subtitles (.sbt); {files}. */

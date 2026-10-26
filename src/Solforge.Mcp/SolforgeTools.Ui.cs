@@ -101,6 +101,7 @@ public static partial class SolforgeTools
                 ("fps", "integer", "Capture rate (1-30, default 8)", false)),
             async (args, cancel) =>
             {
+                if (host.CredentialDocumentVisible) return McpToolResult.Error(CaptureRefusal);
                 var feed = host.Viewport;
                 Tune(feed, args);
                 var frame = feed.Latest ?? await feed.WaitForChangeAsync(0, TimeSpan.FromSeconds(3), cancel).ConfigureAwait(false);
@@ -117,6 +118,7 @@ public static partial class SolforgeTools
                 ("max", "integer", "Most frames (default 4, max 10)", false), ("image", "boolean", "Include the JPEGs (default true)", false)),
             (args, _) =>
             {
+                if (host.CredentialDocumentVisible) return Task.FromResult(McpToolResult.Error(CaptureRefusal));
                 var feed = host.Viewport;
                 feed.Want();
                 var frames = feed.Since(McpJson.Int(args, "since", 0), Math.Clamp(McpJson.Int(args, "max", 4), 1, 10));
@@ -134,6 +136,7 @@ public static partial class SolforgeTools
                 ("ocr", "boolean", "Also read the text on screen with Windows OCR (lines with [x, y, w, h] boxes in frame pixels; about 0.3-1 s). read_screen_text reads a region or the full-size screenshot", false)),
             async (args, cancel) =>
             {
+                if (host.CredentialDocumentVisible) return McpToolResult.Error(CaptureRefusal);
                 var feed = host.Viewport;
                 feed.Want();
                 long since = args["since"] is JsonValue ? McpJson.Int(args, "since", 0) : feed.Latest?.Id ?? 0;
@@ -162,6 +165,7 @@ public static partial class SolforgeTools
             regionSchema,
             async (args, cancel) =>
             {
+                if (host.CredentialDocumentVisible) return McpToolResult.Error(CaptureRefusal);
                 var region = ScreenOcr.ParseRegion(args["region"], out string? bad);
                 if (bad is not null) return McpToolResult.Error(bad);
                 byte[]? image;
@@ -206,39 +210,18 @@ public static partial class SolforgeTools
                     ["local"] = feed.LocalUrl,
                     ["fps"] = feed.Fps, ["width"] = feed.MaxWidth, ["quality"] = feed.Quality, ["status"] = feed.Status, ["latest"] = feed.Latest?.Id
                 };
-                OwnerStreamInfo(feed, info);
                 return Task.FromResult(McpToolResult.Json(info));
             });
-        var owner = new List<McpTool>();
-        OwnerUiTools(host, owner);
-        foreach (var tool in owner) yield return tool;
     }
 
-    /** Owner builds only (RELEASING.md): extra fields for get_viewport_stream; public builds add none. */
-    static partial void OwnerStreamInfo(ViewportFeed feed, JsonObject info);
-    /** Owner builds only: extra UI tools, listed right after get_viewport_stream; public builds add none. */
-    static partial void OwnerUiTools(ISolforgeHost host, List<McpTool> tools);
-    /** Owner builds only: the names OwnerUiTools adds, in order (for the tool-name checks). */
-    static partial void OwnerUiToolNames(List<string> names);
-    /** Owner builds only: a lower width cap while an owner-only stream runs. */
-    static partial void OwnerWidthCap(ViewportFeed feed, ref int cap);
+    /** UI-UE5 §5.3: captures are refused while the configured credential file is the active or a visible document. */
+    private const string CaptureRefusal = Solforge.Harness.Credentials.CredentialGuard.Refusal + " Switch away from it before a capture.";
 
-    /** The tool names only owner builds add after get_viewport_stream; empty in public builds. */
-    public static string[] OwnerToolNames
-    {
-        get { var names = new List<string>(); OwnerUiToolNames(names); return [.. names]; }
-    }
-
-    /** Applies the width, quality and fps arguments to the viewport feed (width is capped while streaming). */
+    /** Applies the width, quality and fps arguments to the viewport feed. */
     private static void Tune(ViewportFeed feed, JsonObject args)
     {
         feed.Want();
-        if (args["width"] is JsonValue)
-        {
-            int cap = 1920;
-            OwnerWidthCap(feed, ref cap);
-            feed.MaxWidth = Math.Min(McpJson.Int(args, "width", feed.MaxWidth), cap);
-        }
+        if (args["width"] is JsonValue) feed.MaxWidth = McpJson.Int(args, "width", feed.MaxWidth);
         if (args["quality"] is JsonValue) feed.Quality = McpJson.Int(args, "quality", feed.Quality);
         if (args["fps"] is JsonValue) feed.Fps = McpJson.Int(args, "fps", feed.Fps);
     }

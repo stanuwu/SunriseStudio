@@ -10,21 +10,32 @@ public enum StudioIcon
     Back, Forward, Expand, Collapse, Folder, Map, Cube, Pin, Light, Group,
     Play, Pause, Reset, Loop, Import, Export, Build, Plus, Open, Shader, Player, PopOut, PopIn,
     Select, Move, Rotate, Scale,
-    Spark, Warning, Remove, Up, Down, Undo, Redo, Check, Copy, Edit, Detail, Gear
+    Spark, Warning, Remove, Up, Down, Undo, Redo, Check, Copy, Edit, Detail, Gear,
+    // UE5 layout (docs/UI-UE5.md §2.4); appended so existing values keep their numbers.
+    Place, Outliner, Details, ContentBrowser, OutputLog, Sparkle, ChevronDown, ChevronRight
 }
 
 /** Vector icons share the current font scale and need no external font or texture. */
 public static class ImGuiIcons
 {
-    /** Disabled actions retain their tooltips and inherit the current UI opacity. */
+    /**
+     * Disabled actions retain their tooltips and inherit the current UI opacity. The fill and the icon tint ease
+     * between rest, hover and pressed (UiMotion), using the item's state from the previous frame.
+     */
     public static bool Button(string id, StudioIcon icon, string tooltip, bool active = false, float size = 0)
     {
         if (size <= 0) size = ImGui.GetFrameHeight();
-        if (active) ImGui.PushStyleColor(ImGuiCol.Button, ImGui.GetStyle().Colors[(int)ImGuiCol.Header]);
+        var colors = ImGui.GetStyle().Colors;
+        uint key = ImGui.GetID("##" + id);
+        // Toggled on: a faint accent wash under an accent glyph.
+        var rest = active ? SolTheme.Alpha(SolTheme.Accent, .18f) : colors[(int)ImGuiCol.Button];
+        var hover = active ? SolTheme.Alpha(SolTheme.Accent, .28f) : colors[(int)ImGuiCol.ButtonHovered];
+        UiMotion.PushButtonColors(key, rest, hover, colors[(int)ImGuiCol.ButtonActive]);
         bool clicked = UiAuto.IconButton(id, tooltip, new(size));
-        if (active) ImGui.PopStyleColor();
+        UiMotion.PopButtonColors(key);
+        var tint = UiMotion.EaseColor(UiMotion.Mix(key, 0x1C0u), SolTheme.IconTintColor(active, ImGui.IsItemHovered()), 30f);
         Draw(ImGui.GetWindowDrawList(), icon, ImGui.GetItemRectMin() + new Vector2(size * .22f),
-            size * .56f, SolTheme.IconTint(active, ImGui.IsItemHovered()));
+            size * .56f, SolTheme.U32(tint));
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
         { ImGui.BeginTooltip(); ImGui.TextUnformatted(tooltip); ImGui.EndTooltip(); }
         return clicked;
@@ -41,7 +52,8 @@ public static class ImGuiIcons
     /** Coordinates use a unit square so every control draws the same stroke weight. */
     public static void Draw(ImDrawListPtr draw, StudioIcon icon, Vector2 origin, float size, uint color)
     {
-        float stroke = Math.Max(1, size * .085f);
+        // 1.5 px at a 16 px icon.
+        float stroke = Math.Max(1, size * .094f);
         Vector2 P(float x, float y) => origin + new Vector2(x, y) * size;
         void Line(float x1, float y1, float x2, float y2) => draw.AddLine(P(x1, y1), P(x2, y2), color, stroke);
         void Rect(float x1, float y1, float x2, float y2) => draw.AddRect(P(x1, y1), P(x2, y2), color, 0, ImDrawFlags.None, stroke);
@@ -235,6 +247,50 @@ public static class ImGuiIcons
                     float angle = tooth * MathF.PI / 4, cos = MathF.Cos(angle), sin = MathF.Sin(angle);
                     Line(.5f + cos * .3f, .5f + sin * .3f, .5f + cos * .46f, .5f + sin * .46f);
                 }
+                break;
+            case StudioIcon.Place: // a cube with a plus: add an actor
+                Line(.4f, .1f, .8f, .3f); Line(.8f, .3f, .8f, .75f); Line(.8f, .75f, .4f, .95f);
+                Line(.4f, .95f, 0, .75f); Line(0, .75f, 0, .3f); Line(0, .3f, .4f, .1f);
+                Line(0, .3f, .4f, .5f); Line(.8f, .3f, .4f, .5f); Line(.4f, .5f, .4f, .95f);
+                Line(.85f, 0, .85f, .3f); Line(.7f, .15f, 1, .15f);
+                break;
+            case StudioIcon.Outliner: // an indented list
+                Dot(.08f, .15f); Line(.25f, .15f, 1, .15f);
+                Dot(.3f, .5f); Line(.47f, .5f, 1, .5f);
+                Dot(.3f, .85f); Line(.47f, .85f, 1, .85f);
+                Line(.08f, .25f, .08f, .85f); Line(.08f, .5f, .18f, .5f); Line(.08f, .85f, .18f, .85f);
+                break;
+            case StudioIcon.Details: // a property sheet: label column and value bars
+                Rect(0, .05f, 1, .95f);
+                Line(.35f, .05f, .35f, .95f);
+                Line(0, .35f, 1, .35f); Line(0, .65f, 1, .65f);
+                Line(.5f, .2f, .85f, .2f); Line(.5f, .5f, .75f, .5f); Line(.5f, .8f, .9f, .8f);
+                break;
+            case StudioIcon.ContentBrowser: // a folder holding a tile grid
+                Line(0, .25f, 0, .95f); Line(0, .95f, 1, .95f); Line(1, .95f, 1, .25f);
+                Line(0, .25f, 0, .08f); Line(0, .08f, .38f, .08f); Line(.38f, .08f, .52f, .25f); Line(.52f, .25f, 1, .25f);
+                Rect(.2f, .42f, .45f, .78f); Rect(.55f, .42f, .8f, .78f);
+                break;
+            case StudioIcon.OutputLog: // a terminal window with log lines
+                Rect(0, .05f, 1, .95f);
+                Line(.15f, .3f, .3f, .42f); Line(.3f, .42f, .15f, .54f);
+                Line(.4f, .54f, .7f, .54f); Line(.15f, .75f, .85f, .75f);
+                break;
+            case StudioIcon.Sparkle: // a four-point star with a small companion: Solforge AI
+                draw.PathLineTo(P(.42f, 0)); draw.PathLineTo(P(.52f, .32f)); draw.PathLineTo(P(.84f, .42f));
+                draw.PathLineTo(P(.52f, .52f)); draw.PathLineTo(P(.42f, .84f)); draw.PathLineTo(P(.32f, .52f));
+                draw.PathLineTo(P(0, .42f)); draw.PathLineTo(P(.32f, .32f));
+                draw.PathFillConcave(color);
+                draw.PathLineTo(P(.82f, .62f)); draw.PathLineTo(P(.87f, .77f)); draw.PathLineTo(P(1, .82f));
+                draw.PathLineTo(P(.87f, .87f)); draw.PathLineTo(P(.82f, 1)); draw.PathLineTo(P(.77f, .87f));
+                draw.PathLineTo(P(.64f, .82f)); draw.PathLineTo(P(.77f, .77f));
+                draw.PathFillConcave(color);
+                break;
+            case StudioIcon.ChevronDown:
+                Line(.15f, .35f, .5f, .7f); Line(.5f, .7f, .85f, .35f);
+                break;
+            case StudioIcon.ChevronRight:
+                Line(.35f, .15f, .7f, .5f); Line(.7f, .5f, .35f, .85f);
                 break;
         }
     }

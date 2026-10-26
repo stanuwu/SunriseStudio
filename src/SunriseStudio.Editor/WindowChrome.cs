@@ -1,13 +1,15 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
 using ImGuiNET;
+using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
 /**
  * A themed frame for one window. The window keeps its sizing styles, so Windows still snaps,
  * animates and shadows it; the client area covers the whole window and the hit test returns the
- * resize edges and the caption.
+ * resize edges and the caption. UE5 chrome: the caption is the empty part of the 30 px menu bar (CaptionHeight), the
+ * window buttons fill that row's height at its right end, and their hover fill eases in (UiMotion).
  */
 internal sealed class WindowChrome(Form form)
 {
@@ -151,9 +153,12 @@ internal sealed class WindowChrome(Form form)
                         _ => close ?? form.Close
                     });
             }
-            if (hovered)
-                draw.AddRectFilled(min, max, button == 2 ? ImGui.GetColorU32(new Vector4(0.77f, 0.17f, 0.11f, 1))
-                    : ImGui.GetColorU32(ImGuiCol.ButtonHovered));
+            // The hover fill fades in and out; close turns the Windows red, the others the Hover token.
+            float fade = UiMotion.Ease(ImGui.GetItemID(), hovered ? 1 : 0, 30f);
+            if (fade > .01f)
+                draw.AddRectFilled(min, max, ImGui.GetColorU32(SolTheme.Alpha(button == 2 ? new Vector4(0.77f, 0.17f, 0.11f, 1) : SolTheme.Hover, fade)));
+            if (button == 2 && fade > .5f) glyph = ImGui.GetColorU32(SolTheme.TextStrong);
+            else glyph = ImGui.GetColorU32(ImGuiCol.Text);
             float half = 5 * Scale;
             switch (button)
             {

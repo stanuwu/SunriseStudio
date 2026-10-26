@@ -20,20 +20,13 @@ public sealed partial class StudioForm
     private int aiStreamBusy;
     private bool aiStreamIdle = true;
 
-    /** Owner builds only (RELEASING.md): keep capturing while paused for a stream the user started; public builds never do. */
-    partial void OwnerKeepsStreaming(ViewportFeed feed, ref bool keep);
-
     /** Copies the viewport region for the live feed when someone is watching. */
     private void StreamAiViewport()
     {
         if (aiHost is not { } host || renderer is null) return;
         var feed = host.Viewport;
         feed.Paused = aiPaused;
-        // In owner builds a stream the user started (OwnerKeepsStreaming) keeps capturing while AI context publishing
-        // is paused; the AI's frame tools and the local /viewport page still refuse (they check Paused).
-        bool keep = false;
-        if (aiPaused) OwnerKeepsStreaming(feed, ref keep);
-        bool blocked = aiPaused && !keep;
+        bool blocked = aiPaused;
         if (blocked || !feed.Wanted)
         {
             if (blocked && feed.Latest is not null) feed.Clear();

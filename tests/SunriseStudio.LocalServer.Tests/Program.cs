@@ -62,6 +62,7 @@ static void Paths()
     Expect(Shell.Quote("it's") == "'it'\\''s'", "quote");
 }
 
+#pragma warning disable CS0162 // the top-level sample constants below sit after the return; they are compile-time only
 const string StatusSample = """
     PID=15662
     ETIME=10165

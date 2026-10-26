@@ -9,11 +9,13 @@ namespace SunriseStudio.Editor;
 /**
  * The Project Sol launcher's backdrop (sol-launcher/src/sol.css .app and .emblem, main.ts startAshes) behind
  * the loading card: bg-2 to bg, a warm and a cool glow, star grain, rising ash and the emblem. Ash moves only
- * while the backdrop is drawn, and everything stands still when Windows turns animation effects off.
+ * while the backdrop is drawn, and everything stands still when Windows turns animation effects off or Reduce motion
+ * is on. UE5 edition: the field is the neutral grey palette; the brand orange (SolTheme.Brand) stays for the emblem,
+ * its glow and the embers only.
  */
 internal sealed class LoadingBackdrop : IDisposable
 {
-    // sol.css .app's cool corner glow, rgba(80, 110, 255, .06); the palette has no blue.
+    // sol.css .app's cool corner glow, rgba(80, 110, 255, .06).
     private static readonly Vector4 Cool = new(80 / 255f, 110 / 255f, 1, 1);
     // .app::after: each grain dot's alpha; the last is the 1.5 px dot. The layer itself is at 35%.
     private static readonly float[] Grain = [.53f, .4f, .33f, .27f, .4f, .27f, .2f, .33f];
@@ -77,15 +79,15 @@ internal sealed class LoadingBackdrop : IDisposable
     /** Fills a window at the origin; size is in pixels and scale is the DPI scale. */
     public void Draw(ImDrawListPtr draw, Vector2 size, float scale, double now)
     {
-        bool still = ReducedMotion;
+        bool still = ReducedMotion || UiMotion.ReduceMotion;
         float dt = last < 0 ? 0 : (float)Math.Clamp(now - last, 0, .05);
         last = now;
         draw.PushClipRectFullScreen();
         uint top = Rgba(SolTheme.Bg2, 1), bottom = Rgba(SolTheme.Bg, 1);
         draw.AddRectFilledMultiColor(Vector2.Zero, size, top, top, bottom, bottom);
         // The launcher's glows are 1200 x 700 and 900 x 600 px, clear at 60%, in a 1200 x 740 window; here they follow the window.
-        var warm = Vector4.Lerp(SolTheme.Sun2, SolTheme.Sun, .3f);
-        Radial(draw, size * new Vector2(.78f, .42f), size * new Vector2(.6f, .57f), [(0, Rgba(warm, .1f)), (1, Rgba(warm, 0))]);
+        var warm = Vector4.Lerp(SolTheme.Brand2, SolTheme.Brand, .3f);
+        Radial(draw, size * new Vector2(.78f, .42f), size * new Vector2(.6f, .57f), [(0, Rgba(warm, .07f)), (1, Rgba(warm, 0))]);
         Radial(draw, new(0, size.Y), size * new Vector2(.45f, .49f), [(0, Rgba(Cool, .06f)), (1, Rgba(Cool, 0))]);
         // Eight grain dots per half launcher window, at fixed places.
         int count = Math.Clamp((int)(Grain.Length * size.X * size.Y / (600 * 370 * scale * scale)), Grain.Length, MaxStars);
@@ -121,9 +123,9 @@ internal sealed class LoadingBackdrop : IDisposable
             if (f.Ember)
             {
                 float flicker = .7f + .3f * MathF.Sin(f.Age * 8 + f.Phase);
-                var hue = Vector4.Lerp(SolTheme.Sun2, SolTheme.Sun, f.Tone);
+                var hue = Vector4.Lerp(SolTheme.Brand2, SolTheme.Brand, f.Tone);
                 draw.AddCircleFilled(center, f.Size * 2.6f * scale, Rgba(hue, fade * flicker * .18f), 12);
-                color = Rgba(Vector4.Lerp(hue, SolTheme.SunGradStart, .35f), fade * flicker * .9f);
+                color = Rgba(Vector4.Lerp(hue, SolTheme.BrandEdge, .35f), fade * flicker * .9f);
             }
             else color = Rgba(Vector4.Lerp(SolTheme.Dim, SolTheme.Text, f.Tone * .75f), fade * .55f);
             float sine = MathF.Sin(f.Angle), cosine = MathF.Cos(f.Angle);
@@ -171,12 +173,12 @@ internal sealed class LoadingBackdrop : IDisposable
         float breath = (1 - MathF.Cos((float)(now % 6 / 6) * MathF.Tau)) / 2, glow = opacity * (1 - .25f * breath);
         // inset -32% with a farthest-corner circle puts the 40% and 68% stops at .46 and .79 of the emblem.
         Radial(draw, center, new Vector2(edge * .79f * (1 - .03f * breath)),
-            [(0, Rgba(SolTheme.Sun, .3f * glow)), (.4f / .68f, Rgba(SolTheme.Sun2, .1f * glow)), (1, Rgba(SolTheme.Sun2, 0))]);
+            [(0, Rgba(SolTheme.Brand, .3f * glow)), (.4f / .68f, Rgba(SolTheme.Brand2, .1f * glow)), (1, Rgba(SolTheme.Brand2, 0))]);
         // emblem-disc.png is a flat disc, 0.389 of the art and 95% opaque.
         draw.AddCircleFilled(center, edge * .389f, Rgba(SolTheme.Bg, .95f * opacity), 96);
         var pad = new Vector2(edge * haloPad);
         draw.AddImage(halo.ImGuiId, min - pad, min + new Vector2(edge) + pad, Vector2.Zero, Vector2.One,
-            Rgba(Vector4.Lerp(SolTheme.Sun2, SolTheme.Sun, .5f), .45f * opacity));
+            Rgba(Vector4.Lerp(SolTheme.Brand2, SolTheme.Brand, .5f), .45f * opacity));
         // The gold is sun-shimmer through the mask: a grid over the mask texture with the gradient in its vertex colours.
         float phase = (float)(now % 6 / 6);
         draw.PushTextureID(gold.ImGuiId);

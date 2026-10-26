@@ -25,28 +25,46 @@ public sealed partial class StudioForm
         && (workspace.Status.StartsWith("Loading", StringComparison.Ordinal) || workspace.Status.StartsWith("Reading", StringComparison.Ordinal));
 
     /** A small corner toast: spinner, "Loading European Dead Zone… 42%", the stage and Cancel. It never takes focus. */
-    private void DrawLoadToast()
+    private (StudioLoadProgress Progress, string Title, bool Cancellable)? lastLoadToast;
+
+    /**
+     * Called every editor frame: visible while a load runs. When the work ends the toast keeps its last title and
+     * progress and fades out (about 250 ms, UiMotion.Toast) with Cancel disabled, instead of vanishing in one frame.
+     */
+    private void DrawLoadToast(bool visible)
     {
-        var progress = CurrentLoadProgress();
-        string title = workspace.IsBusy && workspace.Status.Length > 0 ? workspace.Status : progress.Stage;
+        // Hook H15: the toast fades and rises in and out (UiMotion.Toast); it is decoration only and never takes focus.
+        var (alpha, rise) = UiMotion.Toast(0x10AD_70A5u, visible);
+        if (visible)
+        {
+            var current = CurrentLoadProgress();
+            lastLoadToast = (current, workspace.IsBusy && workspace.Status.Length > 0 ? workspace.Status : current.Stage, LoadCancellable);
+        }
+        else if (alpha <= .01f || lastLoadToast is null) { lastLoadToast = null; return; }
+        var (progress, title, cancellable) = lastLoadToast!.Value;
         string percent = progress.Fraction is { } fraction ? $" {fraction * 100:0}%" : "";
-        float status = 27 * scale, margin = 12 * scale;
-        ImGui.SetNextWindowPos(new(ClientSize.Width - margin, ClientSize.Height - status - margin), ImGuiCond.Always, Vector2.One);
-        ImGui.SetNextWindowBgAlpha(.94f);
+        float status = StatusBarHeight, margin = 12 * scale;
+        ImGui.SetNextWindowPos(new(ClientSize.Width - margin, ClientSize.Height - status - margin + rise), ImGuiCond.Always, Vector2.One);
+        ImGui.SetNextWindowBgAlpha(.96f);
+        ImGui.PushStyleVar(ImGuiStyleVar.Alpha, Math.Max(.05f, alpha) * ImGui.GetStyle().Alpha);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 4 * scale);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(12 * scale, 8 * scale));
         const ImGuiWindowFlags flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings
             | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.AlwaysAutoResize;
         if (ImGui.Begin("##load-toast", flags))
         {
+            SolTheme.PopupShadow();
             float line = ImGui.GetTextLineHeight();
             DrawSpinner(ImGui.GetCursorScreenPos() + new Vector2(line / 2), line * .42f);
             ImGui.Dummy(new(line));
             ImGui.SameLine(0, 8 * scale);
             ImGui.TextUnformatted($"{title}…{percent}");
-            if (LoadCancellable)
+            if (cancellable)
             {
                 ImGui.SameLine(0, 12 * scale);
-                if (UiAuto.SmallButton("Cancel##load-toast")) workspace.CancelWork();
+                ImGui.BeginDisabled(!visible);
+                if (UiAuto.SmallButton("Cancel##load-toast") && visible) workspace.CancelWork();
+                ImGui.EndDisabled();
             }
             if (progress.Stage != title)
             {
@@ -56,7 +74,7 @@ public sealed partial class StudioForm
             DrawProgressBar(progress, Math.Max(220 * scale, ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X - 12 * scale), 4 * scale);
         }
         ImGui.End();
-        ImGui.PopStyleVar();
+        ImGui.PopStyleVar(3);
     }
 
     /** Stands in for an editor area whose content is being replaced (the document during a load). */
@@ -72,13 +90,18 @@ public sealed partial class StudioForm
         ImGui.End();
     }
 
+    /** Windows' animation setting or Settings > Interface > Reduce motion: clock-driven decorations stand still. */
+    private static bool MotionStill => LoadingBackdrop.ReducedMotion || UiMotion.ReduceMotion;
+
     /** A three-quarter arc turning once a second; still under reduced motion. */
     private void DrawSpinner(Vector2 centre, float radius)
     {
         var draw = ImGui.GetWindowDrawList();
-        float start = LoadingBackdrop.ReducedMotion ? 0 : (float)(clock.Elapsed.TotalSeconds % 1 * Math.PI * 2);
+        bool still = MotionStill;
+        if (!still) UiMotion.KeepAnimating();
+        float start = still ? 0 : (float)(clock.Elapsed.TotalSeconds % 1 * Math.PI * 2);
         draw.PathArcTo(centre, radius, start, start + MathF.PI * 1.5f, 24);
-        draw.PathStroke(SolTheme.U32(SolTheme.Sun), ImDrawFlags.None, Math.Max(1.5f, 2 * scale));
+        draw.PathStroke(SolTheme.U32(SolTheme.Accent), ImDrawFlags.None, Math.Max(1.5f, 2 * scale));
     }
 
     /** Resource upload callbacks may present loading frames only outside an active ImGui frame. */
@@ -97,9 +120,11 @@ public sealed partial class StudioForm
         try
         {
             gui.NewFrame((float)Math.Clamp(lastLoadingFrame - lastFrame, .001, .1));
+            UiMotion.BeginFrame();
             lastFrame = lastLoadingFrame;
             renderer.BeginFrame(StudioTheme.Canvas);
             DrawLoading();
+            UiMotion.EndFrame();
             gui.Render();
             CaptureLoadingFrame();
             renderer.EndFrame(false);
@@ -127,8 +152,8 @@ public sealed partial class StudioForm
         backdrop?.Draw(draw, client, scale, now);
         // Without a menu bar the top strip is the caption, so the window can move and close while loading.
         chrome.Scale = scale;
-        chrome.CaptionHeight = 32 * scale;
-        chrome.DrawButtons(32 * scale);
+        chrome.CaptionHeight = 30 * scale;
+        chrome.DrawButtons(30 * scale);
         DrawLoadingCard(draw, client, now);
         ImGui.End();
         if (setup || settingsDialog) DrawDialogs();
@@ -154,7 +179,8 @@ public sealed partial class StudioForm
         backdrop?.DrawMark(draw, origin, markEdge);
         font = SolTheme.PushFont(SolTheme.TitleFont);
         SolTheme.ShimmerText(draw, origin + new Vector2(markEdge > 0 ? markEdge + 10 * scale : 0, 0), "SOLFORGE", tracking,
-            LoadingBackdrop.ReducedMotion ? 0 : (float)(now % 6 / 6));
+            MotionStill ? 0 : (float)(now % 6 / 6));
+        if (!MotionStill) UiMotion.KeepAnimating();
         if (font) ImGui.PopFont();
         ImGui.Dummy(new Vector2(width, title + 10 * scale));
         if (failed) ImGui.TextColored(SolTheme.Bad, "Unable to load");
@@ -170,7 +196,8 @@ public sealed partial class StudioForm
                 ImGui.TextDisabled(count);
             }
             ImGui.Dummy(new Vector2(0, 4 * scale));
-            DrawProgressBar(progress, width, 6 * scale);
+            // The loading card keeps the brand orange; every other bar is Accent.
+            DrawProgressBar(progress, width, 6 * scale, brand: true);
         }
         if (failed)
         {
@@ -193,22 +220,23 @@ public sealed partial class StudioForm
     }
 
     /** The launcher's .dl-progress: a sun-grad pill on a faint track with a sheen sweeping it; an unknown total moves a short segment. */
-    private void DrawProgressBar(StudioLoadProgress progress, float width, float height)
+    private void DrawProgressBar(StudioLoadProgress progress, float width, float height, bool brand = false)
     {
         var bar = ImGui.GetCursorScreenPos();
         if (height < ImGui.GetTextLineHeight()) bar.Y += (ImGui.GetTextLineHeight() - height) / 2;
         var draw = ImGui.GetWindowDrawList();
         draw.AddRectFilled(bar, bar + new Vector2(width, height), SolTheme.U32(SolTheme.Surface2), height / 2);
-        bool still = LoadingBackdrop.ReducedMotion;
+        bool still = MotionStill;
+        if (!still) UiMotion.KeepAnimating();
         double now = clock.Elapsed.TotalSeconds;
         if (progress.Fraction is { } fraction)
             SolTheme.ProgressFill(draw, bar, bar + new Vector2(width * Math.Clamp(fraction, 0, 1), height),
-                still ? -1 : (float)(now % 2.4 / 2.4));
+                still ? -1 : (float)(now % 2.4 / 2.4), brand);
         else
         {
             float segment = width * .22f;
             float start = still ? (width - segment) / 2 : (float)(now % 1.6 / 1.6) * (width + segment) - segment;
-            SolTheme.ProgressFill(draw, bar + new Vector2(Math.Max(0, start), 0), bar + new Vector2(Math.Min(width, start + segment), height));
+            SolTheme.ProgressFill(draw, bar + new Vector2(Math.Max(0, start), 0), bar + new Vector2(Math.Min(width, start + segment), height), brand: brand);
         }
         ImGui.Dummy(new Vector2(width, MathF.Max(height, ImGui.GetTextLineHeight())));
     }

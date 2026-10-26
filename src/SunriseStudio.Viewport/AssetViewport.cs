@@ -623,7 +623,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             // Nothing 3D runs: no visibility, streaming, effects or input picking; size-dependent GPU targets are shrunk once.
             ReleaseFrameTargets();
             ScreenOrigin = origin; ScreenSize = size;
-            draw.AddRectFilled(origin, origin + size, ImGui.GetColorU32(new Vector4(.055f, .065f, .08f, 1)));
+            draw.AddRectFilled(origin, origin + size, SolTheme.U32(SolTheme.Bg));
             draw.PushClipRect(origin, origin + size, true);
             DrawSuspendedBanner(draw, origin, size);
             draw.PopClipRect();
@@ -638,7 +638,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         bool hovered = ImGui.IsItemHovered();
         // A handle drag owns the mouse, so it neither selects nor moves the camera.
         if (!ProcessGizmo(hovered, origin, size)) ProcessInput(hovered, origin, size);
-        draw.AddRectFilled(origin, origin + size, ImGui.GetColorU32(new Vector4(.055f, .065f, .08f, 1)));
+        draw.AddRectFilled(origin, origin + size, SolTheme.U32(SolTheme.Bg));
         draw.PushClipRect(origin, origin + size, true);
         if (texture is not null)
         {
@@ -672,6 +672,10 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         catch (Exception error) when (error is InvalidOperationException or ArgumentException or SharpGen.Runtime.SharpGenException) { }
     }
 
+    /**
+     * The placeholder while nothing 3D is drawn: a Panel card (SolTheme tokens, no fixed colours) with the reason and an
+     * Accent button that resumes rendering (or turns the switched-off viewport back on).
+     */
     private void DrawSuspendedBanner(ImDrawListPtr draw, Vector2 origin, Vector2 size)
     {
         bool user = RenderingOff;
@@ -680,35 +684,68 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             : string.IsNullOrEmpty(SuspendReason) ? "Destiny 2 is running. Viewport rendering is suspended to preserve RAM & GPU." : SuspendReason;
         string detail = user ? "Turn it back on here, with the toolbar's viewport button or from View > 3D viewport rendering."
             : "Connect via the Live tab to sync with the active game, or click below to resume rendering.";
-
+        float s = SolTheme.Scale;
+        bool headingFont = SolTheme.PushFont(SolTheme.HeadingFont);
         var titleSize = ImGui.CalcTextSize(title);
+        if (headingFont) ImGui.PopFont();
         var subtitleSize = ImGui.CalcTextSize(subtitle);
         var detailSize = ImGui.CalcTextSize(detail);
-
-        float centerY = origin.Y + MathF.Max(20, (size.Y - 140) * 0.5f);
-        draw.AddText(new Vector2(origin.X + MathF.Max(10, (size.X - titleSize.X) * 0.5f), centerY),
-            ImGui.GetColorU32(new Vector4(1f, 0.76f, 0.28f, 1f)), title);
-        draw.AddText(new Vector2(origin.X + MathF.Max(10, (size.X - subtitleSize.X) * 0.5f), centerY + 30),
-            ImGui.GetColorU32(new Vector4(0.85f, 0.88f, 0.92f, 1f)), subtitle);
-        draw.AddText(new Vector2(origin.X + MathF.Max(10, (size.X - detailSize.X) * 0.5f), centerY + 55),
-            ImGui.GetColorU32(new Vector4(0.55f, 0.60f, 0.68f, 1f)), detail);
-
-        float buttonWidth = 200;
-        ImGui.SetCursorScreenPos(new Vector2(origin.X + MathF.Max(10, (size.X - buttonWidth) * 0.5f), centerY + 90));
-        if (UiAuto.Button(user ? "Turn on 3D viewport##resume-render" : "Resume 3D Viewport##resume-render", new Vector2(buttonWidth, 32)))
+        string button = user ? "Turn on 3D viewport##resume-render" : "Resume 3D Viewport##resume-render";
+        float buttonWidth = Math.Max(SolTheme.PrimaryButtonWidth(button), 180 * s);
+        float pad = 20 * s, line = ImGui.GetTextLineHeight();
+        float cardWidth = Math.Min(size.X - 20 * s, Math.Max(titleSize.X, Math.Max(subtitleSize.X, detailSize.X)) + pad * 2);
+        float cardHeight = pad * 2 + titleSize.Y + line * 2 + 16 * s + 26 * s + 12 * s;
+        var cardMin = Vector2.Round(origin + new Vector2(Math.Max(10 * s, (size.X - cardWidth) / 2), Math.Max(10 * s, (size.Y - cardHeight) / 2)));
+        var cardMax = cardMin + new Vector2(cardWidth, cardHeight);
+        SolTheme.ChamferFrame(draw, cardMin, cardMax, 0, SolTheme.U32(SolTheme.Panel), SolTheme.U32(SolTheme.BorderHi));
+        float y = cardMin.Y + pad;
+        headingFont = SolTheme.PushFont(SolTheme.HeadingFont);
+        draw.AddText(new(cardMin.X + (cardWidth - titleSize.X) / 2, y), SolTheme.U32(user ? SolTheme.TextStrong : SolTheme.Warn), title);
+        if (headingFont) ImGui.PopFont();
+        y += titleSize.Y + 8 * s;
+        draw.AddText(new(cardMin.X + Math.Max(pad, (cardWidth - subtitleSize.X) / 2), y), SolTheme.U32(SolTheme.Text), subtitle);
+        y += line + 4 * s;
+        draw.AddText(new(cardMin.X + Math.Max(pad, (cardWidth - detailSize.X) / 2), y), SolTheme.U32(SolTheme.Muted), detail);
+        y += line + 16 * s;
+        ImGui.SetCursorScreenPos(new(cardMin.X + (cardWidth - buttonWidth) / 2, y));
+        if (SolTheme.PrimaryButton(button, new(buttonWidth, 26 * s)))
         {
             if (user) TurnOnRendering?.Invoke();
             else ForceResumeRendering = true;
         }
     }
 
-    /** Toolbar controls affect this viewport alone. */
+    /** The toolbar strip's height last frame, so its translucent background is drawn before its controls. */
+    private float toolbarStripHeight;
+    /**
+     * Toolbar controls affect this viewport alone. UE5 style: one translucent strip (Panel at 85 %, 4 px rounding) at
+     * the top of the view with the controls inset; it sits above the image rather than over it, so the viewport's own
+     * input button never overlaps a control. The same commands as before, in the same places.
+     */
     private void DrawToolbar()
     {
         var style = ImGui.GetStyle();
-        float available = ImGui.GetContentRegionAvail().X;
-        float right = ImGui.GetCursorScreenPos().X + available;
+        float s = SolTheme.Scale, pad = 3 * s;
+        var stripMin = ImGui.GetCursorScreenPos();
+        float stripWidth = ImGui.GetContentRegionAvail().X;
+        if (toolbarStripHeight > 0)
+            ImGui.GetWindowDrawList().AddRectFilled(stripMin, stripMin + new Vector2(stripWidth, toolbarStripHeight),
+                SolTheme.U32(SolTheme.Alpha(SolTheme.Panel, .85f)), 4 * s);
+        ImGui.SetCursorScreenPos(stripMin + new Vector2(pad * 2, pad));
+        float available = stripWidth - pad * 4;
+        float right = stripMin.X + pad * 2 + available;
         float button = ImGui.GetFrameHeight();
+        try { DrawToolbarControls(style, available, right, button); }
+        finally
+        {
+            toolbarStripHeight = ImGui.GetItemRectMax().Y - stripMin.Y + pad;
+            ImGui.SetCursorScreenPos(new(stripMin.X, stripMin.Y + toolbarStripHeight));
+            ImGui.Dummy(new(stripWidth, 0));
+        }
+    }
+
+    private void DrawToolbarControls(ImGuiStylePtr style, float available, float right, float button)
+    {
         var tips = ToolbarTips();
         // A followed camera is placed by the live link each frame; controls that move it are off.
         bool locked = textureData is null && !Camera.PivotFree;
@@ -792,8 +829,9 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             }
             if (SelectionMode == SceneSelectionMode.MeshPart && Visibility.AvailableDetailLevels.Count > 0)
             {
-                Next(110);
-                ImGui.SetNextItemWidth(110);
+                // Scaled like every other toolbar control, so 150 % DPI is not cramped.
+                Next(110 * SolTheme.Scale);
+                ImGui.SetNextItemWidth(110 * SolTheme.Scale);
                 if (UiAuto.BeginCombo("##asset-lod", $"LOD {Visibility.DetailLevel}"))
                 {
                     foreach (int level in Visibility.AvailableDetailLevels)
@@ -818,8 +856,8 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
                 }
                 if (presentLayers.Count > 1 || presentLayers.Contains(SceneLayer.Effects) || presentLayers.Contains(SceneLayer.Collision))
                 {
-                    Next(100);
-                    ImGui.SetNextItemWidth(100);
+                    Next(100 * SolTheme.Scale);
+                    ImGui.SetNextItemWidth(100 * SolTheme.Scale);
                     if (UiAuto.BeginCombo("##asset-layers", "Layers"))
                     {
                         SceneLayerMenu.Draw(Visibility, presentLayers, this);
@@ -835,7 +873,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         void Slider(string label)
         {
             float text = ImGui.CalcTextSize(label).X + style.ItemInnerSpacing.X;
-            float width = MathF.Min(100, MathF.Max(1, available - text));
+            float width = MathF.Min(100 * SolTheme.Scale, MathF.Max(1, available - text));
             Next(width + text);
             ImGui.SetNextItemWidth(width);
         }

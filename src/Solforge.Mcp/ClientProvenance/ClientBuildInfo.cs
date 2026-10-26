@@ -55,15 +55,23 @@ public sealed record ClientBuildReport(string Dll, bool Exists, string? Version,
 /** Inspects the installed client DLL against the candidate source trees. */
 public static partial class ClientBuildInfo
 {
-    /** The folder holding the Project Sol checkouts and installs (SOL_ROOT, else Desktop\sol). */
-    public static string SolRoot() =>
-        Environment.GetEnvironmentVariable("SOL_ROOT") is { Length: > 0 } root ? root
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Desktop", "sol");
+    /** The folder holding the Project Sol checkouts and installs (SOL_ROOT, else Desktop\Project - Sol\sol, else Desktop\sol). */
+    public static string SolRoot()
+    {
+        if (Environment.GetEnvironmentVariable("SOL_ROOT") is { Length: > 0 } root) return root;
+        string desktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Desktop");
+        string moved = Path.Combine(desktop, "Project - Sol", "sol");
+        return Directory.Exists(moved) ? moved : Path.Combine(desktop, "sol");
+    }
 
     /** The DLL Seth plays from (SOL_CLIENT_DIR like the testkit, else sol-client2). */
-    public static string DefaultDll() =>
-        Path.Combine(Environment.GetEnvironmentVariable("SOL_CLIENT_DIR") is { Length: > 0 } dir ? dir
-            : Path.Combine(SolRoot(), "01-clients", "sol-client2", "bin", "x64"), "steam_api64.dll");
+    public static string DefaultDll()
+    {
+        if (Environment.GetEnvironmentVariable("SOL_CLIENT_DIR") is { Length: > 0 } dir) return Path.Combine(dir, "steam_api64.dll");
+        // sol-client2 was the play client; after the move only sol-client is left.
+        string[] dlls = [.. new[] { "sol-client2", "sol-client" }.Select(client => Path.Combine(SolRoot(), "01-clients", client, "bin", "x64", "steam_api64.dll"))];
+        return dlls.FirstOrDefault(File.Exists) ?? dlls[0];
+    }
 
     /** The client source trees we know about: sol-0.6 (counter and build output), the Sunrise repo and the sol-server-src copy. */
     public static IReadOnlyList<SourceTree> DefaultTrees()

@@ -43,6 +43,37 @@ public static class EngineCommands
         return string.Join(';', folders);
     }
 
+    /**
+     * The custom Pi harness launcher (pi-cust.cmd): the configured path, PI_CUST_HARNESS or PI_CUST_HARNESS_PATH,
+     * pi-cust on PATH, the default Desktop build, or a copy beside Solforge.exe. Null when none exists.
+     */
+    public static string? FindPiHarness(string? configured = null, string? path = null, string? desktop = null)
+    {
+        string? Existing(string? candidate)
+        {
+            if (string.IsNullOrWhiteSpace(candidate)) return null;
+            try
+            {
+                string full = Path.GetFullPath(candidate.Trim().Trim('"'));
+                if (Directory.Exists(full)) full = Path.Combine(full, "pi-cust.cmd");
+                return File.Exists(full) ? full : null;
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
+        }
+        if (Existing(configured) is { } chosen) return chosen;
+        foreach (string name in new[] { "PI_CUST_HARNESS", "PI_CUST_HARNESS_PATH" })
+            if (Existing(Environment.GetEnvironmentVariable(name)) is { } fromEnvironment) return fromEnvironment;
+        if (Resolve("pi-cust", path ?? FreshPath()) is { } onPath) return onPath;
+        string profile = desktop ?? Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        foreach (string candidate in new[]
+        {
+            Path.Combine(profile, "pi-cust", "pi-cust-harness-build", "build-1", "pi-cust.cmd"),
+            Path.Combine(AppContext.BaseDirectory, "pi-cust.cmd")
+        })
+            if (Existing(candidate) is { } found) return found;
+        return null;
+    }
+
     /** The full path cmd.exe would run for the command, or null. A command with a folder in it is checked as given. */
     public static string? Resolve(string command, string path, string? pathExt = null)
     {

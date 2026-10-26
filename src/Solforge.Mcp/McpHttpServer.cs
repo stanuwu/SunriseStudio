@@ -12,8 +12,8 @@ namespace Solforge.Mcp;
  * stream (keep-alive only; Solforge sends no server requests), DELETE /mcp ends the session. Every request
  * needs "Authorization: Bearer <token>". A plain TcpListener keeps http.sys URL ACLs and ASP.NET Core out.
  * GET /viewport, /viewport.mjpeg and /viewport.jpg show the live viewport in a local browser; they need ?key=<ViewKey>,
- * a separate random key that grants nothing else, and refuse framing.
- * Owner builds may add authenticated routes beside /mcp through OwnerRoute (see RELEASING.md); public builds have none.
+ * a separate random key that grants nothing else, and refuse framing. /editor/* is the Solforge AI UI channel (EditorUiApi.cs):
+ * its own UiToken and peer check; /mcp refuses that token.
  */
 public sealed partial class McpHttpServer : IAsyncDisposable
 {
@@ -74,25 +74,35 @@ public sealed partial class McpHttpServer : IAsyncDisposable
             var request = await HttpRequest.Read(stream, MaximumBody, stop.Token).ConfigureAwait(false);
             if (request is null) return;
             Interlocked.Increment(ref RequestCount);
-            await Respond(stream, request).ConfigureAwait(false);
+            await Respond(stream, request, client.Client.RemoteEndPoint as IPEndPoint, client.Client.LocalEndPoint as IPEndPoint).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is IOException or SocketException or OperationCanceledException or ObjectDisposedException) { }
         catch (Exception exception) { Log?.Invoke("MCP request failed: " + exception.Message); }
     }
 
-    private async Task Respond(NetworkStream stream, HttpRequest request)
+    /** The editor UI channel (EditorUiApi.cs, /editor/*); null answers 404 there. */
+    public EditorUiApi? EditorUi { get; set; }
+
+    private async Task Respond(NetworkStream stream, HttpRequest request, IPEndPoint? remote, IPEndPoint? local)
     {
         // DNS rebinding: a browser page may only reach this server from a loopback origin.
         if (request.Header("origin") is { } origin && !IsLoopbackOrigin(origin))
         { await Write(stream, 403, "text/plain", "Origin not allowed").ConfigureAwait(false); return; }
         if (request.Method == "GET" && request.Path.StartsWith("/viewport", StringComparison.Ordinal))
         { await ServeViewport(stream, request).ConfigureAwait(false); return; }
+        // SOLFORGE-AI-APP-SPEC §6.2: /editor/* has its own token and peer check; /mcp never accepts that token.
+        if (request.Path.StartsWith(EditorUiPaths.Prefix, StringComparison.Ordinal))
+        {
+            if (EditorUi is { } ui) await ui.ServeAsync(stream, request, remote, local, stop.Token).ConfigureAwait(false);
+            else await Write(stream, 404, "text/plain", "Not found").ConfigureAwait(false);
+            return;
+        }
+        if (EditorUi is { } editorUi && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(request.Header("authorization") ?? ""),
+                Encoding.UTF8.GetBytes("Bearer " + editorUi.UiToken)))
+        { await Write(stream, 401, "text/plain", "The editor UI token is not an MCP token").ConfigureAwait(false); return; }
         if (!CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(request.Header("authorization") ?? ""),
                 Encoding.UTF8.GetBytes("Bearer " + Token)))
         { await Write(stream, 401, "text/plain", "Missing or wrong Solforge MCP token").ConfigureAwait(false); return; }
-        Func<NetworkStream, Task>? owner = null;
-        OwnerRoute(request, ref owner);
-        if (owner is not null) { await owner(stream).ConfigureAwait(false); return; }
         if (request.Path != "/mcp") { await Write(stream, 404, "text/plain", "Not found").ConfigureAwait(false); return; }
         string? session = request.Header("mcp-session-id");
         switch (request.Method)
@@ -115,8 +125,12 @@ public sealed partial class McpHttpServer : IAsyncDisposable
         bool initialize = body.Contains("\"initialize\"", StringComparison.Ordinal);
         int? pid = int.TryParse(request.Header(McpSessionRegistry.PidHeader), out int shimPid) && shimPid > 0 ? shimPid : null;
         // Tools see who called them (get_sessions, the open_map guard, who started a build).
-        McpSessionRegistry.Current = Sessions?.Find(session, pid);
-        string? reply = await dispatcher.HandleAsync(body, stop.Token).ConfigureAwait(false);
+        var caller = McpSessionRegistry.Current = Sessions?.Find(session, pid);
+        var (method, callId, toolName) = Peek(body);
+        string? reply = Refuse(caller, method, callId, toolName) ?? await dispatcher.HandleAsync(body, stop.Token).ConfigureAwait(false);
+        if (method == "tools/call" && toolName is "open_project" or "create_project" or "close_project")
+            Sessions?.Rebind(caller, CurrentProject?.Invoke());
+        if (method == "tools/list" && caller is { IsWorker: true } && reply is not null) reply = WorkerToolList(reply);
         var headers = new List<(string, string)>();
         if (initialize && reply is not null && reply.Contains("\"result\"", StringComparison.Ordinal))
         {
@@ -124,7 +138,8 @@ public sealed partial class McpHttpServer : IAsyncDisposable
             lock (sessions) sessions.Add(session);
             headers.Add(("Mcp-Session-Id", session));
             var (client, version) = ClientInfo(body);
-            Sessions?.Register(session, client, version, pid);
+            if (Sessions?.Register(session, client, version, pid) is { } registered)
+                Sessions.Bind(registered, CurrentProject?.Invoke(), request.Header(McpSessionRegistry.WorkerHeader) is "1" or "true");
         }
         if (reply is null) { await Write(stream, 202, "text/plain", "", headers).ConfigureAwait(false); return; }
         // A client that accepts only SSE gets the reply as one event; everyone else gets plain JSON.
@@ -212,8 +227,64 @@ public sealed partial class McpHttpServer : IAsyncDisposable
         finally { feed.EndStream(); }
     }
 
-    /** Owner builds only: picks a handler for an authenticated path other than /mcp; public builds leave it null. */
-    partial void OwnerRoute(HttpRequest request, ref Func<NetworkStream, Task>? handler);
+    /** UI-UE5 §5.6: the editor's open project, read per request so a project switch is noticed at once. */
+    public Func<string?>? CurrentProject { get; set; }
+
+    /** Tools that always answer, whichever project the session was opened for. */
+    private static readonly HashSet<string> ProjectFreeTools = new(StringComparer.Ordinal)
+        { "get_sessions", "get_editor_state", "get_context", McpJobs.ToolName, "open_project", "create_project", "close_project", "list_ui_controls" };
+
+    /** method, id (raw JSON) and tools/call name of one JSON-RPC message; nulls when it is not one. */
+    private static (string? Method, string? Id, string? Tool) Peek(string body)
+    {
+        try
+        {
+            if (JsonNode.Parse(body) is not JsonObject message) return (null, null, null);
+            return (message["method"]?.ToString(), message["id"]?.ToJsonString(), message["params"]?["name"]?.ToString());
+        }
+        catch (JsonException) { return (null, null, null); }
+    }
+
+    /**
+     * A refusal reply instead of dispatching: a worker session calling a tool WorkerSessionPolicy does not allow (a tool
+     * error), or any session calling after the editor switched projects (JSON-RPC error ProjectChangedCode). Null to dispatch.
+     */
+    private string? Refuse(McpSession? caller, string? method, string? id, string? tool)
+    {
+        if (method != "tools/call" || tool is null || id is null || caller is null) return null;
+        if (caller.IsWorker)
+        {
+            var target = dispatcher.Tools.FirstOrDefault(item => item.Name == tool);
+            if (WorkerSessionPolicy.Refusal(tool, target?.RequiresApproval ?? true) is { } refusal)
+                return new JsonObject
+                {
+                    ["jsonrpc"] = "2.0", ["id"] = JsonNode.Parse(id), ["result"] = McpToolResult.Error(refusal).ToJson()
+                }.ToJsonString(McpJson.Compact);
+        }
+        if (ProjectFreeTools.Contains(tool) || Sessions?.ProjectProblem(caller, CurrentProject?.Invoke()) is not { } problem) return null;
+        return new JsonObject
+        {
+            ["jsonrpc"] = "2.0", ["id"] = JsonNode.Parse(id),
+            ["error"] = new JsonObject { ["code"] = McpSessionRegistry.ProjectChangedCode, ["message"] = problem }
+        }.ToJsonString(McpJson.Compact);
+    }
+
+    /** A worker's tools/list without the tools it may not call. */
+    private string WorkerToolList(string reply)
+    {
+        try
+        {
+            if (JsonNode.Parse(reply) is not JsonObject message || message["result"]?["tools"] is not JsonArray tools) return reply;
+            foreach (var node in tools.OfType<JsonObject>().ToArray())
+            {
+                string name = node["name"]?.ToString() ?? "";
+                bool approval = dispatcher.Tools.FirstOrDefault(tool => tool.Name == name)?.RequiresApproval ?? true;
+                if (!WorkerSessionPolicy.Allows(name, approval)) tools.Remove(node);
+            }
+            return message.ToJsonString(McpJson.Compact);
+        }
+        catch (JsonException) { return reply; }
+    }
 
     /** initialize params.clientInfo name and version; nulls when absent or not JSON. */
     private static (string? Name, string? Version) ClientInfo(string body)
@@ -229,7 +300,7 @@ public sealed partial class McpHttpServer : IAsyncDisposable
     private static bool IsLoopbackOrigin(string origin) =>
         Uri.TryCreate(origin, UriKind.Absolute, out var uri) && (uri.IsLoopback || uri.Host == "localhost");
 
-    private static async Task Write(NetworkStream stream, int status, string type, string body, IReadOnlyList<(string, string)>? headers = null)
+    internal static async Task Write(NetworkStream stream, int status, string type, string body, IReadOnlyList<(string, string)>? headers = null)
     {
         byte[] content = Encoding.UTF8.GetBytes(body);
         var head = new StringBuilder($"HTTP/1.1 {status} {Reason(status)}\r\n");
@@ -244,7 +315,8 @@ public sealed partial class McpHttpServer : IAsyncDisposable
     private static string Reason(int status) => status switch
     {
         200 => "OK", 202 => "Accepted", 400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden", 404 => "Not Found",
-        405 => "Method Not Allowed", 413 => "Payload Too Large", 503 => "Service Unavailable", _ => "Error"
+        405 => "Method Not Allowed", 409 => "Conflict", 413 => "Payload Too Large", 422 => "Unprocessable Entity",
+        429 => "Too Many Requests", 503 => "Service Unavailable", _ => "Error"
     };
 
     /** Cancels the accept loop and closes the listener. */

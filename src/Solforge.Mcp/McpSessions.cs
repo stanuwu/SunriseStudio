@@ -22,6 +22,13 @@ public sealed class McpSession(string id, string client, string? version, int? p
     public DateTimeOffset LastSeen { get; internal set; } = started;
     public string? LastTool { get; internal set; }
     public int Calls { get; internal set; }
+    /**
+     * UI-UE5 §5.6: the project this session works on, bound at initialize (or at its first call when none was open). Calls
+     * after the editor switched to another project are refused with "project changed" (McpHttpServer).
+     */
+    public string? Project { get; internal set; }
+    /** A model-workflow worker (solforge-mcp --worker): WorkerSessionPolicy limits what it may call. */
+    public bool IsWorker { get; internal set; }
     /** "claude-code (pid 1234)": what people and other agents see. */
     public string Label => Pid is { } p ? $"{Client} (pid {p})" : Client;
     /** The id people can quote: the first 8 characters. */
@@ -99,6 +106,48 @@ public sealed class McpSessionRegistry(Func<DateTimeOffset>? clock = null, Func<
 
     /** The header the solforge-mcp shim sends with its process id. */
     public const string PidHeader = "X-Solforge-Client-Pid";
+    /** The header `solforge-mcp --worker` sends at initialize; the session then follows WorkerSessionPolicy. */
+    public const string WorkerHeader = "X-Solforge-Worker";
+    /** JSON-RPC error code of a call refused because the editor switched projects (the shim then reconnects). */
+    public const int ProjectChangedCode = -32001;
+
+    /** Binds a session to a project and marks workers; called right after Register at initialize. */
+    public void Bind(McpSession session, string? project, bool worker)
+    {
+        lock (sessions) { session.Project = Normalize(project); session.IsWorker |= worker; }
+        Changed?.Invoke();
+    }
+
+    /**
+     * Null when the session may act on the current project, else the "project changed" refusal. A session bound to no
+     * project binds to the current one on its first call.
+     */
+    public string? ProjectProblem(McpSession? session, string? current)
+    {
+        if (session is null) return null;
+        string? now = Normalize(current);
+        lock (sessions)
+        {
+            if (session.Project is null) { session.Project = now; return null; }
+            if (now is null || string.Equals(session.Project, now, StringComparison.OrdinalIgnoreCase)) return null;
+            return $"project changed: this session was opened for {session.Project}, and Solforge now has {now} open. " +
+                "Nothing was done; reconnect (the solforge-mcp shim does this by itself) and read again before acting.";
+        }
+    }
+
+    /** After the session itself opened, created or closed a project, it follows the editor to it. */
+    public void Rebind(McpSession? session, string? current)
+    {
+        if (session is null) return;
+        lock (sessions) session.Project = Normalize(current);
+    }
+
+    private static string? Normalize(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        try { return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException) { return path; }
+    }
     /** Sessions idle this long are dropped (clients that speak HTTP directly never say goodbye). */
     public static readonly TimeSpan Forget = TimeSpan.FromHours(2);
 
@@ -275,7 +324,8 @@ public sealed class McpSessionRegistry(Func<DateTimeOffset>? clock = null, Func<
                 ["label"] = session.Label, ["you"] = you is not null && you.Id == session.Id,
                 ["connectedMinutes"] = Math.Round((now - session.Started).TotalMinutes, 1),
                 ["idleSeconds"] = Math.Round((now - session.LastSeen).TotalSeconds), ["calls"] = session.Calls, ["lastTool"] = session.LastTool,
-                ["hasMap"] = held is not null && held.SessionId == session.Id
+                ["hasMap"] = held is not null && held.SessionId == session.Id,
+                ["project"] = session.Project, ["worker"] = session.IsWorker
             });
         var running = new JsonArray();
         var live = Running(presence);

@@ -46,12 +46,16 @@ public sealed partial class StudioForm
         if (ImGui.BeginTabBar("shortcut-sections"))
         {
             foreach (var (section, title, scope) in ShortcutTabs)
+            {
+                uint bar = ImGui.GetID("##tab-underline");
                 if (UiAuto.BeginTabItem(title))
                 {
+                    UiMotion.TabUnderline(bar, ImGui.GetItemRectMin(), ImGui.GetItemRectMax());
                     ImGui.TextDisabled(scope);
                     DrawShortcutRows(map, section);
                     UiAuto.EndTabItem();
                 }
+            }
             ImGui.EndTabBar();
         }
         // The capture popup opens at this level so its id matches the one drawn below.

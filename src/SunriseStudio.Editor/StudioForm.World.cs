@@ -22,12 +22,22 @@ public sealed partial class StudioForm
     private readonly HashSet<uint> hiddenBubbles = [];
     private bool showMap = true, showMission = true;
 
-    private static unsafe bool BeginEditorTab(string label, bool selected = false)
+    /**
+     * A tab of the World, workbench, browser or page bars; selected selects it once. The open tab gets the sliding
+     * 2 px Accent top line (UiMotion.TabUnderline, keyed by the bar, clipped to the bar). listButton: the bar has
+     * ImGuiTabBarFlags.TabListPopupButton. Tab ids and SetSelected behave as before.
+     */
+    private static unsafe bool BeginEditorTab(string label, bool selected = false, bool listButton = false)
     {
+        // Taken before the tab pushes its own id, so every tab of one bar shares the underline.
+        uint bar = ImGui.GetID("##tab-underline");
         byte[] bytes = Encoding.UTF8.GetBytes(label + '\0');
+        bool open;
         fixed (byte* text = bytes)
-            return ImGuiNative.igBeginTabItem(text, null,
+            open = ImGuiNative.igBeginTabItem(text, null,
                 selected ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None) != 0;
+        if (open) UiMotion.TabUnderline(bar, ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), listButton);
+        return open;
     }
 
     /** Maps by name; choosing the open map only shows its scene. */
@@ -37,7 +47,8 @@ public sealed partial class StudioForm
         UiAuto.InputTextWithHint("##mapSearch", "Find map", ref mapSearch, 256);
         if (workspace.WorldCatalog is null)
         { ImGui.TextDisabled(workspace.Catalog is null ? "Open Sunrise" : "Reading maps..."); return; }
-        ImGui.BeginChild("map-list");
+        ImGui.BeginChild("map-list", Vector2.Zero, ImGuiChildFlags.None, ImGuiWindowFlags.NoScrollWithMouse);
+        UiMotion.SmoothScroll();
         var rows = MatchingMaps();
         var clipper = new ImGuiListClipperPtr(ImGuiNative.ImGuiListClipper_ImGuiListClipper());
         clipper.Begin(rows.Length);
@@ -69,7 +80,8 @@ public sealed partial class StudioForm
         if (workspace.WorldCatalog is null)
         { ImGui.TextDisabled("Reading missions..."); return; }
         if (workspace.World is { } current) ImGui.TextDisabled(workspace.DisplayName(current.Map.Tag));
-        ImGui.BeginChild("mission-list");
+        ImGui.BeginChild("mission-list", Vector2.Zero, ImGuiChildFlags.None, ImGuiWindowFlags.NoScrollWithMouse);
+        UiMotion.SmoothScroll();
         bool chooseMap = false;
         var rows = MatchingMissions();
         var clipper = new ImGuiListClipperPtr(ImGuiNative.ImGuiListClipper_ImGuiListClipper());

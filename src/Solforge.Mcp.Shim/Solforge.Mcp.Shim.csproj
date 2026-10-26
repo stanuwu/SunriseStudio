@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Solforge Phase 47B: solforge-mcp.exe, the stdio shim for MCP clients that only speak stdio.
-       It links the discovery reader and the context summary instead of referencing Solforge.Mcp, so a trimmed publish stays small. -->
+       UI-UE5 §4.4 (standalone MCP): it now references Solforge.Mcp, so `solforge-mcp - -sol` and `- -project` serve the
+       tool catalogue in-process (Headless/HeadlessSolforgeHost.cs) when no editor runs, and attach to the editor live
+       when one starts. publish.ps1 still publishes it trimmed and self-contained: TrimMode partial keeps every Solforge
+       assembly whole (only framework assemblies that opt in are trimmed) and JSON reflection stays on for the tool code. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net9.0</TargetFramework>
@@ -8,12 +11,21 @@
     <RootNamespace>Solforge.Mcp.Shim</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+    <TrimMode>partial</TrimMode>
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
+  <!-- Every reference, including the transitive ones the SDK adds, builds without the publish-only trimming properties. -->
+  <ItemDefinitionGroup>
+    <ProjectReference>
+      <GlobalPropertiesToRemove>PublishTrimmed;TrimMode;PublishSingleFile</GlobalPropertiesToRemove>
+    </ProjectReference>
+  </ItemDefinitionGroup>
   <ItemGroup>
-    <Compile Include="../Solforge.Mcp/McpDiscovery.cs" Link="McpDiscovery.cs" />
-    <Compile Include="../Solforge.Mcp/ContextSummary.cs" Link="ContextSummary.cs" />
-    <Compile Include="../Solforge.Mcp/AgyDelegate.cs" Link="AgyDelegate.cs" />
-    <Compile Include="../Solforge.Mcp/ClineDelegate.cs" Link="ClineDelegate.cs" />
-    <Compile Include="../Solforge.Mcp/EngineCommands.cs" Link="EngineCommands.cs" />
+    <!-- publish.ps1 passes PublishTrimmed on the command line; the libraries are not trim-annotated, so they build without
+         the trim analyzer (the shim's own link step still trims the framework, with the settings above). -->
+    <ProjectReference Include="../Solforge.Mcp/Solforge.Mcp.csproj" />
   </ItemGroup>
 </Project>

@@ -103,7 +103,9 @@ public sealed partial class AssetViewport
         {
             float radius = 28 * scale;
             var centre = origin + new Vector2(size.X - radius - 14 * scale, radius + 14 * scale);
-            draw.AddCircleFilled(centre, radius + 10 * scale, SolTheme.U32(new Vector4(0, 0, 0, .25f)));
+            // A translucent Panel disc with a BorderHi ring behind the axes (SolTheme tokens).
+            draw.AddCircleFilled(centre, radius + 10 * scale, SolTheme.U32(SolTheme.Alpha(SolTheme.Panel, .55f)));
+            draw.AddCircle(centre, radius + 10 * scale, SolTheme.U32(SolTheme.Alpha(SolTheme.BorderHi, .8f)), 0, Math.Max(1, scale));
             foreach (var axis in AxisGizmo.Layout(Camera.View, radius))
             {
                 var color = GizmoColors[axis.Axis];
@@ -114,7 +116,7 @@ public sealed partial class AssetViewport
                 if (!axis.Negative)
                 {
                     var text = AxisLabels[axis.Axis];
-                    draw.AddText(tip - ImGui.CalcTextSize(text) / 2, SolTheme.U32(new Vector4(0, 0, 0, 1)), text);
+                    draw.AddText(tip - ImGui.CalcTextSize(text) / 2, SolTheme.U32(SolTheme.Bg), text);
                 }
             }
         }
@@ -123,7 +125,7 @@ public sealed partial class AssetViewport
             string text = statistics.Text() + (Camera.Orthographic ? "\nOrthographic" : "");
             var at = origin + new Vector2(10 * scale, size.Y - ImGui.CalcTextSize(text).Y - 10 * scale);
             var pad = new Vector2(6 * scale, 4 * scale);
-            draw.AddRectFilled(at - pad, at + ImGui.CalcTextSize(text) + pad, SolTheme.U32(new Vector4(0, 0, 0, .45f)), 3 * scale);
+            SolTheme.Chip(draw, at - pad, at + ImGui.CalcTextSize(text) + pad, false);
             draw.AddText(at, SolTheme.U32(SolTheme.Text), text);
         }
     }

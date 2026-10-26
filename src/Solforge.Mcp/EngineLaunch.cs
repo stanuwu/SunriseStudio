@@ -1,6 +1,6 @@
 /**
- * File: Builds the launch command, MCP config and prompt hook files for starting Claude Code from the AI workspace
- * (editor side: Editor/Ai/ and StudioForm.Ai*.cs).
+ * File: Builds the launch command, MCP config and prompt hook files for starting supported coding-agent CLIs
+ * from the AI workspace (editor side: Editor/Ai/ and StudioForm.Ai*.cs).
  */
 using System.Security.Cryptography;
 using System.Text;
@@ -17,20 +17,29 @@ public static class EngineLaunch
     // No double quotes or percent signs: the text passes through cmd.exe and npm's .cmd shim.
     public const string SystemPrompt =
         "You are running inside Solforge's AI workspace (the Project Sol game editor). When the user says 'this', 'that', " +
-        "'here' or 'what I'm looking at', they mean Solforge's live context: call the solforge MCP tools get_context and " +
+        "'here' or 'what I'm looking at', they mean Solforge's live context: call the sol MCP tools get_context and " +
         "get_open_documents before searching files. .solforge/SESSION.md in the project holds the session context, and the " +
         "solforge-* skills are playbooks for common jobs (new weapon or armor, map bounds, patrol content, enemies, missions): " +
         "read the matching one first.";
 
-    /** Added when the gemini server is in the config (agy installed). Same rule: no double quotes or percent signs. */
+    /** Added when the gemini delegate is an upstream of sol (agy installed). Safe through cmd. */
     public const string GeminiPrompt =
-        "The gemini MCP tool ask_gemini hands a self-contained task to Gemini on the user's own Antigravity CLI login; " +
+        "The sol MCP tool ask_gemini hands a self-contained task to Gemini on the user's own Antigravity CLI login; " +
         "use it when the user asks for Gemini, a second opinion or a very large read.";
 
-    /** Added when the clinepass server is in the config (setting on, cline installed). Same rule: no double quotes or percent signs. */
+    /** Added when the clinepass delegate is an upstream of sol (cline installed). Safe through cmd. */
     public const string ClinePassPrompt =
-        "The clinepass MCP tool ask_clinepass hands a self-contained task to an open-weight ClinePass model on the user's own Cline login; " +
+        "The sol MCP tool ask_clinepass hands a self-contained task to an open-weight ClinePass model on the user's own Cline login; " +
         "use it when the user asks for ClinePass, Cline or one of its models, or for a cheap second opinion.";
+
+    /** The custom Pi harness prompt: the same live Solforge context, with Pi's MCP tool names. Safe through cmd. */
+    public const string PiSystemPrompt =
+        "You are running inside Solforge's AI workspace (the Project Sol game editor). The sol MCP server exposes " +
+        "the live editor. When the user says 'this', 'that', 'here' or 'what I'm looking at', or asks about the selection, " +
+        "the open map, asset or script, call mcp__sol__get_context and mcp__sol__get_open_documents before " +
+        "searching files. Use the other mcp__sol__ tools for objects, missions, files and panels. " +
+        ".solforge/SESSION.md holds the session context, and the solforge-* skills are playbooks for common jobs " +
+        "(new weapon or armor, map bounds, patrol content, enemies, missions): read the matching one first.";
 
     /** First prompt of an engine started by a handoff (no double quotes or percent signs). */
     public const string HandoffPrompt =
@@ -61,22 +70,12 @@ public static class EngineLaunch
         Directory.CreateDirectory(folder);
         string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(projectRoot).ToUpperInvariant())))[..12];
         var files = new ClaudeFiles(Path.Combine(folder, $"claude-mcp-{key}.json"), Path.Combine(folder, $"claude-settings-{key}.json"), gemini, clinePass);
-        var server = new JsonObject
+        string? upstreams = servers is null ? null : SolMcpServers.WriteUpstreams(projectRoot, servers);
+        var sol = SolMcpServers.ClientEntry(projectRoot, shimPath, upstreams);
+        Write(files.McpConfig, new JsonObject
         {
-            ["type"] = "stdio", ["command"] = shimPath, ["args"] = new JsonArray("--project", projectRoot), ["env"] = new JsonObject()
-        };
-        var entries = new JsonObject { [McpClientConfigs.ServerName] = server };
-        if (gemini)
-            entries[AgyDelegate.ServerName] = new JsonObject
-            {
-                ["type"] = "stdio", ["command"] = shimPath, ["args"] = new JsonArray("--gemini"), ["env"] = new JsonObject()
-            };
-        if (clinePass)
-            entries[ClineDelegate.ServerName] = new JsonObject
-            {
-                ["type"] = "stdio", ["command"] = shimPath, ["args"] = new JsonArray("--clinepass"), ["env"] = new JsonObject()
-            };
-        Write(files.McpConfig, servers is not null ? SolMcpServers.ClaudeConfig(servers) : new JsonObject { ["mcpServers"] = entries });
+            ["mcpServers"] = new JsonObject { [McpClientConfigs.ServerName] = sol }
+        });
         // Forward slashes and plain quotes read the same in cmd.exe and in bash, whichever runs the hook.
         string hook = $"\"{shimPath.Replace('\\', '/')}\" --context --project \"{projectRoot.Replace('\\', '/').TrimEnd('/')}\"";
         var command = new JsonObject { ["type"] = "command", ["command"] = hook, ["timeout"] = 5 };
@@ -86,6 +85,104 @@ public static class EngineLaunch
         });
         return files;
     }
+
+    /** Writes Codex's project-scoped MCP config without replacing user config outside the managed Solforge block. */
+    public static string WriteCodexConfig(string projectRoot, IReadOnlyList<SolMcpServers.Server> servers, string? configFolder = null)
+    {
+        string path = Path.Combine(projectRoot, ".codex", "config.toml");
+        string begin = "# BEGIN SOLFORGE MANAGED MCP";
+        string end = "# END SOLFORGE MANAGED MCP";
+        string upstreams = SolMcpServers.WriteUpstreams(projectRoot, servers, configFolder);
+        JsonObject entry = SolMcpServers.ClientEntry(projectRoot, servers[0].Command, upstreams);
+        var text = new StringBuilder(begin).AppendLine();
+        text.Append("[mcp_servers.solforge_studio]").AppendLine();
+        text.Append("command = ").Append(TomlString(entry["command"]!.GetValue<string>())).AppendLine();
+        text.Append("args = [").Append(string.Join(", ", ((JsonArray)entry["args"]!).Select(value => TomlString(value!.GetValue<string>())))).AppendLine("]");
+        text.AppendLine("enabled = true").Append(end);
+        return WriteManagedBlock(path, begin, end, text.ToString(), "[mcp_servers.solforge_studio]");
+    }
+
+    /** Adds the Solforge MCP entry to an existing OpenCode project config, preserving every other setting. */
+    public static string WriteOpenCodeConfig(string projectRoot, IReadOnlyList<SolMcpServers.Server> servers, string? configFolder = null)
+    {
+        // Keep the user's opencode.json/jsonc byte-for-byte; OpenCode gets a generated overlay through OPENCODE_CONFIG.
+        string path = Path.Combine(projectRoot, ".solforge", "opencode.json");
+        string source = new[] { Path.Combine(projectRoot, "opencode.json"), Path.Combine(projectRoot, "opencode.jsonc"), path }
+            .FirstOrDefault(File.Exists) ?? "";
+        JsonObject config;
+        if (source.Length > 0)
+            config = JsonNode.Parse(File.ReadAllText(source), documentOptions: new System.Text.Json.JsonDocumentOptions
+                { CommentHandling = System.Text.Json.JsonCommentHandling.Skip, AllowTrailingCommas = true }) as JsonObject
+                ?? throw new System.Text.Json.JsonException(Path.GetFileName(source) + " must contain a JSON object.");
+        else config = new JsonObject();
+
+        string upstreams = SolMcpServers.WriteUpstreams(projectRoot, servers, configFolder);
+        JsonObject entry = SolMcpServers.ClientEntry(projectRoot, servers[0].Command, upstreams);
+        string command = entry["command"]!.GetValue<string>();
+        var args = (JsonArray)entry["args"]!;
+        var launch = new JsonArray(command);
+        foreach (var arg in args) launch.Add(arg!.GetValue<string>());
+        if (config["mcp"] is not null and not JsonObject)
+            throw new System.Text.Json.JsonException("opencode.json mcp setting must be an object.");
+        var mcp = config["mcp"] as JsonObject ?? new JsonObject();
+        if (mcp["servers"] is JsonObject nested)
+        {
+            if (nested.ContainsKey("solforge-studio") && !IsOurOpenCodeEntry(nested["solforge-studio"], command))
+                throw new IOException("opencode.json already defines mcp.servers.solforge-studio; keeping the user's entry unchanged.");
+            nested["solforge-studio"] = new JsonObject { ["type"] = "local", ["command"] = launch, ["enabled"] = true };
+        }
+        else if (mcp.Count == 0)
+        {
+            nested = new JsonObject
+            {
+                ["solforge-studio"] = new JsonObject { ["type"] = "local", ["command"] = launch, ["enabled"] = true }
+            };
+            mcp["servers"] = nested;
+        }
+        else
+        {
+            if (mcp.ContainsKey("solforge-studio") && !IsOurOpenCodeEntry(mcp["solforge-studio"], command))
+                throw new IOException("opencode.json already defines mcp.solforge-studio; keeping the user's entry unchanged.");
+            mcp["solforge-studio"] = new JsonObject { ["type"] = "local", ["command"] = launch, ["enabled"] = true };
+        }
+        config["mcp"] = mcp;
+        if (config["instructions"] is not null and not JsonArray and not JsonValue)
+            throw new System.Text.Json.JsonException("opencode.json instructions must be a string or an array of strings.");
+        var instructions = config["instructions"] is JsonArray existingInstructions
+            ? (JsonArray)existingInstructions.DeepClone() : new JsonArray();
+        if (config["instructions"] is JsonValue singleInstruction && singleInstruction.TryGetValue<string>(out string? value))
+            instructions.Add(value);
+        foreach (string instruction in new[] { "AGENTS.md", ".solforge/SESSION.md", ".solforge/HANDOFF.md" })
+            if (!instructions.Any(item => item?.GetValueKind() == System.Text.Json.JsonValueKind.String
+                && item.GetValue<string>().Equals(instruction, StringComparison.OrdinalIgnoreCase))) instructions.Add(instruction);
+        config["instructions"] = instructions;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, config.ToJsonString(McpJson.Indented));
+        return path;
+    }
+
+    private static bool IsOurOpenCodeEntry(JsonNode? entry, string command) => entry?["command"] is JsonArray args
+        && args.Count > 0 && args[0]?.GetValue<string>() == command;
+
+    private static string WriteManagedBlock(string path, string begin, string end, string block, string conflictHeader)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        string previous = File.Exists(path) ? File.ReadAllText(path) : "";
+        int start = previous.IndexOf(begin, StringComparison.Ordinal);
+        int stop = start < 0 ? -1 : previous.IndexOf(end, start + begin.Length, StringComparison.Ordinal);
+        string next;
+        if (start >= 0 && stop >= 0) next = previous[..start] + block + previous[(stop + end.Length)..];
+        else
+        {
+            if (previous.Contains(conflictHeader, StringComparison.OrdinalIgnoreCase))
+                throw new IOException($"{path} already defines {conflictHeader}; keeping the user's entry unchanged.");
+            next = previous.Length == 0 ? block + Environment.NewLine : previous.TrimEnd() + Environment.NewLine + Environment.NewLine + block + Environment.NewLine;
+        }
+        if (next != previous) File.WriteAllText(path, next);
+        return path;
+    }
+
+    private static string TomlString(string value) => System.Text.Json.JsonSerializer.Serialize(value);
 
     /** @param files Null when they could not be written: the engine still gets the prompt and the folders. */
     public static string ClaudeArguments(ClaudeFiles? files, IEnumerable<string> addDirs)
@@ -175,6 +272,10 @@ public static class EngineLaunch
         _ => ""
     };
 
+    /** Pi harness arguments: Solforge's context prompt, then the previous session when resume is on. */
+    public static string PiArguments(bool resume) =>
+        JoinArguments("--append-system-prompt", Quote(PiSystemPrompt), resume ? "--continue" : "");
+
     /**
      * Adds a first prompt that starts the engine interactively: claude takes it as the first argument (its --add-dir
      * and --mcp-config take several values and would swallow a trailing one), agy as -i; other engines get none.
@@ -191,7 +292,8 @@ public static class EngineLaunch
      * requests and, for Claude Code, its last reply) so the next engine picks up with the same project, MCP and skills.
      * Only local session files are read; no sign-in is touched. Returns the file's path.
      */
-    public static string WriteHandoff(string projectRoot, string fromCommand, string fromName, string toName, string? home = null)
+    public static string WriteHandoff(string projectRoot, string fromCommand, string fromName, string toName, string? home = null,
+        string? terminalOutput = null)
     {
         home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         string? session = null, transcript = null, reply = null;
@@ -214,7 +316,16 @@ public static class EngineLaunch
         string folder = Path.Combine(projectRoot, ".solforge");
         Directory.CreateDirectory(folder);
         string path = Path.Combine(folder, "HANDOFF.md");
-        File.WriteAllText(path, HandoffText(fromName, toName, session, transcript, requests, reply, DateTime.Now));
+        var text = new StringBuilder(HandoffText(fromName, toName, session, transcript, requests, reply, DateTime.Now));
+        if (!string.IsNullOrWhiteSpace(terminalOutput))
+        {
+            string[] lines = terminalOutput.Replace("\r", "").Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            string tail = string.Join(Environment.NewLine, lines.TakeLast(20));
+            if (tail.Length > 5000) tail = tail[^5000..];
+            text.AppendLine().AppendLine("## Previous terminal output");
+            foreach (string line in tail.Split('\n')) text.Append("- ").AppendLine(line.Replace("`", "'").Trim());
+        }
+        File.WriteAllText(path, text.ToString());
         return path;
     }
 
@@ -227,7 +338,7 @@ public static class EngineLaunch
     {
         var text = new StringBuilder("# Engine handoff\n\n");
         text.Append($"Solforge switched this project from {fromName} to {toName} on {at:yyyy-MM-dd HH:mm}. Pick up where {fromName} left off.\n");
-        text.Append("Same project, solforge MCP tools (get_context, get_open_documents), skills and AGENTS.md rules; ");
+        text.Append("Same project, sol MCP tools (get_context, get_open_documents), skills and AGENTS.md rules; ");
         text.Append(".solforge/SESSION.md holds the live session context.\n");
         if (session is not null) text.Append($"{fromName} session: {session}{(transcript is null ? "" : $" (full transcript: {transcript})")}\n");
         text.Append("\n## Recent requests (oldest first)\n");

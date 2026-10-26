@@ -1,5 +1,7 @@
+using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Packages;
+using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
@@ -16,17 +18,50 @@ public sealed partial class StudioForm
     private string? statusFolder;
     private bool statusFolderExists;
 
-    /** Right-aligned profile, package/key/cache health and memory; recomputed at most once a second. */
+    /**
+     * Right-aligned profile, package/key/cache health and memory (recomputed at most once a second), then the MCP fact:
+     * a status dot and the call count of the editor's MCP server; clicking it opens the Solforge AI panel.
+     */
     private void DrawStatusFacts()
     {
         long now = Environment.TickCount64;
         if (statusFacts.Length == 0 || now - statusFactsTicks >= 1000) { statusFactsTicks = now; RefreshStatusFacts(); }
-        float width = ImGui.CalcTextSize(statusFacts).X;
+        string mcpStatus = "MCP off";
+        AiServiceStatus(ref mcpStatus);
+        var (mcpText, mcpColor) = McpFact(mcpStatus);
+        float line = ImGui.GetTextLineHeight();
+        float spacing = ImGui.GetStyle().ItemSpacing.X;
+        float mcpWidth = line + ImGui.CalcTextSize(mcpText).X;
+        float width = ImGui.CalcTextSize(statusFacts).X + spacing * 3 + mcpWidth;
         ImGui.SameLine();
         float x = ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - width;
         if (x > ImGui.GetCursorPosX()) ImGui.SetCursorPosX(x);
         ImGui.TextDisabled(statusFacts);
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(statusFactsTip);
+        ImGui.SameLine(0, spacing);
+        var draw = ImGui.GetWindowDrawList();
+        var at = ImGui.GetCursorScreenPos();
+        draw.AddLine(at + new Vector2(0, line * .1f), at + new Vector2(0, line * .9f), SolTheme.U32(SolTheme.BorderHi), 1);
+        ImGui.SetCursorScreenPos(at + new Vector2(spacing * 2, 0));
+        var start = ImGui.GetCursorScreenPos();
+        if (UiAuto.InvisibleButton("status-mcp", "MCP", new(mcpWidth, line))) OpenAiWorkspace();
+        bool hovered = ImGui.IsItemHovered();
+        UiMotion.Dot(draw, start + new Vector2(line * .4f, line * .5f), line * .22f, ImGui.GetItemID(), mcpColor);
+        draw.AddText(start + new Vector2(line, 0), SolTheme.U32(hovered ? SolTheme.TextStrong : SolTheme.Muted), mcpText);
+        if (hovered) ImGui.SetTooltip(mcpStatus + "\nClick to open the Solforge AI panel.");
+    }
+
+    /** The MCP fact's short text and dot colour from the AiServiceStatus line. */
+    private static (string Text, Vector4 Color) McpFact(string status)
+    {
+        if (status.StartsWith("MCP :", StringComparison.Ordinal))
+        {
+            int calls = status.IndexOf(" calls", StringComparison.Ordinal);
+            int space = calls > 0 ? status.LastIndexOf(' ', calls - 1) : -1;
+            string count = space > 0 ? status[(space + 1)..calls] : "";
+            return (count.Length > 0 ? $"MCP {count}" : "MCP", status.Contains("(paused)", StringComparison.Ordinal) ? SolTheme.Warn : SolTheme.Ok);
+        }
+        return status.StartsWith("MCP error", StringComparison.Ordinal) ? ("MCP error", SolTheme.Bad) : ("MCP off", SolTheme.Dim);
     }
 
     private void RefreshStatusFacts()

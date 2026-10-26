@@ -27,7 +27,7 @@ public static class AgyDelegate
     {
         ["name"] = ToolName,
         ["description"] = "Hand a self-contained task to Gemini through the user's own Antigravity CLI login (agy -p, Google AI Pro). " +
-            "It runs headless in the given folder with the same skills, AGENTS.md rules and solforge MCP, and returns Gemini's reply " +
+            "It runs headless in the given folder with the same skills, AGENTS.md rules and sol MCP, and returns Gemini's reply " +
             "plus a conversation id to continue it. Use it when the user asks for Gemini, a second opinion or a very large read; " +
             "the prompt must stand alone (Gemini does not see this conversation). For long inputs write them to a file and name it.",
         ["inputSchema"] = new JsonObject

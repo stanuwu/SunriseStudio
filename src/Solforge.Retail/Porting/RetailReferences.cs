@@ -42,9 +42,10 @@ public static class RetailReferences
         {
             cancel.ThrowIfCancellationRequested();
             var (tag, level, _) = order[i];
-            if (level >= depth || source.Read(tag) is not { } bytes) continue;
-            // Buffers and other raw data have no references worth following.
+            if (level >= depth) continue;
+            // Buffers and other raw data have no references worth following (checked before reading: they can be huge).
             if (source.Index?.Find(tag) is { IsStruct: false }) continue;
+            if (source.Read(tag) is not { } bytes) continue;
             foreach (var reference in Scan(source, bytes, tag))
             {
                 if (!seen.Add(reference.Tag)) continue;

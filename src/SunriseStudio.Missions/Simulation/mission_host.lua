@@ -341,13 +341,17 @@ end
 
 if not stuck and not failed then
     for _, cut in ipairs(c.outro or {}) do
-        if mode == "skip" then
-            call("on_event_region_changed", {region_index = cut.state.region_index})
-            call("on_event_cinematic_skip_requested", {slot = {id = cut.cinematic}})
-            call("on_event_cinematic_terminated", {slot = {id = cut.cinematic}})
-        elseif mode ~= "cutscene_never_loads" then
-            call("on_event_region_changed", {region_index = cut.state.region_index})
-            call("on_event_cinematic_terminated", {slot = {id = cut.cinematic}})
+        if cut.state ~= nil and cut.cinematic ~= nil then
+            if mode == "skip" then
+                call("on_event_region_changed", {region_index = cut.state.region_index})
+                call("on_event_cinematic_skip_requested", {slot = {id = cut.cinematic}})
+                call("on_event_cinematic_terminated", {slot = {id = cut.cinematic}})
+            elseif mode ~= "cutscene_never_loads" then
+                call("on_event_region_changed", {region_index = cut.state.region_index})
+                call("on_event_cinematic_terminated", {slot = {id = cut.cinematic}})
+            end
+        else
+            fire_timers()
         end
     end
     if mode == "cutscene_never_loads" then

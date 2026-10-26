@@ -24,15 +24,11 @@ method has a `/** */` comment. Start from the header of the file you are in.
 | `Solforge.Graphs` | Node graphs: document model, editor model, node library, validation, compilers (see data flow below). |
 | `Solforge.Weapons` | `.weapon.json` recipes and weapon domain code. |
 | `Solforge.Mcp` | The MCP server and every tool (see below). |
-| `Solforge.Mcp.Shim` | `solforge-mcp.exe`, a stdio front end for MCP clients that cannot speak HTTP. |
-| `SunriseStudio.Editor` | The editor window and pages. `StudioForm.*.cs` partials, `Ai/` terminal, `Creation/` authoring dialogs. |
+| `Solforge.Mcp.Shim` | `solforge-mcp.exe`: `--project` bridges stdio to the running editor; `--sol` aggregates Solforge, sol-testkit, tiger-mcp and the optional delegates as the one `sol` server, including tools, resources, resource templates and prompts. |
+| `SunriseStudio.Editor` | The editor window and pages. `StudioForm.*.cs` partials (UE5 chrome: `.MenuBar`, `.Toolbar`, `.PanelTabs`, `.PlacePanel`, `.OutputLog`, `.SolforgeAiPanel`), `Creation/` authoring dialogs. `Ai/` still holds the old terminal classes, compiled for their checks but no longer used by the editor. |
 | `SunriseStudio.App` | Entry point and command line. |
 
 `tests/` holds one console check program per area (no test framework); `verify.ps1` builds and runs them all.
-Owner builds (`SolforgeRelay=true`, see `RELEASING.md`) compile extra owner-only sources from a private folder outside
-this repository into `Solforge.Mcp` and `SunriseStudio.Editor` through `Directory.Build.props`. The public code only
-holds empty `partial` hooks for them (names start with `Owner`); public builds and releases contain none of it.
-
 ## Data flow
 
 ### 1. Packages to the editor to AI clients
@@ -50,7 +46,7 @@ SunriseStudio.Editor  (StudioForm + pages; ImGui drawn by Rendering / Viewport)
 Solforge.Mcp  (tools in SolforgeTools*.cs, HTTP server McpHttpServer, discovery file McpDiscovery)
    |  Bearer-token HTTP on 127.0.0.1
    +----------------------> MCP clients that speak HTTP
-   +--> Solforge.Mcp.Shim (stdio) --> Claude Desktop, Cursor, Cline, Gemini CLI, Codex...
+   +--> Solforge.Mcp.Shim --sol (stdio) --> Claude Desktop, Cursor, Cline, Gemini CLI, Codex... (one `sol` server)
 ```
 
 - The editor never edits the game install. Edits go into the project as deltas (`Projects`) and become a mod on build.
@@ -59,13 +55,18 @@ Solforge.Mcp  (tools in SolforgeTools*.cs, HTTP server McpHttpServer, discovery 
   state is marshalled onto the UI thread (`OnUi`); reads of packages run on worker threads.
 - `SolforgeMcpService` starts the server and writes a discovery file under `%LOCALAPPDATA%\Solforge\mcp`; the shim reads
   that file to find the running Solforge that has the right project open.
-- Action tools wait for an approval card in the AI workspace (`ApprovalPrompts.cs`, `StudioForm.Ai.Host.cs`).
+- Action tools wait for an approval card in the Solforge AI panel (`StudioForm.Ai.Host.cs`); a waiting request raises a badge
+  on the toolbar's Solforge AI button and a toast, and docks the panel as a tab when the layout has none. The server starts
+  with the editor (OnShown), with or without a project.
 - Tool names and schemas are a public API for AI clients. See `docs/MCP.md` for client setup and `docs/DATA-TOOLS.md` for the
   decompiled-code and data tools.
-- The AI workspace starts a CLI engine (Claude Code, Cline) in an embedded terminal: `Ai/ConPtyTerminal.cs` (process),
-  `Ai/VtScreen.cs` (escape parser and screen buffer), `Ai/TerminalView.cs` and `Ai/TerminalSelection.cs` (drawing, input,
-  selection). Launch files and provider presets: `EngineLaunch.cs`, `EngineProviders.cs`, `ClinePassProxy.cs` in `Solforge.Mcp`.
-  `AgyDelegate.cs` and `ClineDelegate.cs` expose `ask_gemini` and `ask_clinepass` through the shim.
+- There is no in-editor AI console any more (branch `ue5-ui`, `docs/UI-UE5.md` §4). The AI runs in the separate Solforge AI
+  app, which the toolbar's Solforge AI button (Ctrl+Shift+A) launches, focuses or stops through `Solforge.AiLauncher`
+  (`StudioForm.SolforgeAi.cs`). The editor still writes the `sol` MCP client configs (`.mcp.json` and the Claude Code, Cline
+  and Agy configs) so external clients keep working. `AgyDelegate.cs` and `ClineDelegate.cs` remain upstreams of the `sol`
+  aggregate, so their `ask_gemini` and `ask_clinepass` tools join the same list. The old console classes (`Ai/ConPtyTerminal.cs`,
+  `VtScreen.cs`, `TerminalView.cs`, `TerminalSelection.cs`, `TerminalPaste.cs`, and `EngineLaunch.cs` in Solforge.Mcp) stay
+  compiled for their checks, unwired.
 
 ### 2. Graphs to compilers to tags and Lua
 
@@ -97,7 +98,10 @@ surface. `Packaging/` builds `.solmod` containers and snapshots installs so they
 | Feature | Look in |
 |---|---|
 | Open a project, menus, dialogs | `Editor/StudioForm.Commands.cs`, `StudioForm.cs` |
-| Window layout, panels | `Editor/StudioForm.Layout.cs`, `StudioLayout` |
+| Window layout, panels, tabbed areas and tab docking | `Editor/StudioForm.Layout.cs`, `StudioForm.PanelTabs.cs`, `StudioForm.Layouts.cs` (presets, drawer), `StudioLayout` |
+| Menu bar, main toolbar, Solforge AI button | `Editor/StudioForm.MenuBar.cs`, `StudioForm.Toolbar.cs`, `StudioForm.SolforgeAi.cs` |
+| Theme tokens and UI motion | `Viewport/SolTheme*.cs`, `Viewport/UiMotion*.cs`, `Editor/StudioForm.FramePacing.cs` |
+| Place panel, Output Log | `Editor/StudioForm.PlacePanel.cs`, `StudioForm.OutputLog.cs` |
 | Settings and preferences | `Editor/StudioSettings.cs`, `StudioForm.Preferences.cs` |
 | 3D viewport, selection, gizmos | `Viewport/AssetViewport.cs`, `NativeSceneRenderer*.cs` |
 | Live material preview | `Editor/NodeGraphLivePreview.cs`, `Rendering/MaterialOverrides.cs`, `Graphs/MaterialLivePreview.cs` (debounce) |
@@ -112,9 +116,9 @@ surface. `Packaging/` builds `.solmod` containers and snapshots installs so they
 | Player position and follow | `Solforge.Mcp/PlayerTracking.cs`, `Editor/StudioForm.Player.cs` |
 | Reading on-screen text (OCR) | `Solforge.Mcp/ScreenOcr.cs`, `ScreenOcr.ps1`; tool `read_screen_text` |
 | Decompiled code tools | `Solforge.Mcp/Decomp/`, `SolforgeTools.Data.cs` |
-| AI workspace and terminal | `Editor/StudioForm.Ai.cs`, `Editor/Ai/` |
+| Solforge AI panel (requests, edits, presence, context) | `Editor/StudioForm.SolforgeAiPanel.cs`, `StudioForm.Ai.cs`, `StudioForm.Ai.Host.cs` |
 | Live viewport in a local browser | `Solforge.Mcp/ViewportFeed.cs`, `McpHttpServer.cs` (`/viewport`), `Editor/StudioForm.Ai.Stream.cs` |
-| Public vs owner builds | `RELEASING.md`, `Directory.Build.props`, `publish.ps1 -Public` |
+| Release build | `RELEASING.md`, `publish.ps1` |
 | Agent skills for tasks | `skills/*/SKILL.md` |
 
 ## Conventions

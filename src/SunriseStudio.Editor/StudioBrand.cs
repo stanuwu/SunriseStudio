@@ -90,6 +90,17 @@ public static class StudioBrand
         return result;
     }
 
+    /**
+     * A vector stand-in for the logo (a sun disc in the Brand colour with a ring), for the menu bar's 16 px mark when
+     * the texture is not made yet. The UE5 theme keeps the old Sol orange for the brand only (SolTheme.Brand).
+     */
+    public static void DrawMark(ImGuiNET.ImDrawListPtr draw, System.Numerics.Vector2 min, float size)
+    {
+        var centre = min + new System.Numerics.Vector2(size / 2);
+        draw.AddCircleFilled(centre, size * .28f, SunriseStudio.Viewport.SolTheme.U32(SunriseStudio.Viewport.SolTheme.Brand), 16);
+        draw.AddCircle(centre, size * .44f, SunriseStudio.Viewport.SolTheme.U32(SunriseStudio.Viewport.SolTheme.BrandHi), 20, Math.Max(1, size * .08f));
+    }
+
     private static Stream Open(string name) => typeof(StudioBrand).Assembly.GetManifestResourceStream(name)
         ?? throw new InvalidDataException($"The embedded {name} artwork is missing.");
 }
