@@ -112,13 +112,13 @@ public sealed partial class StudioForm
                 default: throw new InvalidDataException($"Unknown op '{kind}'.");
             }
         }
-        var problems = NativePerkBehavior.Validate(graph, source);
-        if (problems.Count != 0) return "Not saved: " + string.Join(" ", problems);
-        // Label filters compile against the installed label table, as custom perks do.
+        // Label filters validate and compile against the installed label table, as custom perks do.
         if (graph.Activation.Concat(graph.Effects).Concat(graph.Deactivation)
             .Any(node => node.LabelFilters.Any(filter => filter.Arrays().Any(array => array.Count != 0))))
             PerkLabelTable.Installed ??= PerkLabelTable.Parse(catalog.Read(PerkLabelTable.Tag))
                 ?? throw new InvalidDataException("The installed perk label table cannot be read.");
+        var problems = NativePerkBehavior.Validate(graph, source);
+        if (problems.Count != 0) return "Not saved: " + string.Join(" ", problems);
         byte[] compiled = NativePerkBehavior.Compile(graph);
         workspace.Run(() => workspace.ApplyAssetEdits(new Dictionary<uint, byte[]> { [tag] = compiled }, "Saved perk behavior"));
         if (workspace.Error.Length > 0) return workspace.Error;
@@ -150,6 +150,10 @@ public sealed partial class StudioForm
             timer.Properties.First(row => row.Key == "seconds").Value = 0.1;
             graph.Deactivation.Add(timer);
         }
+        if (graph.Activation.Concat(graph.Effects).Concat(graph.Deactivation)
+            .Any(node => node.LabelFilters.Any(filter => filter.Arrays().Any(array => array.Count != 0))))
+            PerkLabelTable.Installed ??= PerkLabelTable.Parse(workspace.Catalog!.Read(PerkLabelTable.Tag))
+                ?? throw new InvalidDataException("The installed perk label table cannot be read.");
         var problems = NativePerkBehavior.Validate(graph, graph.OriginalBytes.Length == 0 ? null : source);
         if (problems.Count != 0) return "Not created: " + string.Join(" ", problems);
         ushort package = McpJson.String(args, "package") is { Length: > 0 } text
