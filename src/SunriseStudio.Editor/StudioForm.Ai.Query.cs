@@ -59,6 +59,7 @@ public sealed partial class StudioForm
                 "list_shaders" or "get_shader" or "list_animations" or "get_animation" or "list_audio" or "get_audio" => await AiAssetAsync(tool, args, cancel),
                 "list_creation_types" => AiCreationTypes(McpJson.String(args, "filter")),
                 "compare_with_base" or "get_item_sources" => await AiItemSourceQueryAsync(tool, args, cancel),
+                "get_perk_behavior" or "list_perk_node_types" => await AiPerkQueryAsync(tool, args, cancel),
                 "get_help" => await OnUi(() => AiHelp(args)).WaitAsync(cancel),
                 "list_commands" => await OnUi(AiCommandStates).WaitAsync(cancel),
                 "get_player_position" => await AiPlayerPositionAsync(args, cancel),
@@ -607,6 +608,7 @@ public sealed partial class StudioForm
             case "apply_item_edit": return AiApplyItemEdit(args);
             case "apply_graph": return AiApplyGraph(args);
             case "create_mission_script": return AiCreateMissionScript(args);
+            case "edit_perk_behavior" or "create_perk": return AiPerkAction(tool, args);
             case "apply_vendor_edit": return AiApplyVendorEdit(args);
             case "revert_to_base": return AiRevertToBase(args);
             case "retail_open_map": return AiRetailOpenMap(args);

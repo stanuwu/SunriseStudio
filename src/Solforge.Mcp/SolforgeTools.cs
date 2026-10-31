@@ -127,7 +127,7 @@ public static partial class SolforgeTools
     {
         McpTool Read(string name, string description, JsonObject schema, Func<JsonObject, CancellationToken, Task<McpToolResult>> run) =>
             new(name, description, schema, false, async (args, cancel) =>
-                host.Paused && name is not ("read_project_file" or "search_project" or "search_reference" or "read_reference") && !CatalogTools.Contains(name) && !ContentReadTools.Contains(name) && !AssetReadTools.Contains(name) && !ItemSourceReadTools.Contains(name) && !RetailReadTools.Contains(name)
+                host.Paused && name is not ("read_project_file" or "search_project" or "search_reference" or "read_reference") && !CatalogTools.Contains(name) && !ContentReadTools.Contains(name) && !AssetReadTools.Contains(name) && !ItemSourceReadTools.Contains(name) && !PerkReadTools.Contains(name) && !RetailReadTools.Contains(name)
                     ? McpToolResult.Error("The user paused context publishing in Solforge's AI workspace.")
                     : await run(args, cancel).ConfigureAwait(false));
         McpTool Act(string name, string description, JsonObject schema, Func<JsonObject, string?> validate, Func<JsonObject, string> summary) =>
@@ -381,6 +381,7 @@ public static partial class SolforgeTools
             .. RetailTools(host, Read, Act)
         ];
     }
+            .. PerkTools(host, Read, Act),
 
     private const string NoReference = "No reference library found (08-docs\\reference above the project or game folder, or SOLFORGE_REFERENCE).";
     private const string NoMission = "No mission is open in Solforge. list_missions lists the open map's missions; open_map with " +
