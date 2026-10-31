@@ -177,14 +177,16 @@ public static partial class SolforgeTools
             McpJson.Schema(("key", "string", "Object edit key", true)), args => Need(args, "key", "Give an object edit key."),
             args => $"Revert object edit {Arg(args, "key")}");
         yield return act("apply_item_edit", "Edit the item open in Solforge (open it with open_asset first): op set_field (field, " +
-            "value), add_stat (stat, value), remove_stat (stat), add_perk (perk), remove_perk (perk). Saved to the project with undo. " +
+            "value), add_stat (stat, value), remove_stat (stat), add_perk (perk), remove_perk (perk), set_socket_plug (socket, plug: makes " +
+            "the plug the socket's only and initial choice, e.g. a cloned plug from Mods and plugs). Saved to the project with undo. " +
             "See skill solforge-new-weapon.",
-            McpJson.Schema(("item", "string", "Item tag (must be the open document)", true), ("op", "string", "set_field, add_stat, remove_stat, add_perk or remove_perk", true),
+            McpJson.Schema(("item", "string", "Item tag (must be the open document)", true), ("op", "string", "set_field, add_stat, remove_stat, add_perk, remove_perk or set_socket_plug", true),
                 ("field", "string", "Field name from get_item (set_field)", false), ("value", "string", "New value (set_field, add_stat)", false),
-                ("stat", "string", "Stat index or name", false), ("perk", "string", "Perk index or name", false)),
-            args => Need(args, "item", "Give the item tag.") ?? (Arg(args, "op") is "set_field" or "add_stat" or "remove_stat" or "add_perk" or "remove_perk"
-                ? null : "op must be set_field, add_stat, remove_stat, add_perk or remove_perk."),
-            args => $"Item {Arg(args, "item")}: {Arg(args, "op")} " + string.Join(" ", new[] { "field", "stat", "perk", "value" }
+                ("stat", "string", "Stat index or name", false), ("perk", "string", "Perk index or name", false),
+                ("socket", "integer", "Socket index from get_item (set_socket_plug)", false), ("plug", "string", "Plug item index, tag or exact name (set_socket_plug)", false)),
+            args => Need(args, "item", "Give the item tag.") ?? (Arg(args, "op") is "set_field" or "add_stat" or "remove_stat" or "add_perk" or "remove_perk" or "set_socket_plug"
+                ? null : "op must be set_field, add_stat, remove_stat, add_perk, remove_perk or set_socket_plug."),
+            args => $"Item {Arg(args, "item")}: {Arg(args, "op")} " + string.Join(" ", new[] { "field", "stat", "perk", "value", "socket", "plug" }
                 .Where(key => args[key] is not null).Select(key => $"{key}={Arg(args, key)}")));
         yield return act("apply_vendor_edit", "Edit the vendor open in Solforge (open_asset first): op duplicate_sale (sale), " +
             "remove_sale (sale), set_sale_item (sale, item), edit_cost (sale, cost, item, quantity). Saved with undo.",

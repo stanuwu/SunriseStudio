@@ -114,17 +114,26 @@ public sealed partial class StudioForm
         string name = (McpJson.String(args, "name") ?? "").Trim(), description = McpJson.String(args, "description") ?? "";
         if (workspace.LastStandalonePerk is { } last && last.Name == name)
             return $"Perk '{name}' is sandbox perk {last.PerkIndex}, program {Hex(last.ProgramTag)}. It is in Project changes with undo.";
-        var graph = NativePerkBehavior.New();
+        PerkBehaviorGraph graph, source = new();
+        if (McpJson.String(args, "from") is { Length: > 0 } from)
+        {
+            // A copy keeps every installed node byte for byte; the arrays below are added after its own nodes.
+            var (fromTag, _, problem) = AiResolvePerkProgram(workspace.Catalog!, workspace.Investment, from);
+            if (problem is not null) return problem;
+            graph = NativePerkBehavior.Decompile(workspace.Catalog!.Read(fromTag));
+            source = NativePerkBehavior.Decompile(workspace.Catalog!.Read(fromTag));
+        }
+        else graph = NativePerkBehavior.New();
         AiPerkFill(graph.Activation, args["activation"] as JsonArray);
         AiPerkFill(graph.Effects, args["effects"] as JsonArray);
         if (args["deactivation"] is JsonArray { Count: > 0 } off) AiPerkFill(graph.Deactivation, off);
-        else
+        else if (graph.Deactivation.Count == 0)
         {
             var timer = NativePerkBehavior.CreateNode("timer");
             timer.Properties.First(row => row.Key == "seconds").Value = 0.1;
             graph.Deactivation.Add(timer);
         }
-        var problems = NativePerkBehavior.Validate(graph);
+        var problems = NativePerkBehavior.Validate(graph, graph.OriginalBytes.Length == 0 ? null : source);
         if (problems.Count != 0) return "Not created: " + string.Join(" ", problems);
         ushort package = McpJson.String(args, "package") is { Length: > 0 } text
             ? ushort.Parse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text, NumberStyles.HexNumber, CultureInfo.InvariantCulture)

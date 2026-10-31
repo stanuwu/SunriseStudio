@@ -732,6 +732,11 @@ public sealed partial class StudioForm
                 break;
             default:
                 return "Unknown op.";
+            case "set_socket_plug":
+                if (args["socket"] is not JsonValue socketValue || !socketValue.TryGetValue(out int socketIndex)) return "Give socket, an index from get_item.";
+                if (AiFindItem(data!, McpJson.String(args, "plug") ?? "") is not { } plug) return "No plug by that index, tag or name; use search_items.";
+                workspace.Run(() => workspace.SetInvestmentSocketPlug(socketIndex, checked((ushort)plug.Index)));
+                break;
         }
         return workspace.Error.Length > 0 ? workspace.Error : $"Applied {op} to {detail.Item.Name}; it is in Project changes with undo.";
     }

@@ -69,10 +69,12 @@ public static partial class SolforgeTools
         yield return act("create_perk", "Register a new sandbox perk (definition, display and runtime-name rows, a compiled " +
             "program and its name and description strings) in the project. No item carries it: put it on a plug with " +
             "apply_item_edit add_perk, or have the server add it (sol_custom_data.lua ability sandbox_perks). The reply gives " +
-            "the new perk index once the work finishes (call again with the same name to read it). " + PerkNodeHelp,
+            "the new perk index once the work finishes (call again with the same name to read it). from copies an existing perk's " +
+            "program (every node byte for byte, label filters included); activation/effects/deactivation are then added after " +
+            "its nodes. " + PerkNodeHelp,
             new JsonObject
             {
-                ["type"] = "object", ["required"] = new JsonArray("name", "activation", "effects"),
+                ["type"] = "object", ["required"] = new JsonArray("name"),
                 ["properties"] = new JsonObject
                 {
                     ["name"] = new JsonObject { ["type"] = "string", ["description"] = "Perk name (1-200 characters)" },
@@ -81,13 +83,16 @@ public static partial class SolforgeTools
                     ["effects"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "object" } },
                     ["deactivation"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "object" },
                         ["description"] = "Default: one 'timer' of 0.1 s so the perk re-arms" },
-                    ["package"] = new JsonObject { ["type"] = "string", ["description"] = "Optional new package ID (hex); default as custom perks choose it" }
+                    ["package"] = new JsonObject { ["type"] = "string", ["description"] = "Optional new package ID (hex); default as custom perks choose it" },
+                    ["from"] = new JsonObject { ["type"] = "string", ["description"] = "Optional perk (index, exact name or program tag) whose program to copy first" }
                 }
             },
             args => string.IsNullOrWhiteSpace(McpJson.String(args, "name")) ? "Give the perk a name."
-                : args["activation"] is JsonArray { Count: > 0 } && args["effects"] is JsonArray { Count: > 0 } ? null
-                : "Give at least one activation node and one effect node.",
-            args => $"Create perk '{McpJson.String(args, "name")}': activation {args["activation"]?.ToJsonString()}, effects " +
+                : !string.IsNullOrWhiteSpace(McpJson.String(args, "from"))
+                  || args["activation"] is JsonArray { Count: > 0 } && args["effects"] is JsonArray { Count: > 0 } ? null
+                : "Give from, or at least one activation node and one effect node.",
+            args => $"Create perk '{McpJson.String(args, "name")}'" + (McpJson.String(args, "from") is { Length: > 0 } from ? $" from perk {from}" : "") +
+                $": activation {args["activation"]?.ToJsonString()}, effects " +
                 $"{args["effects"]?.ToJsonString()}, deactivation {args["deactivation"]?.ToJsonString() ?? "[timer 0.1]"}");
     }
 }
