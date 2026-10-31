@@ -38,8 +38,8 @@ public static partial class SolforgeTools
         static string? NeedPerk(JsonObject args) =>
             string.IsNullOrWhiteSpace(McpJson.String(args, "perk")) ? "Give a perk index, exact name or program tag (0x...)." : null;
         static string? NeedOps(JsonObject args) => args["ops"] is JsonArray { Count: > 0 } ops
-            && ops.All(op => op is JsonObject row && (string?)row["op"] is "add" or "set" or "remove" or "hud")
-            ? null : "Give ops: [{op: add|set|remove|hud, ...}].";
+            && ops.All(op => op is JsonObject row && (string?)row["op"] is "add" or "set" or "remove" or "labels" or "hud")
+            ? null : "Give ops: [{op: add|set|remove|labels|hud, ...}].";
 
         yield return Query("get_perk_behavior", "A sandbox perk's native behavior program, decompiled: its program tag, whether " +
             "the project changes it, the HUD status, and the activation, effects and deactivation phases with every node's " +
@@ -53,7 +53,8 @@ public static partial class SolforgeTools
             McpJson.Schema(("query", "string", "Optional words, e.g. 'spawn' or 'kill'", false)));
         yield return act("edit_perk_behavior", "Edit an existing perk program and save it to the project with undo (it changes " +
             "every item that uses the perk). ops run in order: {op: add, phase, node, at?} adds a node (at = index, default " +
-            "end); {op: set, phase, index, values, inner?} changes inputs; {op: remove, phase, index}; {op: hud, label?, " +
+            "end); {op: set, phase, index, values, inner?} changes inputs; {op: remove, phase, index}; {op: labels, phase, index, filter, anyOf?, allOf?, noneOf?, notAllOf?} " +
+            "replaces a node's label filter lists (filter keys and hashes from get_perk_behavior); {op: hud, label?, " +
             "show_timer?} sets or clears (label 0) the HUD status. phase is activation, effects or deactivation. " + PerkNodeHelp,
             new JsonObject
             {

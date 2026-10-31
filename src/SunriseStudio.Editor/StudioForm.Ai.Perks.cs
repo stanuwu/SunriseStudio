@@ -97,11 +97,28 @@ public sealed partial class StudioForm
                     notes.Add($"removed {node.Primitive}");
                     break;
                 }
+                case "labels":
+                {
+                    var node = AiPerkAt(phase, row);
+                    string key = (string?)row["filter"] ?? "";
+                    var filter = node.LabelFilters.FirstOrDefault(item => item.Key == key)
+                        ?? throw new InvalidDataException($"{node.Title} has no label filter '{key}'. Filters: {string.Join(", ", node.LabelFilters.Select(item => item.Key))}.");
+                    if (!filter.Editable) throw new InvalidDataException($"{node.Title} filter '{key}' is read-only.");
+                    AiPerkLabels(filter.AnyOf, row["anyOf"]); AiPerkLabels(filter.AllOf, row["allOf"]);
+                    AiPerkLabels(filter.NoneOf, row["noneOf"]); AiPerkLabels(filter.NotAllOf, row["notAllOf"]);
+                    notes.Add($"set {key} labels of {node.Primitive}");
+                    break;
+                }
                 default: throw new InvalidDataException($"Unknown op '{kind}'.");
             }
         }
         var problems = NativePerkBehavior.Validate(graph, source);
         if (problems.Count != 0) return "Not saved: " + string.Join(" ", problems);
+        // Label filters compile against the installed label table, as custom perks do.
+        if (graph.Activation.Concat(graph.Effects).Concat(graph.Deactivation)
+            .Any(node => node.LabelFilters.Any(filter => filter.Arrays().Any(array => array.Count != 0))))
+            PerkLabelTable.Installed ??= PerkLabelTable.Parse(catalog.Read(PerkLabelTable.Tag))
+                ?? throw new InvalidDataException("The installed perk label table cannot be read.");
         byte[] compiled = NativePerkBehavior.Compile(graph);
         workspace.Run(() => workspace.ApplyAssetEdits(new Dictionary<uint, byte[]> { [tag] = compiled }, "Saved perk behavior"));
         if (workspace.Error.Length > 0) return workspace.Error;
@@ -247,6 +264,20 @@ public sealed partial class StudioForm
             if (!row.Editable) throw new InvalidDataException($"{node.Title} input '{key}' is read-only.");
             row.Value = AiPerkNumber(value, double.NaN);
             if (double.IsNaN(row.Value)) throw new InvalidDataException($"{node.Title} input '{key}' needs a number or 0x hex.");
+        }
+    }
+
+    /** Replaces a label list with the given hashes (0x hex or numbers); absent leaves it as it is. */
+    private static void AiPerkLabels(List<uint> target, JsonNode? values)
+    {
+        if (values is null) return;
+        if (values is not JsonArray array) throw new InvalidDataException("Label lists are arrays of hashes.");
+        target.Clear();
+        foreach (var value in array)
+        {
+            double hash = AiPerkNumber(value, double.NaN);
+            if (double.IsNaN(hash) || hash < 0 || hash > uint.MaxValue) throw new InvalidDataException("A label is a hash such as 0x905E8440.");
+            target.Add((uint)hash);
         }
     }
 
