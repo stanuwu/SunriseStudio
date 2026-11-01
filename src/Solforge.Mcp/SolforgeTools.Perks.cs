@@ -16,7 +16,7 @@ public static partial class SolforgeTools
     /** Read tools of this file, in listing order. */
     public static readonly string[] PerkReadTools = ["get_perk_behavior", "list_perk_node_types"];
     /** Action tools of this file. */
-    public static readonly string[] PerkActionTools = ["edit_perk_behavior", "create_perk"];
+    public static readonly string[] PerkActionTools = ["edit_perk_behavior", "create_perk", "clone_tags"];
 
     /** Phase names the perk tools take. */
     public static readonly string[] PerkPhases = ["activation", "effects", "deactivation"];
@@ -98,5 +98,25 @@ public static partial class SolforgeTools
             args => $"Create perk '{McpJson.String(args, "name")}'" + (McpJson.String(args, "from") is { Length: > 0 } from ? $" from perk {from}" : "") +
                 $": activation {args["activation"]?.ToJsonString()}, effects " +
                 $"{args["effects"]?.ToJsonString()}, deactivation {args["deactivation"]?.ToJsonString() ?? "[timer 0.1]"}");
+        yield return act("clone_tags", "Copy installed tags (any class, e.g. a buff object and its config) into the project as new " +
+            "entries. Inside the copies, every 4-byte value naming a copied tag is swapped for its copy, replace swaps other " +
+            "values ({\"0xOLD\": \"0xNEW\"}) and strings swaps a string hash for a new project string ({\"0xHASH\": \"text\"}). " +
+            "Nothing uses the copies until another edit names them (e.g. a perk spawn node's definition). The reply lists the new " +
+            "tags once the work finishes (call again with the same name to read them).",
+            new JsonObject
+            {
+                ["type"] = "object", ["required"] = new JsonArray("tags", "name"),
+                ["properties"] = new JsonObject
+                {
+                    ["tags"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Tags to copy (0x...)" },
+                    ["name"] = new JsonObject { ["type"] = "string", ["description"] = "Name for the copies in Project changes" },
+                    ["replace"] = new JsonObject { ["type"] = "object", ["description"] = "Optional {\"0xOLD\": \"0xNEW\"} value swaps" },
+                    ["strings"] = new JsonObject { ["type"] = "object", ["description"] = "Optional {\"0xHASH\": \"new text\"} string swaps" }
+                }
+            },
+            args => args["tags"] is JsonArray { Count: > 0 } && !string.IsNullOrWhiteSpace(McpJson.String(args, "name")) ? null
+                : "Give tags [0x...] and a name.",
+            args => $"Copy tags {args["tags"]?.ToJsonString()} as '{McpJson.String(args, "name")}'; replace {args["replace"]?.ToJsonString() ?? "{}"}, " +
+                $"strings {args["strings"]?.ToJsonString() ?? "{}"}");
     }
 }

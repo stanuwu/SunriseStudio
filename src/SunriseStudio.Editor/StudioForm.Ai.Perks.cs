@@ -41,7 +41,7 @@ public sealed partial class StudioForm
         if (!workspace.CanEdit || workspace.Project is null || workspace.Catalog is not { } catalog) return "No project is open, or Solforge is busy.";
         try
         {
-            return tool == "create_perk" ? AiCreatePerk(args) : AiEditPerk(catalog, args);
+            return tool switch { "create_perk" => AiCreatePerk(args), "clone_tags" => AiCloneTags(args), _ => AiEditPerk(catalog, args) };
         }
         catch (Exception error) when (error is InvalidDataException or InvalidOperationException or ArgumentException or KeyNotFoundException
             or FormatException or OverflowException)
@@ -154,6 +154,24 @@ public sealed partial class StudioForm
         return workspace.Error.Length > 0 ? workspace.Error
             : $"Saving perk {index} display ({(name is null ? "name kept" : name.Length == 0 ? "name hidden" : $"name '{name}'")}"
               + $"{(icon is { } value ? $", icon row {value}" : "")}); it is in Project changes with undo once get_build_status is idle.";
+    }
+
+    /** clone_tags: copies installed tags into the project with reference, value and string swaps. */
+    private string AiCloneTags(JsonObject args)
+    {
+        string name = (McpJson.String(args, "name") ?? "").Trim();
+        static string Tags(IReadOnlyDictionary<uint, uint> copies) => string.Join(", ", copies.Select(pair => $"{Hex(pair.Key)} -> {Hex(pair.Value)}"));
+        if (workspace.LastTagClone is { } last && last.Name == name)
+            return $"Copied as {name}: {Tags(last.Tags)} (values swapped per tag: "
+                + string.Join(", ", last.Swaps.Select(pair => $"{Hex(pair.Key)} {pair.Value}")) + "). It is in Project changes with undo.";
+        uint Parse(string text, string what) => SolforgeTools.ParseHash(text) ?? throw new InvalidDataException($"{what} '{text}' is not a hash.");
+        var tags = ((JsonArray)args["tags"]!).Select(node => Parse(node?.ToString() ?? "", "Tag")).ToArray();
+        var replace = (args["replace"] as JsonObject ?? []).ToDictionary(pair => Parse(pair.Key, "Value"), pair => Parse(pair.Value?.ToString() ?? "", "Value"));
+        var strings = (args["strings"] as JsonObject ?? []).ToDictionary(pair => Parse(pair.Key, "String hash"), pair => pair.Value?.ToString() ?? "");
+        ushort package = workspace.CustomPerkPackage() ?? throw new InvalidDataException("No project package can take the copies.");
+        workspace.Run(() => workspace.CloneTags(tags, name, replace, strings, package));
+        return workspace.Error.Length > 0 ? workspace.Error
+            : $"Copying {tags.Length} tag(s) into package {package:X4}; call clone_tags again with the same name for the new tags once get_build_status is idle.";
     }
 
     /** A perk's icon row, from its index or exact name; or why not. */

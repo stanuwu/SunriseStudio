@@ -28,6 +28,23 @@ public sealed partial class StudioWorkspace
             StandalonePerkAuthoring.PrepareDisplay(project, catalog, perkIndex, name, description, icon, packageId),
             plan => $"Perk display saved: sandbox perk {plan.PerkIndex}");
 
+    /** The last copies clone_tags made, for its follow-up reply. */
+    public PreparedTagClone? LastTagClone { get; private set; }
+
+    /** Copies installed tags into the project (see TagCloneAuthoring). */
+    public void CloneTags(IReadOnlyList<uint> tags, string name, IReadOnlyDictionary<uint, uint> replace,
+        IReadOnlyDictionary<uint, string> strings, ushort packageId)
+    {
+        LastTagClone = null;
+        CommitPlan("Copying tags", (project, catalog) =>
+            TagCloneAuthoring.Prepare(project, catalog, tags, name, replace, strings, packageId),
+            plan => plan.Assets, plan => plan.Changes, plan =>
+            {
+                LastTagClone = plan;
+                return $"Copied {plan.Tags.Count} tag(s) as {plan.Name}";
+            });
+    }
+
     private void CommitPerkPlan(string work, Func<StudioProject, PackageCatalog, PreparedStandalonePerk> prepare,
         Func<PreparedStandalonePerk, string> status) =>
         CommitPlan(work, prepare, plan => plan.Assets, plan => plan.Changes, plan =>
