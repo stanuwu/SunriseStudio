@@ -201,6 +201,23 @@ public static class InvestmentSandboxPerkAuthoring
         return output;
     }
 
+    /** The name and description pairs and icon index of a perk's display text. */
+    public static ((uint Bank, uint Hash) Name, (uint Bank, uint Hash) Description, ushort Icon) ReadText(
+        ReadOnlyMemory<byte> displays, int index)
+    {
+        RequireSize(displays);
+        var source = new TagReader(displays);
+        var rows = source.Array(ArrayField, SandboxPerkDisplays.RowClass, DisplayStride);
+        var texts = source.Array(TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
+        if (index < 0 || index >= rows.Count) throw new ArgumentOutOfRangeException(nameof(index));
+        int text = DisplayTarget(source, rows.Data + index * DisplayStride, texts.Data, texts.Count);
+        return ((source.U32(text), source.U32(text + 4)), (source.U32(text + 8), source.U32(text + 12)),
+            BinaryPrimitives.ReadUInt16LittleEndian(displays.Span[(text + 16)..]));
+    }
+
+    /** The bank and hash pair a hidden name or description uses. */
+    public static (uint Bank, uint Hash) HiddenText => (UnavailableBank, EmptyName);
+
     /** Writes the name and description pairs of the selected perk's private display text. */
     public static byte[] SetText(ReadOnlyMemory<byte> displays, int index, uint expectedDefinitionHash,
         (uint Bank, uint Hash) name, (uint Bank, uint Hash) description)

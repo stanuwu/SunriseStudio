@@ -29,6 +29,8 @@ public sealed partial class StudioForm
             result["perkIndex"] = index;
             result["name"] = index is int row && investment is not null && row < investment.PerkDefinitions.Count
                 ? investment.PerkDefinitions[row].Name : null;
+            result["iconRow"] = index is int iconRow && investment is not null && iconRow < investment.PerkDefinitions.Count
+                && investment.PerkDefinitions[iconRow].IconIndex != ushort.MaxValue ? investment.PerkDefinitions[iconRow].IconIndex : null;
             return result;
         }, cancel).WaitAsync(AiReadTimeout, cancel).ConfigureAwait(false);
     }
@@ -50,8 +52,14 @@ public sealed partial class StudioForm
 
     private string AiEditPerk(PackageCatalog catalog, JsonObject args)
     {
-        var (tag, _, problem) = AiResolvePerkProgram(catalog, workspace.Investment, McpJson.String(args, "perk") ?? "");
+        var (tag, perkIndex, problem) = AiResolvePerkProgram(catalog, workspace.Investment, McpJson.String(args, "perk") ?? "");
         if (problem is not null) return problem;
+        var opRows = ((JsonArray)args["ops"]!).Select(op => (JsonObject)op!).ToArray();
+        if (opRows.Any(row => (string?)row["op"] == "display"))
+        {
+            if (opRows.Length != 1) return "Send the display op on its own.";
+            return AiPerkDisplay(tag, perkIndex, opRows[0]);
+        }
         // ApplyAssetEdits records undo against the open document, as revert_to_base does.
         if (workspace.Document is null) { workspace.Run(() => workspace.Select(tag)); return "Opened the perk program; call edit_perk_behavior again once it shows."; }
         var graph = NativePerkBehavior.Decompile(catalog.Read(tag));
@@ -126,21 +134,66 @@ public sealed partial class StudioForm
             + "it changes every item with this perk. Untested node kinds may do nothing in game.";
     }
 
+    /** The display op: new name, description or icon (copied from another perk) for a perk the project registered. */
+    private string AiPerkDisplay(uint tag, int? perkIndex, JsonObject row)
+    {
+        if (perkIndex is not int index) return "Give the perk by index or name for a display edit.";
+        if (!workspace.IsProjectTag(tag)) return $"Perk {index} is installed; only perks the project registered can change their display.";
+        string? name = row["name"] is null ? null : ((string?)row["name"] ?? "").Trim();
+        string? description = (string?)row["description"];
+        ushort? icon = null;
+        if (row["icon"] is { } iconFrom)
+        {
+            var (iconIndex, iconProblem) = AiPerkIcon(iconFrom.ToString());
+            if (iconProblem is not null) return iconProblem;
+            icon = iconIndex;
+        }
+        if (name is null && description is null && icon is null) return "Give name, description or icon.";
+        ushort package = workspace.CustomPerkPackage() ?? throw new InvalidDataException("No package can take the perk strings.");
+        workspace.Run(() => workspace.EditStandalonePerkDisplay(index, name, description, icon, package));
+        return workspace.Error.Length > 0 ? workspace.Error
+            : $"Saving perk {index} display ({(name is null ? "name kept" : name.Length == 0 ? "name hidden" : $"name '{name}'")}"
+              + $"{(icon is { } value ? $", icon row {value}" : "")}); it is in Project changes with undo once get_build_status is idle.";
+    }
+
+    /** A perk's icon row, from its index or exact name; or why not. */
+    private (ushort Icon, string? Problem) AiPerkIcon(string text)
+    {
+        var investment = workspace.Investment;
+        if (investment is null) return ((ushort)0, "Perk names are still loading; try again.");
+        text = text.Trim();
+        var perk = int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int number)
+            ? investment.PerkDefinitions.ElementAtOrDefault(number)
+            : investment.PerkDefinitions.FirstOrDefault(row => string.Equals(row.Name, text, StringComparison.OrdinalIgnoreCase));
+        if (perk is null) return ((ushort)0, $"No perk '{text}' for the icon.");
+        return perk.IconIndex == ushort.MaxValue ? ((ushort)0, $"Perk {perk.Index} ({perk.Name}) has no icon.") : (perk.IconIndex, null);
+    }
+
     private string AiCreatePerk(JsonObject args)
     {
         string name = (McpJson.String(args, "name") ?? "").Trim(), description = McpJson.String(args, "description") ?? "";
         if (workspace.LastStandalonePerk is { } last && last.Name == name)
             return $"Perk '{name}' is sandbox perk {last.PerkIndex}, program {Hex(last.ProgramTag)}. It is in Project changes with undo.";
         PerkBehaviorGraph graph, source = new();
+        ushort icon = ushort.MaxValue;
         if (McpJson.String(args, "from") is { Length: > 0 } from)
         {
             // A copy keeps every installed node byte for byte; the arrays below are added after its own nodes.
-            var (fromTag, _, problem) = AiResolvePerkProgram(workspace.Catalog!, workspace.Investment, from);
+            var (fromTag, fromIndex, problem) = AiResolvePerkProgram(workspace.Catalog!, workspace.Investment, from);
             if (problem is not null) return problem;
+            // The copy shows its source perk's icon unless icon names another.
+            if (fromIndex is int sourceIndex && workspace.Investment?.PerkDefinitions.ElementAtOrDefault(sourceIndex) is { } sourcePerk)
+                icon = sourcePerk.IconIndex;
             graph = NativePerkBehavior.Decompile(workspace.Catalog!.Read(fromTag));
             source = NativePerkBehavior.Decompile(workspace.Catalog!.Read(fromTag));
         }
         else graph = NativePerkBehavior.New();
+        if (McpJson.String(args, "icon") is { Length: > 0 } iconFrom)
+        {
+            var (iconIndex, iconProblem) = AiPerkIcon(iconFrom);
+            if (iconProblem is not null) return iconProblem;
+            icon = iconIndex;
+        }
         AiPerkFill(graph.Activation, args["activation"] as JsonArray);
         AiPerkFill(graph.Effects, args["effects"] as JsonArray);
         if (args["deactivation"] is JsonArray { Count: > 0 } off) AiPerkFill(graph.Deactivation, off);
@@ -159,7 +212,7 @@ public sealed partial class StudioForm
         ushort package = McpJson.String(args, "package") is { Length: > 0 } text
             ? ushort.Parse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text, NumberStyles.HexNumber, CultureInfo.InvariantCulture)
             : workspace.CustomPerkPackage() ?? throw new InvalidDataException("Give an unused package ID (hex).");
-        workspace.Run(() => workspace.CreateStandalonePerk(name, description, graph, package));
+        workspace.Run(() => workspace.CreateStandalonePerk(name, description, graph, package, icon));
         return workspace.Error.Length > 0 ? workspace.Error
             : $"Registering '{name}' in package {package:X4}; call create_perk again with the same name for its sandbox perk index once get_build_status is idle.";
     }

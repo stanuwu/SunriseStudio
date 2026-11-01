@@ -38,8 +38,8 @@ public static partial class SolforgeTools
         static string? NeedPerk(JsonObject args) =>
             string.IsNullOrWhiteSpace(McpJson.String(args, "perk")) ? "Give a perk index, exact name or program tag (0x...)." : null;
         static string? NeedOps(JsonObject args) => args["ops"] is JsonArray { Count: > 0 } ops
-            && ops.All(op => op is JsonObject row && (string?)row["op"] is "add" or "set" or "remove" or "labels" or "hud")
-            ? null : "Give ops: [{op: add|set|remove|labels|hud, ...}].";
+            && ops.All(op => op is JsonObject row && (string?)row["op"] is "add" or "set" or "remove" or "labels" or "hud" or "display")
+            ? null : "Give ops: [{op: add|set|remove|labels|hud|display, ...}].";
 
         yield return Query("get_perk_behavior", "A sandbox perk's native behavior program, decompiled: its program tag, whether " +
             "the project changes it, the HUD status, and the activation, effects and deactivation phases with every node's " +
@@ -55,7 +55,9 @@ public static partial class SolforgeTools
             "every item that uses the perk). ops run in order: {op: add, phase, node, at?} adds a node (at = index, default " +
             "end); {op: set, phase, index, values, inner?} changes inputs; {op: remove, phase, index}; {op: labels, phase, index, filter, anyOf?, allOf?, noneOf?, notAllOf?} " +
             "replaces a node's label filter lists (filter keys and hashes from get_perk_behavior); {op: hud, label?, " +
-            "show_timer?} sets or clears (label 0) the HUD status. phase is activation, effects or deactivation. " + PerkNodeHelp,
+            "show_timer?} sets or clears (label 0) the HUD status; {op: display, name?, description?, icon?} (alone) changes " +
+            "a project perk's name and description as shown on items (an empty name hides its row) and copies the icon of " +
+            "the perk icon names (index or exact name). phase is activation, effects or deactivation. " + PerkNodeHelp,
             new JsonObject
             {
                 ["type"] = "object", ["required"] = new JsonArray("perk", "ops"),
@@ -71,8 +73,8 @@ public static partial class SolforgeTools
             "program and its name and description strings) in the project. No item carries it: put it on a plug with " +
             "apply_item_edit add_perk, or have the server add it (sol_custom_data.lua ability sandbox_perks). The reply gives " +
             "the new perk index once the work finishes (call again with the same name to read it). from copies an existing perk's " +
-            "program (every node byte for byte, label filters included); activation/effects/deactivation are then added after " +
-            "its nodes. " + PerkNodeHelp,
+            "program (every node byte for byte, label filters included) and its icon; activation/effects/deactivation are then " +
+            "added after its nodes. icon takes another perk's icon instead. " + PerkNodeHelp,
             new JsonObject
             {
                 ["type"] = "object", ["required"] = new JsonArray("name"),
@@ -85,7 +87,8 @@ public static partial class SolforgeTools
                     ["deactivation"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "object" },
                         ["description"] = "Default: one 'timer' of 0.1 s so the perk re-arms" },
                     ["package"] = new JsonObject { ["type"] = "string", ["description"] = "Optional new package ID (hex); default as custom perks choose it" },
-                    ["from"] = new JsonObject { ["type"] = "string", ["description"] = "Optional perk (index, exact name or program tag) whose program to copy first" }
+                    ["from"] = new JsonObject { ["type"] = "string", ["description"] = "Optional perk (index, exact name or program tag) whose program to copy first" },
+                    ["icon"] = new JsonObject { ["type"] = "string", ["description"] = "Optional perk (index or exact name) whose icon to show" }
                 }
             },
             args => string.IsNullOrWhiteSpace(McpJson.String(args, "name")) ? "Give the perk a name."
