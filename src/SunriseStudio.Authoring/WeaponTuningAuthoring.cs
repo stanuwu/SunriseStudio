@@ -51,7 +51,7 @@ public static class WeaponTuningAuthoring
         byte[] Read(uint tag) => edits?.GetValueOrDefault(tag) ?? catalog.Read(tag);
         byte[] definition = Read(weapon.Tag);
         var art = WeaponArchetypeAuthoring.Read(catalog, definition);
-        uint config = TranslationConfig(project, Read(art.EntityTag), null);
+        uint config = TranslationConfig(project, Read(art.EntityTag), null, Read);
         byte[] bytes = Read(config);
         uint key = WeaponArchetypeAuthoring.TypeKey(catalog, art, Read(WeaponArchetypeAuthoring.GearTableTag));
         int group = WeaponTranslationEdits.SelectGroup(bytes, key);
@@ -85,7 +85,7 @@ public static class WeaponTuningAuthoring
         uint root = art.EntityTag;
         if (Owned(project, root) is null) throw new InvalidDataException("Tuning needs a project-authored weapon archetype.");
         byte[] rootBytes = Read(root);
-        uint current = TranslationConfig(project, rootBytes, plannedAssets);
+        uint current = TranslationConfig(project, rootBytes, plannedAssets, Read);
         byte[] original = Read(current), config = original;
         var changes = new Dictionary<uint, byte[]>();
 
@@ -119,7 +119,7 @@ public static class WeaponTuningAuthoring
         float oldRate = Value(WeaponTranslationEdits.Rate);
         int oldMagazine = WeaponTranslationEdits.Magazine(Value(WeaponTranslationEdits.MagazineBase), oldRate,
             Value(WeaponTranslationEdits.MagazineReferenceRate));
-        int shown = RateDisplayFactor(catalog, investment, key, group);
+        int shown = RateDisplayFactor(catalog, investment, key, group, original);
         float rate = tuning.RoundsPerMinute is { } rpm ? rpm / 60f / shown : oldRate;
         if (tuning.RoundsPerMinute is not null)
             config = WeaponTranslationEdits.SetFlat(config, group, WeaponTranslationEdits.Rate, rate);
@@ -146,7 +146,7 @@ public static class WeaponTuningAuthoring
                     : throw new InvalidDataException("The translation config is missing.");
                 configTag = Tag(firstEntry);
                 assets.Add(new(weapon.Name + ".translation", WeaponConfigEdits.RetagConfig(config, current, configTag).Bytes,
-                    new(packageId, entry.Reference, entry.TypeInfo, null, firstEntry), WeaponTranslationEdits.SharedTranslation));
+                    new(packageId, entry.Reference, entry.TypeInfo, null, firstEntry), current));
                 changes[root] = WeaponConfigEdits.RetagRoot(rootBytes, current, configTag);
             }
         }
@@ -252,10 +252,9 @@ public static class WeaponTuningAuthoring
      * Inspect RPM over the table rate times 60: the median over installed weapons of the family.
      * A pulse rifle table holds bursts per second, so its factor is the rounds per burst.
      */
-    private static int RateDisplayFactor(PackageCatalog catalog, InvestmentCatalog investment, uint key, int group)
+    private static int RateDisplayFactor(PackageCatalog catalog, InvestmentCatalog investment, uint key, int group, byte[] config)
     {
-        var table = WeaponTranslationEdits.Tables(catalog.ReadOriginal(WeaponTranslationEdits.SharedTranslation), group)
-            [WeaponTranslationEdits.Rate.Table];
+        var table = WeaponTranslationEdits.Tables(config, group)[WeaponTranslationEdits.Rate.Table];
         var ratios = new List<double>();
         foreach (var sample in rateSampleCache.GetValue(investment, _ => ScanRateSamples(catalog, investment)))
         {
@@ -292,13 +291,24 @@ public static class WeaponTuningAuthoring
         return samples.ToArray();
     }
 
-    /** The weapon's one translation config that derives from the shared translation config. */
+    /**
+     * The weapon's one translation config: one that derives from the shared translation config, else (hand cannons and
+     * other families with their own) the one installed config with weapon-type groups.
+     */
     private static uint TranslationConfig(StudioProject project, byte[] rootBytes,
-        IReadOnlyList<ProjectAssetAddition>? plannedAssets)
+        IReadOnlyList<ProjectAssetAddition>? plannedAssets, Func<uint, byte[]> read)
     {
-        uint[] configs = WeaponConfigEdits.ConstructionConfigs(rootBytes)
-            .Where(tag => Origin(tag) == WeaponTranslationEdits.SharedTranslation).Distinct().ToArray();
+        uint[] constructed = WeaponConfigEdits.ConstructionConfigs(rootBytes).Distinct().ToArray();
+        uint[] configs = constructed.Where(tag => Origin(tag) == WeaponTranslationEdits.SharedTranslation).ToArray();
+        if (configs.Length == 0) configs = constructed.Where(tag => HasGroups(Origin(tag))).ToArray();
         return configs.Length == 1 ? configs[0] : throw new InvalidDataException("The weapon has no unique checked translation config.");
+
+        bool HasGroups(uint tag)
+        {
+            try { return WeaponTranslationEdits.GroupCount(read(tag)) > 0; }
+            catch (Exception error) when (error is InvalidDataException or ArgumentOutOfRangeException or IndexOutOfRangeException
+                or KeyNotFoundException) { return false; }
+        }
 
         uint Origin(uint tag)
         {

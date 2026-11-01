@@ -29,7 +29,20 @@ public sealed partial class StudioWorkspace
             plan => $"Perk display saved: sandbox perk {plan.PerkIndex}");
 
     private void CommitPerkPlan(string work, Func<StudioProject, PackageCatalog, PreparedStandalonePerk> prepare,
-        Func<PreparedStandalonePerk, string> status)
+        Func<PreparedStandalonePerk, string> status) =>
+        CommitPlan(work, prepare, plan => plan.Assets, plan => plan.Changes, plan =>
+        {
+            LastStandalonePerk = plan;
+            return status(plan);
+        });
+
+    /**
+     * Plans off-thread, then commits the plan's added assets and table edits as one undoable transaction, refusing when
+     * the project or installation changed meanwhile.
+     */
+    private void CommitPlan<T>(string work, Func<StudioProject, PackageCatalog, T> prepare,
+        Func<T, IReadOnlyList<ProjectAssetAddition>> assets, Func<T, IReadOnlyDictionary<uint, byte[]>> changes,
+        Func<T, string> done)
     {
         RequireEditable();
         var project = Project!; var catalog = Catalog!; var selected = Document;
@@ -38,7 +51,7 @@ public sealed partial class StudioWorkspace
         catalog.InvalidateReadCache();
         long generation = catalog.ReadGeneration, overlay = catalog.OverlayRevision;
         string source = catalog.GetPackageFileIdentity();
-        LastStandalonePerk = null;
+        if (typeof(T) == typeof(PreparedStandalonePerk)) LastStandalonePerk = null;
         BeforeAssetMutation?.Invoke();
         BeginWork(work, () =>
         {
@@ -54,16 +67,16 @@ public sealed partial class StudioWorkspace
                     || !File.ReadAllBytes(project.ManifestPath).AsSpan().SequenceEqual(manifest)
                     || catalog.GetPackageFileIdentity() != source)
                     throw new InvalidDataException("The project or installation changed. Try again.");
-                var previous = plan.Changes.Keys.ToDictionary(tag => tag, ReadRawBytes);
-                var edits = plan.Changes.ToDictionary(pair => pair.Key, pair => RebaseOnRaw(pair.Key, pair.Value, previous[pair.Key]));
+                var planChanges = changes(plan);
+                var previous = planChanges.Keys.ToDictionary(tag => tag, ReadRawBytes);
+                var edits = planChanges.ToDictionary(pair => pair.Key, pair => RebaseOnRaw(pair.Key, pair.Value, previous[pair.Key]));
                 var split = SplitAssetEdits(edits);
                 IReadOnlyList<AddedProjectAsset> created = [];
-                MutateProject(() => created = project.ApplyTransaction(plan.Assets, _ => split, catalog));
+                MutateProject(() => created = project.ApplyTransaction(assets(plan), _ => split, catalog));
                 PushUndo(new(selected?.Entry.TagHash ?? 0, previous, selected?.AddedAssetId, selected?.OpenContext,
                     created.ToDictionary(asset => asset.Id, _ => (AddedAssetSnapshot?)null)));
                 ProjectRevision++;
-                LastStandalonePerk = plan;
-                Status = status(plan);
+                Status = done(plan);
             };
         });
     }

@@ -730,13 +730,18 @@ public sealed partial class StudioForm
                     || string.Equals(row.Name, perkText, StringComparison.OrdinalIgnoreCase)) is not { } gone) return "The item has no such perk.";
                 workspace.Run(() => workspace.RemoveInvestmentPerk(gone));
                 break;
-            default:
-                return "Unknown op.";
             case "set_socket_plug":
                 if (args["socket"] is not JsonValue socketValue || !socketValue.TryGetValue(out int socketIndex)) return "Give socket, an index from get_item.";
                 if (AiFindItem(data!, McpJson.String(args, "plug") ?? "") is not { } plug) return "No plug by that index, tag or name; use search_items.";
                 workspace.Run(() => workspace.SetInvestmentSocketPlug(socketIndex, checked((ushort)plug.Index)));
                 break;
+            case "own_archetype":
+                ushort package = workspace.CustomPerkPackage() ?? throw new InvalidDataException("No project package can take the archetype.");
+                workspace.Run(() => workspace.OwnWeaponArchetype(package));
+                return workspace.Error.Length > 0 ? workspace.Error
+                    : $"Copying {detail.Item.Name}'s archetype into package {package:X4}; once get_build_status is idle, Edit in workflow shows its fire rate, damage and magazine.";
+            default:
+                return "Unknown op.";
         }
         return workspace.Error.Length > 0 ? workspace.Error : $"Applied {op} to {detail.Item.Name}; it is in Project changes with undo.";
     }

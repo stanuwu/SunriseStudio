@@ -184,8 +184,8 @@ public static partial class SolforgeTools
                 ("field", "string", "Field name from get_item (set_field)", false), ("value", "string", "New value (set_field, add_stat)", false),
                 ("stat", "string", "Stat index or name", false), ("perk", "string", "Perk index or name", false),
                 ("socket", "integer", "Socket index from get_item (set_socket_plug)", false), ("plug", "string", "Plug item index, tag or exact name (set_socket_plug)", false)),
-            args => Need(args, "item", "Give the item tag.") ?? (Arg(args, "op") is "set_field" or "add_stat" or "remove_stat" or "add_perk" or "remove_perk" or "set_socket_plug"
-                ? null : "op must be set_field, add_stat, remove_stat, add_perk, remove_perk or set_socket_plug."),
+            args => Need(args, "item", "Give the item tag.") ?? (Arg(args, "op") is "set_field" or "add_stat" or "remove_stat" or "add_perk" or "remove_perk" or "set_socket_plug" or "own_archetype"
+                ? null : "op must be set_field, add_stat, remove_stat, add_perk, remove_perk, set_socket_plug or own_archetype."),
             args => $"Item {Arg(args, "item")}: {Arg(args, "op")} " + string.Join(" ", new[] { "field", "stat", "perk", "value", "socket", "plug" }
                 .Where(key => args[key] is not null).Select(key => $"{key}={Arg(args, key)}")));
         yield return act("apply_vendor_edit", "Edit the vendor open in Solforge (open_asset first): op duplicate_sale (sale), " +
