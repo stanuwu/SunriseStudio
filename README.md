@@ -1,4 +1,6 @@
 <p align="center"><img src="src/SunriseStudio.Editor/Assets/Sunrise.source.png" alt="Sunrise" width="160"></p>
+This is solforge, a custom sunrise studio fork. mainly used for my own workflows for my project "Project Sol"
+i highly recommend using the original as this is disorganized with a lot of very unfinished and wip features
 
 # Sunrise Studio
 
