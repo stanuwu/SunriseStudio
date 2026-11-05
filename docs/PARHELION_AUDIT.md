@@ -67,14 +67,16 @@ art. Its Rust recipe model carries subclass ability, class, damage-type and scre
 public crate exposes the desktop app, not a callable MCP or standalone subclass-authoring API, so
 Solforge cannot drive those controls by linking to an upstream API.
 
-Solforge's MCP does expose its own subclass controls through `create_content` (`family: subclass`,
-including the complete `SubclassDefinition` document), `update_content`, `validate_content`,
+Solforge's MCP exposes its own subclass controls through `save_subclass_definition` (class, element,
+layout, paths, aspects, fragments, stats, limits and default build), `create_content` (`family:
+subclass`, including the complete `SubclassDefinition` document), `update_content`, `validate_content`,
 `get_subclass_layout`, `check_subclass_build` and `export_content`. These author the Solforge server's
 subclass schema, including D1 grid columns, D2 paths, abilities, aspects, fragments, stats and build
 rules. That schema/export is distinct from Parhelion's package recipe and cannot be loaded into or
 installed by Parhelion. `get_parhelion_subclass_context` makes the distinction explicit to MCP
-clients. Full Parhelion subclass recipe import, ability-bucket compilation, gameplay edits, visuals
-and package output remain unimplemented.
+clients; `skills/solforge-new-subclass/SKILL.md` guides project-side usage. Full Parhelion subclass
+recipe import, ability-bucket compilation, gameplay edits, visuals and package output remain
+unimplemented.
 
 ## What is dropped
 

@@ -168,6 +168,44 @@ public static partial class SolforgeTools
             });
 
         // Writes: each waits for the approve click.
+        yield return Act("save_subclass_definition", "Create or replace a Solforge server subclass definition with explicit MCP controls. " +
+            "Start from template='shipped' or 'abilities3', then optionally supply item_hash, base_item_hash, socket_entry_list, limits, " +
+            "columns, trees, aspects, fragments, stats and default_build. Node controls include id, name, description, role, entry, ability, " +
+            "sandbox_perks, stats, excludes, requires, modifies_super and fragment_slots. This writes Solforge server content, not a Parhelion package recipe.",
+            McpJson.Schema(("id", "string", "Document id (a-z, 0-9, '_', '-', '.')", true),
+                ("name", "string", "Subclass display name", true), ("class", "string", "titan, hunter, warlock or any", true),
+                ("element", "string", "arc, solar, void, kinetic, stasis, strand or a project damage_type id", false),
+                ("template", "string", "shipped or abilities3; defaults to shipped", false),
+                ("item_hash", "string", "Existing or cloned subclass item hash", false),
+                ("base_item_hash", "string", "Stock subclass item hash this definition clones", false),
+                ("socket_entry_list", "integer", "Known native socket-entry-list index", false),
+                ("limits", "object", "Selection limits: selectable_nodes, perks, per_tree and aspects", false),
+                ("columns", "array", "D1 grid columns with required and nodes", false),
+                ("trees", "array", "D2 paths with index, name, description and nodes", false),
+                ("aspects", "array", "D2.0 aspect nodes including fragment_slots", false),
+                ("fragments", "array", "D2.0 fragment nodes", false),
+                ("stats", "object", "Subclass base stat effects keyed by stat name", false),
+                ("default_build", "object", "Default node ids: super, grenade, melee, class_ability, movement, perks, aspects, fragments", false)),
+            args => string.IsNullOrWhiteSpace(Arg(args, "id")) ? "Give an id." :
+                string.IsNullOrWhiteSpace(Arg(args, "name")) ? "Give a name." :
+                !Enum.TryParse<GuardianClass>(Arg(args, "class"), true, out _) ? "class must be titan, hunter, warlock or any." :
+                McpJson.String(args, "template") is { Length: > 0 } template && template is not ("shipped" or "abilities3") ? "template must be shipped or abilities3." : null,
+            args => $"Save subclass definition '{Arg(args, "id")}' ({Arg(args, "name")})",
+            (store, args) =>
+            {
+                string id = Arg(args, "id"), name = Arg(args, "name");
+                string element = (McpJson.String(args, "element") ?? "arc").ToLowerInvariant();
+                var subclass = SubclassTemplates.New(id, name, SubclassInterop.ParseClass(Arg(args, "class")), element);
+                if (McpJson.String(args, "template") == "abilities3") SubclassTemplates.AddAbilities3(subclass);
+                var node = ContentJson.ToNode(subclass).AsObject();
+                foreach (string field in new[] { "item_hash", "base_item_hash", "socket_entry_list", "limits", "columns", "trees", "aspects", "fragments", "stats", "default_build" })
+                    if (args[field] is { } value) node[field] = value.DeepClone();
+                var parsed = (SubclassDefinition)ContentJson.Parse(ContentFamilies.Subclass, node.ToJsonString());
+                string path = store.Save(parsed);
+                var issues = store.ValidateAll(ContentFamilies.Subclass, id);
+                return $"Saved {path}. {issues.Count(row => row.Issue.Error)} error(s), {issues.Count(row => !row.Issue.Error)} warning(s)" +
+                    string.Concat(issues.Take(20).Select(row => "\n- " + row.Issue));
+            });
         yield return Act("create_content", "Create a content document. Give family, name and optionally id. Subclasses: class (titan, hunter, " +
             "warlock) and element start from the shipped layout (3 paths of 4 nodes, grenade/jump/class columns, a lane super); " +
             "from_server_view imports the Sol server's GET /api/subclass answer; from_item imports get_item's answer for a subclass item; " +

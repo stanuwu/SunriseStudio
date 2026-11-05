@@ -95,8 +95,8 @@ public static partial class SolforgeTools
         "For Parhelion-compatible weapon recipe work, call get_parhelion_context, list_parhelion_weapon_recipes and " +
         "validate_parhelion_weapon_recipe; read skills/solforge-new-weapon/SKILL.md before authoring. To load a validated " +
         "recipe into Solforge's normal clone dialog, call start_parhelion_weapon_recipe; the user reviews and presses Create. " +
-        "For subclass requests, call get_parhelion_subclass_context first. Parhelion's desktop workbench authors subclasses, " +
-        "but this MCP has no Parhelion subclass recipe API. Solforge's separate server subclass content tools are create_content, " +
+        "For subclass requests, call get_parhelion_subclass_context and read skills/solforge-new-subclass/SKILL.md first. Parhelion's desktop workbench authors subclasses, " +
+        "but this MCP has no Parhelion subclass recipe API. Solforge's separate server subclass controls are save_subclass_definition, " +
         "update_content, validate_content, check_subclass_build and export_content; don't describe those documents as Parhelion recipes.";
 
     /** Shared by the server instructions and the session file, so every engine knows it can do its own setup. */
