@@ -27,6 +27,7 @@
     <ProjectReference Include="../Solforge.Graphs/Solforge.Graphs.csproj" />
     <!-- Retail workspace: live-build dump reader, retail map viewer and porting (read-only towards game packages). -->
     <ProjectReference Include="../Solforge.Retail/Solforge.Retail.csproj" />
+<ProjectReference Include="../Solforge.Weapons/Solforge.Weapons.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- Owner builds only (SolforgeRelay=true, RELEASING.md) draw a link as a QR code. -->

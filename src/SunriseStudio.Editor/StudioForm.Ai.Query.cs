@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Numerics;
+using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using Solforge.Mcp;
+using Solforge.Weapons;
 using SunriseStudio.Authoring;
 using SunriseStudio.Editor.Creation;
 using SunriseStudio.Formats;
@@ -611,6 +613,7 @@ public sealed partial class StudioForm
             case "revert_to_base": return AiRevertToBase(args);
             case "retail_open_map": return AiRetailOpenMap(args);
             case "start_creation": return AiStartCreation(args);
+            case "start_parhelion_weapon_recipe": return AiStartParhelionWeaponRecipe(args);
             case "replace_texture_pixels":
             {
                 if (SolforgeTools.ParseHash(McpJson.String(args, "tag")) is not { } tag) return "Give the texture tag.";
@@ -794,5 +797,28 @@ public sealed partial class StudioForm
         creation.Open(workflow);
         return $"Opened {workflow.Title} in Solforge; the user reviews it and presses {workflow.CreateLabel}."
             + (missing.Count > 0 ? " Not filled (unknown label or kind): " + string.Join(", ", missing) + "." : "");
+    }
+
+    /** Opens the normal clone dialog from an approved, project-local recipe whose exact bytes were reviewed. */
+    private string AiStartParhelionWeaponRecipe(JsonObject args)
+    {
+        if (!workspace.CanEdit) return "Open a project and installation first.";
+        string relative = McpJson.String(args, "path") ?? "";
+        if (!relative.EndsWith(WeaponRecipeJson.Extension, StringComparison.OrdinalIgnoreCase))
+            return "Give a project-local *.weapon.json path.";
+        if (ProjectFiles.Resolve(workspace.Project?.DirectoryPath, aiHost?.SdkRoots ?? [], relative) is not { } path
+            || !File.Exists(path)) return "Recipe path is missing or outside the active project.";
+        var info = new FileInfo(path);
+        if (info.Length > 1 << 20) return "Recipe exceeds the 1 MiB limit.";
+        byte[] bytes = File.ReadAllBytes(path);
+        if (!string.Equals(Convert.ToHexString(SHA256.HashData(bytes)), McpJson.String(args, "expected_sha256"), StringComparison.OrdinalIgnoreCase))
+            return "The recipe changed after approval. Validate and start it again.";
+        WeaponRecipe recipe;
+        try { recipe = WeaponRecipeJson.Parse(new System.Text.UTF8Encoding(false, true).GetString(bytes)); }
+        catch (Exception error) when (error is WeaponRecipeException or System.Text.DecoderFallbackException)
+        { return error.Message; }
+        var workflow = new ItemWorkflow(workspace, recipe);
+        creation.Open(workflow);
+        return $"Opened '{recipe.Name}' in Solforge's weapon clone workflow. Review the listed fields and notes, then press Create to apply the supported recipe fields.";
     }
 }

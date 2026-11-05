@@ -43,6 +43,21 @@ Line counts are whole directories or files including their tests.
 - **Tag lookups:** donor sockets, plug sets and stat-curve bounds come from Studio's investment
   catalog (`InvestmentItemDetail`, `InvestmentStatCurve`), not from Parhelion's own catalog reader.
 
+## Current Solforge authoring integration (partial)
+
+The MCP can list and statically validate project-local `.weapon.json` recipes. The approval-gated
+`start_parhelion_weapon_recipe` action opens the existing item Clone workflow with the recipe donor
+selected. That workflow can apply the recipe name, flavor, type line, rarity, inventory slot, stats
+already present on the donor, one installed initial plug per socket, and the item/collectible hashes
+when Collections is available. Solforge's existing transaction, undo and project package staging
+remain the writer.
+
+The Clone dialog reports recipe fields it cannot apply. This adapter does not compile tuning, ammo or
+damage type, power caps, custom socket types/plug sets/conditions/weights, raw patches, locale and
+collection text, or the other identity hashes. It does not import upstream `.parhelion.json` files,
+enforce a multi-recipe Collections node budget, or support Parhelion's armor/cosmetic/subclass/perk
+workbenches. Those remain Phase 21/22 integration work.
+
 ## What is dropped
 
 UI (egui app, workbenches, browsers), account/suite features (capabilities, workflow, library,
@@ -56,6 +71,8 @@ Parhelion is GPL-3.0-only. A C# rewrite that follows its schema, rules and messa
 treated as a derived work. Shipping `Solforge.Weapons` inside `Solforge.exe` would make the whole exe
 GPL-3.0-only with full source, which also needs a GPL-compatible license on the upstream Sunrise
 Studio code (it has none, Studio.md §2.1). Attribution is in `THIRD_PARTY.md`; the repository licence
-is unchanged. Decision for Seth: (a) release Solforge under GPL-3.0-only once stan licenses Studio
-compatibly, (b) ask the Parhelion author for a different licence, or (c) keep `Solforge.Weapons` out
-of released builds and replace it with a clean-room design.
+is unchanged. Seth initially chose local integration with releases held, then explicitly authorized
+publishing this source change on a public feature branch. This is not a packaged binary release. The
+licensing concern remains unresolved; before distributing a build containing this derived
+implementation, resolve a compatible licensing path with the upstream authors or replace it with a
+clean-room implementation.

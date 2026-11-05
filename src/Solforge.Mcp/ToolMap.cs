@@ -39,6 +39,7 @@ public static class ToolMap
         new("Textures", "Edit texture pixels", "replace_texture_pixels"),
         new("Items", "Item browser, weapons, armor, perks, vendors", "search_items, get_item, search_perks, apply_item_edit, list_vendors, get_vendor, apply_vendor_edit"),
         new("Creation", "New weapon, armor, texture, prop, material, exotic, perk, vendor workflows", "list_creation_types, describe_creation, start_creation"),
+        new("Parhelion", "Project-local weapon recipe discovery, validation and native clone workflow", "get_parhelion_context, list_parhelion_weapon_recipes, validate_parhelion_weapon_recipe, start_parhelion_weapon_recipe"),
         new("Graph panel", "Mission scripts: open, edit, compile, apply, reload", "list_mission_scripts, create_mission_script, open_file, get_graph, apply_graph, reload_mission_scripts"),
         new("Graph panel", "Node graphs (material, weapon, mission): new, edit, compile, apply", "list_graphs, create_graph, get_graph, edit_graph, compile_graph, apply_graph, list_graph_node_types"),
         new("Missions", "Mission objects and slots", "list_mission_objects, get_mission_object, find_object"),

@@ -8,6 +8,7 @@ using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Viewport;
+using Solforge.Weapons;
 
 namespace SunriseStudio.Editor.Creation;
 
@@ -25,6 +26,7 @@ public sealed class ItemWorkflow : CreationWorkflow
     private readonly string category;
     private readonly bool weapon;
     private readonly InvestmentItem? editing;
+    private readonly WeaponRecipe? recipe;
     private readonly InvestmentSources sources = new();
     private readonly CreationField baseItem, name, description, weaponType, package, icon, customIcon, perkIcon, hudIcon,
         fireRate, damagePerShot, magazineSize, reticle, reticleTexture, tier, bucket, stats, perks, sockets, collection,
@@ -35,6 +37,8 @@ public sealed class ItemWorkflow : CreationWorkflow
     private const int ObjectivesBlock = 48, PlugBlock = 64, SackBlock = 88;
     /** The base has a plug block, or the category is Mods and plugs. */
     private bool plugItem;
+    private bool recipeDonorMissing;
+    private string? recipeDonorProblem;
     /** False when the base display has no perk display block, so it can carry no perks. */
     private bool perkBlock = true;
     private bool authoredWeapon;
@@ -234,7 +238,19 @@ public sealed class ItemWorkflow : CreationWorkflow
         }
     }
 
-    public override string Title => (editing is null ? "Clone " : "Edit ") + CreationTypes.ItemNoun(category);
+    /** Opens the existing item-clone authoring flow with a Parhelion-compatible recipe prefilled. */
+    public ItemWorkflow(StudioWorkspace workspace, WeaponRecipe recipe) : this(workspace, InvestmentItemKinds.Weapons)
+    {
+        this.recipe = recipe;
+        baseItem.TagLabel = recipe.Donor.ExpectedName ?? recipe.Donor.ItemHash.Text;
+        name.Text = recipe.Name;
+        description.Text = recipe.Flavor;
+        weaponType.Text = recipe.TypeName ?? "";
+        collection.Text = "0";
+    }
+
+    public override string Title => recipe is not null ? "Apply Parhelion weapon recipe" :
+        (editing is null ? "Clone " : "Edit ") + CreationTypes.ItemNoun(category);
     public override string CreateLabel => editing is null ? "Create" : "Save changes";
     public override IReadOnlyList<CreationField> Fields =>
         [baseItem, name, description, weaponType, frameName, frameDescription, frameIcon, loreTitle, loreSubtitle, loreText,
@@ -270,6 +286,7 @@ public sealed class ItemWorkflow : CreationWorkflow
             ];
             if (editing is null)
             {
+                if (recipeDonorMissing) limits.Add($"Recipe donor {recipe?.Donor.ItemHash.Text} was not found in the installed item catalog.");
                 limits.Add("Keeps the base art, gear and lore.");
                 if (KeptByCategory.TryGetValue(category, out string? kept)) limits.Add(kept);
                 string[] blocks = [.. new[] { (ObjectivesBlock, "objectives"), (SackBlock, "sack"), (PlugBlock, "plug data") }
@@ -309,6 +326,20 @@ public sealed class ItemWorkflow : CreationWorkflow
     public override void Update(StudioWorkspace workspace)
     {
         if (!InvestmentReady(workspace)) return;
+        if (recipe is { } authored && baseItem.Tag is null && loadedBase is null)
+        {
+            uint donorHash = authored.Donor.ItemHash.Parse("donor.item_hash");
+            if (workspace.Investment!.Items.FirstOrDefault(item => item.Hash == donorHash) is { } donor)
+            {
+                baseItem.Tag = donor.Tag;
+                baseItem.TagLabel = donor.Name;
+                recipeDonorMissing = false;
+                recipeDonorProblem = authored.Donor.ExpectedName is { } expected
+                    && !string.Equals(expected, donor.Name, StringComparison.Ordinal)
+                    ? $"Recipe expected donor '{expected}', but item hash {authored.Donor.ItemHash.Text} now names '{donor.Name}'." : null;
+            }
+            else recipeDonorMissing = true;
+        }
         if (baseItem.Tag != loadedBase) LoadBase(workspace.Investment!);
         Preflight(workspace);
     }
@@ -335,6 +366,7 @@ public sealed class ItemWorkflow : CreationWorkflow
             for (int i = 0; i < detail.Stats.Count; i++)
                 statDrafts.Add(new() { Source = i, Index = detail.Stats[i].Index, Value = detail.Stats[i].Value });
             for (int i = 0; i < detail.Perks.Count; i++) perkDrafts.Add(new() { Source = i, Index = detail.Perks[i].Index });
+            if (recipe is { } authored) ApplyRecipeDraft(authored, investment);
             if (source.DisplayTag == 0) detailError = "The item has no display record, so it has no name or icon to change.";
             else
             {
@@ -361,12 +393,94 @@ public sealed class ItemWorkflow : CreationWorkflow
                     .Count(offset => offset != InvestmentItemClone.DefinitionHashField);
                 if (repeats != 0) notes.Add($"The copy keeps the base hash in {repeats} field{(repeats == 1 ? "" : "s")}.");
             }
+            if (recipeDonorProblem is { } donorProblem) notes.Add(donorProblem);
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or ArgumentException or OverflowException)
         { detailError = error.Message; detail = null; }
         // Retry reads the base again.
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         { detailError = Unreadable(error); detail = null; loadedBase = null; }
+    }
+
+    /** Translate recipe fields that this clone workflow can represent; surface every deferred field in Limits. */
+    private void ApplyRecipeDraft(WeaponRecipe authored, InvestmentCatalog investment)
+    {
+        var overrides = authored.Overrides;
+        if (overrides.Rarity is { } rarity) tier.Text = ((int)rarity + 1).ToString(CultureInfo.InvariantCulture);
+        if (overrides.InventorySlot is { } slot)
+            bucket.Text = (slot switch { RecipeInventorySlot.Kinetic => 0, RecipeInventorySlot.Energy => 1, _ => 2 })
+                .ToString(CultureInfo.InvariantCulture);
+
+        foreach (ushort removed in overrides.RemovedInvestmentStats)
+        {
+            var draft = statDrafts.FirstOrDefault(row => row.Index == removed);
+            if (draft is null) notes.Add($"Recipe removes stat {removed}, which is not on the donor; that removal was not applied.");
+            else draft.Remove = true;
+        }
+        foreach (var stat in overrides.InvestmentStats)
+        {
+            if (stat.DefinitionIndex > byte.MaxValue)
+            {
+                notes.Add($"Stat definition {stat.DefinitionIndex} exceeds Solforge's authored stat index range; it was not applied.");
+                continue;
+            }
+            var draft = statDrafts.FirstOrDefault(row => row.Index == stat.DefinitionIndex);
+            if (draft is null) notes.Add($"Stat definition {stat.DefinitionIndex} is not on the donor; it was not applied.");
+            else { draft.Remove = false; draft.Value = stat.Value; }
+        }
+
+        for (int lane = 0; lane < overrides.SocketColumns.Count; lane++)
+        {
+            if (overrides.SocketColumns[lane] is not { } column) continue;
+            if (column.SocketType is { } socketType
+                && detail?.Sockets.FirstOrDefault(socket => socket.Index == lane) is { } typedSocket
+                && socketType != typedSocket.Type)
+                notes.Add($"Socket {lane}'s requested native type differs from its donor type; the donor type is kept.");
+            if (column.ReusablePlugSetIndex is not null || column.RandomizedPlugSetIndex is not null)
+                notes.Add($"Socket {lane}'s reusable/randomized plug-set indices are not applied by Solforge's clone editor.");
+            if (column.Choices.Count == 0)
+            {
+                if (column.SocketType is not null || column.RandomizedSelectionProgram.Count != 0)
+                    notes.Add($"Socket {lane}'s native type or selection program requires compiler support and was not applied.");
+                continue;
+            }
+            if (column.Choices.Count > 1)
+                notes.Add($"Socket {lane} has multiple recipe choices; Solforge's clone editor can select only one initial plug, so the first choice is used.");
+            if (!column.Choices[0].TryParse(out uint hash)
+                || investment.Items.FirstOrDefault(item => item.Hash == hash) is not { } plug)
+            {
+                notes.Add($"Socket {lane}'s first recipe plug is not present in the installed item catalog; it was not applied.");
+                continue;
+            }
+            if (plug.Index > ushort.MaxValue
+                || detail?.Sockets.FirstOrDefault(socket => socket.Index == lane) is not { } donorSocket
+                || !donorSocket.AllowedPlugs.Contains((ushort)plug.Index))
+            {
+                notes.Add($"Socket {lane}'s recipe plug is outside Solforge's installed socket choices; it was not applied.");
+                continue;
+            }
+            ushort plugIndex = (ushort)plug.Index;
+            if (plugIndex != donorSocket.InitialPlug) plugDrafts[lane] = plugIndex;
+        }
+
+        if (overrides.AmmoType is not null) notes.Add("Ammo type is not exposed by Solforge's item clone writer; it was not applied.");
+        if (overrides.ModernDamageType is not null) notes.Add("Modern damage type is not exposed by Solforge's item clone writer; it was not applied.");
+        if (overrides.MaxStackSize is not null) notes.Add("Max stack size is not exposed by Solforge's item clone writer; it was not applied.");
+        if (overrides.PowerCapGroup is not null || overrides.PowerCapGroups is not null) notes.Add("Power-cap groups are not exposed by Solforge's item clone writer; they were not applied.");
+        if (overrides.WeaponPatternIndex is not null || overrides.StatGroupIndex is not null) notes.Add("Pattern and stat-group indices are not exposed by Solforge's item clone writer; they were not applied.");
+        if (overrides.CollectionDestination is not null || authored.CollectionPlacement != RecipeCollectionPlacement.SunriseBadge)
+            notes.Add("The recipe's Collections destination is not mapped to Solforge's presentation-node model; the donor page is used.");
+        if (overrides.Tuning is not null) notes.Add("Weapon tuning remains an Edit workflow step after the item clone; it is not applied during clone creation.");
+        if (overrides.RawPayloadPatches.Count > 0) notes.Add("Raw payload patches are not applied by the item clone workflow.");
+        if (authored.LocaleOverrides.Count > 0) notes.Add("Locale overrides are not applied by the item clone workflow.");
+        if (overrides.SocketColumns.Any(column => column is { Choices.Count: > 1 }
+            || column is { ChoiceWeightBits.Count: > 0 } || column is { ChoiceConditions.Count: > 0 }
+            || column is { RandomizedSelectionProgram.Count: > 0 }))
+            notes.Add("Socket weights and condition programs are not applied by Solforge's clone editor.");
+        notes.Add("Only the recipe item and collectible hashes are honored; other namespace-derived identity hashes remain Solforge-managed.");
+        notes.Add("Recipe source and collection metadata strings are not exposed by Solforge's clone editor.");
+        if (authored.PresentationDonor is not null)
+            notes.Add("A separate presentation donor is not supported by Solforge's clone workflow; the gameplay donor supplies the copied art.");
     }
 
     /**
@@ -471,6 +585,8 @@ public sealed class ItemWorkflow : CreationWorkflow
         if (editing is null && workspace.Catalog is { } packages
             && !(Installed(packages, source!.Tag) && Installed(packages, source.DisplayTag)))
             yield return "Choose an installed item to clone.";
+        if (recipeDonorMissing) yield return $"Recipe donor {recipe?.Donor.ItemHash.Text} was not found in the installed item catalog.";
+        if (recipeDonorProblem is { } donorProblem) yield return donorProblem;
         if (preflightProblem.Length != 0) yield return preflightProblem;
         if ((StringsChanged || CustomIconChanged || PerkIconChanged || HudIconChanged || TuningChanged || ReticleChanged)
             && PackageProblem(workspace, package) is { } problem) yield return problem;
@@ -968,7 +1084,9 @@ public sealed class ItemWorkflow : CreationWorkflow
                     throw new InvalidDataException("The collectible table changed since the item was chosen. Choose it again.");
             }
             var plan = ItemAuthoring.PlanClone(packages, project.Name, source, definition, display,
-                packageId, definitionIndex, itemName, CollectionNode, sources);
+                packageId, definitionIndex, itemName, CollectionNode, sources,
+                recipe?.Identity.ItemHash.Parse("identity.item_hash"),
+                recipe?.Identity.CollectibleHash.Parse("identity.collectible_hash"));
             foreach (var (tag, bytes) in plan.Edits) edits[tag] = bytes;
             additions.InsertRange(0, plan.Additions);
             expected.InsertRange(0, [plan.DefinitionTag, plan.DisplayTag]);
