@@ -1,0 +1,9 @@
+[package]
+name = "solforge-parhelion-bridge"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+parhelion = { path = "../../third_party/sundial/crates/parhelion" }
+serde_json = "1"

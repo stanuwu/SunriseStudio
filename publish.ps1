@@ -53,9 +53,18 @@ if ($LASTEXITCODE -ne 0) { throw 'Studio publish failed.' }
     --self-contained true -o $Output -nr:false "-p:OutDir=$shimOutput" `
     -p:PublishSingleFile=true -p:PublishTrimmed=true -p:DebugType=embedded @buildProperties
 if ($LASTEXITCODE -ne 0) { throw 'MCP shim publish failed.' }
+# Compile the native Parhelion package builder from the pinned Sundial submodule and ship beside Solforge.
+& cargo build --locked --release --manifest-path (Join-Path $PSScriptRoot 'tools/parhelion-bridge/Cargo.toml')
+if ($LASTEXITCODE -ne 0) { throw 'Parhelion bridge build failed.' }
+$bridge = Join-Path $PSScriptRoot 'tools/parhelion-bridge/target/release/solforge-parhelion-bridge.exe'
+if (-not (Test-Path -LiteralPath $bridge)) { $bridge = Join-Path $PSScriptRoot 'target/release/solforge-parhelion-bridge.exe' }
+if (-not (Test-Path -LiteralPath $bridge)) { throw "Parhelion bridge was not produced: $bridge" }
+Copy-Item -LiteralPath $bridge -Destination $Output -Force
 # The license notices are embedded; Help > Third-party notices shows them.
 $stale = Join-Path $Output 'THIRD_PARTY.md'
 if (Test-Path $stale) { Remove-Item $stale }
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'tools/parhelion-bridge/NOTICE.md') -Destination (Join-Path $Output 'PARHELION-BRIDGE-NOTICE.md') -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'third_party/sundial/LICENSE') -Destination (Join-Path $Output 'PARHELION-GPL-3.0.txt') -Force
 # Solforge Phase 17: the in-repo Blender add-on ships as its own extension zip beside the exe.
 & (Join-Path $PSScriptRoot 'package-blender.ps1') -Output $Output | Out-Null
 

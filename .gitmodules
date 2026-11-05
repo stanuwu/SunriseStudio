@@ -1,0 +1,4 @@
+[submodule "third_party/sundial"]
+	path = third_party/sundial
+	url = https://github.com/KyleThmpsn/sundial.git
+	branch = main

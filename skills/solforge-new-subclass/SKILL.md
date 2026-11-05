@@ -10,7 +10,7 @@ description: Use when authoring a Solforge server subclass, subclass grid, D2 pa
 Read `get_parhelion_subclass_context` and `get_subclass_layout` before editing. These describe two separate authoring targets:
 
 - Solforge server subclass documents live under the project `content/subclass` tree. MCP can create, edit, validate, test builds, and export them.
-- Parhelion subclass recipes are authored by Sundial's desktop workbench. The current Solforge MCP integration has no Parhelion subclass recipe importer or package compiler.
+- Parhelion subclass recipes use Sundial's native recipe schema. Solforge MCP can create and validate those recipes with Parhelion itself, then build and stage package output.
 
 Do not present a Solforge server document or `export_content` output as a Parhelion recipe or installable game package.
 
@@ -26,4 +26,6 @@ Writes require the Solforge approval step. Keep ability references pointed at ex
 
 ## Parhelion package requests
 
-Parhelion's documented controls include ability/attunement donors, per-node paths, ability perks and gameplay values, visuals, class/equipping, subclass damage icon, and screen art. The current MCP can explain those controls, but cannot drive Parhelion or compile a matching package recipe. Do not claim those settings were applied. Use Sundial/Parhelion's own authoring workbench for package output.
+Parhelion's documented controls include ability/attunement donors, per-node paths, ability perks and gameplay values, visuals, class/equipping, subclass damage icon, and screen art. Read `third_party/sundial/crates/parhelion/README.md` and its subclass recipe/model docs for the complete current schema before drafting. Submit a complete native recipe document to `create_parhelion_recipe`; set the subclass kind and controls in Parhelion's `overrides` object. Parhelion's own parser canonicalizes and validates the document before Solforge saves it under `recipes/`.
+
+To produce package files, call `build_parhelion_packages` with the source package directory and newline-separated project-relative `.parhelion.json` recipe paths. The action compiles through Sundial's Parhelion package builder and returns the verified manifest, artifact names, sizes and SHA-256 hashes. Output is staged in the active project under `build/parhelion/`; this MCP action never installs or deploys it. Ask the user to review staged package files before any separate installation workflow.

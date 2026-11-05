@@ -8,6 +8,7 @@ obj/
 /.dotnet/
 /.nuget/
 /.tools/
+/tools/parhelion-bridge/target/
 
 # Editor settings.
 .vs/
