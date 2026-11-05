@@ -18,6 +18,14 @@ public static partial class SolforgeTools
                 "Read the project's solforge-new-weapon skill before authoring. Recipes use a stock donor, a distinct namespace-derived identity, text/locales, stats, sockets, tuning, and optional collection placement. " +
                 "Use validate_parhelion_weapon_recipe before starting one, then start_parhelion_weapon_recipe opens Solforge's existing clone authoring dialog. Solforge applies item name, flavor, type line, donor rarity/bucket, matching donor stats, and one installed initial plug per authored socket. Read the dialog's Limits before Create: unsupported fields are reported there.")));
 
+        yield return new McpTool("get_parhelion_subclass_context",
+            "Explain Parhelion's subclass authoring support and route subclass work to the matching Solforge MCP system.",
+            McpJson.Schema(), false, (_, _) => Task.FromResult(McpToolResult.Text(
+                "Sundial's Parhelion desktop workbench supports custom subclasses, including ability and attunement choices, node-by-node paths, custom perks, gameplay values, visuals, class/equipping, and artwork. " +
+                "The current Solforge Parhelion recipe MCP integration handles weapon recipes only; it does not expose Parhelion's desktop workbench or import subclass recipes. " +
+                "For Solforge server subclass content, use get_subclass_layout, create_content with family='subclass', then update_content and validate_content; use check_subclass_build to validate a selected build and export_content to export server data. " +
+                "That server content model is separate from a Parhelion subclass package recipe and cannot be installed by Parhelion.")));
+
         yield return new McpTool("list_parhelion_weapon_recipes",
             "List project-local Solforge weapon recipes (*.weapon.json) from the top-level recipes folder. Does not read outside the active project.",
             McpJson.Schema(), false, (_, _) => Task.FromResult(ListRecipes(host.ProjectRoot)));
