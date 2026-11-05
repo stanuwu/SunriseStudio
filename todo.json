@@ -208,8 +208,8 @@
         {
           "id": "T6.29",
           "title": "Parhelion GPL licence decision",
-          "description": "DECISION NEEDED (Seth): GPL release with stan, relicense, or clean-room Solforge.Weapons; blocks Phase 22 workbench",
-          "status": "decision_needed"
+          "description": "Decision recorded: source branch publication is authorized; packaged releases remain held until a compatible license path is resolved.",
+          "status": "done"
         }
       ]
     },
@@ -217,7 +217,7 @@
       "id": "21",
       "title": "Weapon Recipe DSL & Schema Implementation",
       "status": "todo",
-      "notes": "From Phase 20: RPN stack-depth check (validation.rs validate_numeric_instructions: exactly one value left, needs the progression opcode table); recipe-to-Studio compiler (recipe -> InvestmentItemClone/InvestmentSocketEdits/WeaponTuningAuthoring/WeaponArchetypeAuthoring project edits, Parhelion weapon.rs + weapon/build/), which Phase 24 needs; WeaponCollectionNodeBudget checked over a build's recipes; decode the installed reusable plug-set count, socket-type table and weapon-pattern indices into WeaponDonorProfile; importing full .parhelion.json recipes.",
+      "notes": "Partial recipe-to-Studio adapter: MCP start_parhelion_weapon_recipe opens ItemWorkflow; it applies the donor, name/flavor/type line, rarity, inventory slot, donor-present stats, first installed initial plug per socket, and item/collectible hashes. The workflow reports unsupported recipe fields. Remaining: full compiler using InvestmentItemClone/InvestmentSocketEdits/WeaponTuningAuthoring/WeaponArchetypeAuthoring; RPN stack-depth check (needs progression opcode table); WeaponCollectionNodeBudget checked over build recipes; installed plug-set/socket-type/weapon-pattern catalog tables; full .parhelion.json import and non-weapon authoring. Source feature branch publication authorized; packaged releases remain held pending the license path.",
       "items": [
         {
           "id": "T2.7",

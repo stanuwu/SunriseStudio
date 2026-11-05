@@ -18,7 +18,8 @@ public static class ItemAuthoring
     /** Both item rows and every collectible reference use the same newly allocated identity. */
     public static ItemCreationPlan PlanClone(PackageCatalog packages, string projectName,
         InvestmentItem source, byte[] definition, byte[] display, ushort packageId, int firstEntry,
-        string itemName, int? collectionNode, InvestmentSources? sources = null)
+        string itemName, int? collectionNode, InvestmentSources? sources = null,
+        uint? requestedItemHash = null, uint? requestedCollectibleHash = null)
     {
         sources ??= new();
         if (!PackageWriter.IsNewPackageId(packageId) || packages.ContainsInstalledPackage(packageId))
@@ -38,8 +39,10 @@ public static class ItemAuthoring
         byte[] items = packages.Read(sources.Items), displays = packages.Read(sources.Displays);
         var used = InvestmentItemClone.ReadIndexRows(items).Select(row => row.Hash)
             .Concat(InvestmentItemClone.ReadIndexRows(displays).Select(row => row.Hash)).ToHashSet();
-        uint hash = InvestmentItemClone.NewDefinitionHash(
+        uint hash = requestedItemHash ?? InvestmentItemClone.NewDefinitionHash(
             $"sunrise:{projectName}:{packageId:X4}:{firstEntry}:{itemName}", used);
+        if (hash is 0 or uint.MaxValue or InvestmentItemClone.EmptyStringHash || used.Contains(hash))
+            throw new InvalidDataException($"The requested item identity 0x{hash:X8} is reserved or already in use.");
         var edits = new Dictionary<uint, byte[]>();
         ushort iconIndex = InvestmentItemClone.ReadDisplayIcon(display);
         if (iconIndex != ushort.MaxValue)
@@ -69,9 +72,11 @@ public static class ItemAuthoring
             int baseCollectible = InvestmentCollections.FindCollectible(collectibles, source.Index);
             if (baseCollectible < 0)
                 throw new InvalidDataException("The base item has no collectible to copy.");
-            uint collectibleHash = InvestmentItemClone.NewDefinitionHash(
-                $"sunrise:collectible:{projectName}:{packageId:X4}:{firstEntry}:{itemName}",
-                InvestmentCollections.CollectibleHashes(collectibles));
+            var usedCollectibles = InvestmentCollections.CollectibleHashes(collectibles);
+            uint collectibleHash = requestedCollectibleHash ?? InvestmentItemClone.NewDefinitionHash(
+                $"sunrise:collectible:{projectName}:{packageId:X4}:{firstEntry}:{itemName}", usedCollectibles);
+            if (collectibleHash is 0 or uint.MaxValue or InvestmentItemClone.EmptyStringHash || usedCollectibles.Contains(collectibleHash))
+                throw new InvalidDataException($"The requested collectible identity 0x{collectibleHash:X8} is reserved or already in use.");
             var (nameBank, nameHash) = InvestmentItemClone.ReadDisplayString(display, InvestmentItemClone.DisplayName);
             var (nextCollectibles, nextCollectibleDisplays, collectible) = InvestmentCollections.AddCollectible(
                 collectibles, packages.Read(sources.CollectibleDisplays), baseCollectible, itemRow,

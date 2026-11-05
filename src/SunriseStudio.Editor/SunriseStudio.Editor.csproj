@@ -27,6 +27,8 @@
     <ProjectReference Include="../Solforge.Graphs/Solforge.Graphs.csproj" />
     <!-- Retail workspace: live-build dump reader, retail map viewer and porting (read-only towards game packages). -->
     <ProjectReference Include="../Solforge.Retail/Solforge.Retail.csproj" />
+    <!-- Parhelion-compatible recipes are translated into the native item-clone workflow. -->
+    <ProjectReference Include="../Solforge.Weapons/Solforge.Weapons.csproj" />
     <!-- UI-UE5 §5 (agent C): the Solforge AI launcher, model role routing / credential rules / shared-resources preflight,
          and the workflow runtime ported from solforge-next. -->
     <ProjectReference Include="../Solforge.AiLauncher/Solforge.AiLauncher.csproj" />

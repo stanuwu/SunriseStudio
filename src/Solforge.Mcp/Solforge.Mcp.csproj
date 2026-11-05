@@ -14,6 +14,8 @@
     <ProjectReference Include="../SunriseStudio.Packages/SunriseStudio.Packages.csproj" />
     <!-- Retail (live build 245048) dump reader, decoders and porting behind the retail_* tools. -->
     <ProjectReference Include="../Solforge.Retail/Solforge.Retail.csproj" />
+    <!-- Parhelion weapon recipe schema and validation for the MCP workbench tools. -->
+    <ProjectReference Include="../Solforge.Weapons/Solforge.Weapons.csproj" />
     <!-- UI-UE5 §5.3: the credential-document guard (CredentialGuard, FileIdentity) and the shared-resources preflight the
          standalone descriptor (solforge-ai-mcp.json) is written from. Plain net9.0, no further references. -->
     <ProjectReference Include="../Solforge.Harness/Solforge.Harness.csproj" />

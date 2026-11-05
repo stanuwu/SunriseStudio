@@ -107,7 +107,13 @@ public static partial class SolforgeTools
         "get_shader, list_animations, get_animation, list_audio and get_audio. Action tools need the user's approve click. " +
         "For how the game client works (functions, xrefs, strings, structs, vtables, tag class handlers in destiny2.exe) and for raw " +
         "tag data, unknown tag classes, localized text and JSON/CSV export, start with decomp_status and read the solforge-decomp skill; " +
-        "paged results return next_cursor, which you pass back as cursor. " + RetailHint + " " + SelfServiceHint + " " + AutomaticHint + " " + CommandsHint;
+        "paged results return next_cursor, which you pass back as cursor. " + ParhelionHint + " " + RetailHint + " " + SelfServiceHint + " " + AutomaticHint + " " + CommandsHint;
+
+    /** Parhelion's recipe path remains visible to MCP clients without an embedded AI interface. */
+    public const string ParhelionHint =
+        "For Parhelion-compatible weapon recipe work, call get_parhelion_context, list_parhelion_weapon_recipes and " +
+        "validate_parhelion_weapon_recipe; read skills/solforge-new-weapon/SKILL.md before authoring. To load a validated " +
+        "recipe into Solforge's normal clone dialog, call start_parhelion_weapon_recipe; the user reviews and presses Create.";
 
     /** Shared by the server instructions and the session file, so every engine knows it can do its own setup. */
     public const string SelfServiceHint =
@@ -378,10 +384,11 @@ public static partial class SolforgeTools
             .. InsightTools(host, Read),
             .. MissionHostTools(host, Read),
             .. ItemSourceTools(host, Read, Act),
+            .. ParhelionTools(host),
+            .. PerkTools(host, Read, Act),
             .. RetailTools(host, Read, Act)
         ];
     }
-            .. PerkTools(host, Read, Act),
 
     private const string NoReference = "No reference library found (08-docs\\reference above the project or game folder, or SOLFORGE_REFERENCE).";
     private const string NoMission = "No mission is open in Solforge. list_missions lists the open map's missions; open_map with " +
