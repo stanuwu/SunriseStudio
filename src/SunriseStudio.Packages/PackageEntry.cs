@@ -1,6 +1,6 @@
 namespace SunriseStudio.Packages;
 
-/** One row of a package's entry table; TagHash is 0x80800000 + (PackageId << 13) + EntryIndex. */
+/** One row of a package's entry table; TagHash is TagHashes.Make(PackageId, EntryIndex). */
 public sealed record PackageEntry(
     uint TagHash,
     uint Reference,

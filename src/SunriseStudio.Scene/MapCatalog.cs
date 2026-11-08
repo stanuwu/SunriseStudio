@@ -1,4 +1,6 @@
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -11,7 +13,6 @@ public sealed record MapActivity(uint Tag, string Name, IReadOnlyList<uint> Bubb
 /** Maps and the scenarios that place content on them, matched by authored bubble name hashes. */
 public sealed class MapCatalog
 {
-    private const uint MapRootClass = 0x808091DE, MapDefinitionClass = 0x80809962, ScenarioClass = 0x80809994;
     private readonly List<(uint Tag, string Name, uint[] Bubbles)> scenarios = [];
 
     public IReadOnlyList<MapEntry> Maps { get; }
@@ -21,23 +22,18 @@ public sealed class MapCatalog
     private MapCatalog(PackageCatalog catalog, Func<uint, string> name, CancellationToken token)
     {
         var maps = new List<MapEntry>();
-        foreach (var entry in catalog.Entries)
+        foreach (var entry in catalog.EntriesWithAdded())
         {
             token.ThrowIfCancellationRequested();
-            if (entry.Reference == MapRootClass)
+            if (entry.Reference == SMapRoot.Class)
             {
                 try { maps.Add(ReadMap(catalog, entry.TagHash, name(entry.TagHash))); }
                 catch (Exception error) when (error is InvalidDataException or ArgumentException or IOException)
                 { Errors.Add($"Map 0x{entry.TagHash:X8}: {error.Message}"); maps.Add(new MapEntry(entry.TagHash, name(entry.TagHash), [])); }
             }
-            else if (entry.Reference == ScenarioClass)
+            else if (entry.Reference == SScenario.Class)
             {
-                try
-                {
-                    var data = new TagData(catalog.Read(entry.TagHash));
-                    scenarios.Add((entry.TagHash, name(entry.TagHash),
-                        data.Rows(0x50, 0x8080924D, 24).Select(row => data.U32(row)).ToArray()));
-                }
+                try { scenarios.Add((entry.TagHash, name(entry.TagHash), ScenarioBubbles(catalog.Read(entry.TagHash)))); }
                 catch (Exception error) when (error is InvalidDataException or ArgumentException or IOException)
                 { Errors.Add($"Scenario 0x{entry.TagHash:X8}: {error.Message}"); }
             }
@@ -48,16 +44,28 @@ public sealed class MapCatalog
     public static MapCatalog Build(PackageCatalog catalog, Func<uint, string> name, CancellationToken token = default) =>
         new(catalog, name, token);
 
+    /** Bubble name hashes in scenario order. */
+    private static uint[] ScenarioBubbles(byte[] tag)
+    {
+        ref readonly var scenario = ref TagView.Checked<SScenario>(tag, 0);
+        var rows = TagView.Rows(tag, in scenario.Bubbles, ScenarioBubble.Class);
+        var hashes = new uint[rows.Length];
+        for (int index = 0; index < rows.Length; index++) hashes[index] = rows[index].NameHash;
+        return hashes;
+    }
+
     /** Bubble name hashes in map order, from the map definition's bubble rows. */
     private static MapEntry ReadMap(PackageCatalog catalog, uint mapTag, string name)
     {
-        var root = new TagData(catalog.Read(mapTag));
-        uint definitionTag = root.U32(8);
-        if (!catalog.TryGetEntry(definitionTag, out var definitionEntry) || definitionEntry.Reference != MapDefinitionClass)
+        uint definitionTag = TagView.Checked<SMapRoot>(catalog.Read(mapTag), 0).MapDefinition;
+        if (!catalog.TryGetEntry(definitionTag, out var definitionEntry) || definitionEntry.Reference != SMapLocationNames.Class)
             throw new InvalidDataException("Map definition has the wrong class.");
-        var definition = new TagData(catalog.Read(definitionTag));
-        return new(mapTag, name, definition.Rows(32, 0x808098C2, 80).Select(row => definition.U32(row)).ToArray())
-        { DefinitionTag = definitionTag };
+        byte[] definition = catalog.Read(definitionTag);
+        ref readonly var map = ref TagView.Checked<SMapLocationNames>(definition, 0);
+        var rows = TagView.Rows(definition, in map.SliceSets, MapBubble.Class);
+        var hashes = new uint[rows.Length];
+        for (int index = 0; index < rows.Length; index++) hashes[index] = rows[index].BubbleNameHash;
+        return new(mapTag, name, hashes) { DefinitionTag = definitionTag };
     }
 
     /** Scenarios whose bubbles all belong to the map; an exact bubble list match sorts first. */

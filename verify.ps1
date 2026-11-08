@@ -1,8 +1,9 @@
 # Builds Studio and runs its checks. -Game adds the checks that read an installation. -Blender adds
-# the Blender checks and needs -Plugin, a checkout of the Blender add-on. Output holds captures and scratch.
+# the Blender checks and needs -Plugin, a checkout of the Blender add-on. -Tooling, the private tooling
+# folder, adds the tag lint. Output holds captures and scratch.
 param([string]$Game, [string]$Blender, [switch]$SkipBuild,
     [string]$Output = (Join-Path ([IO.Path]::GetTempPath()) 'SunriseStudio-verify'),
-    [string]$Plugin)
+    [string]$Plugin, [string]$Tooling)
 $ErrorActionPreference = 'Stop'
 if ($Blender -and -not (Test-Path -LiteralPath (Join-Path "$Plugin" '__init__.py'))) {
     throw 'The Blender checks need -Plugin, a checkout of https://github.com/stanuwu/SunriseBlenderPlugin.'
@@ -28,6 +29,13 @@ function Invoke-Blender([string]$Failure, [string]$Script, [string[]]$Arguments)
 function New-Scratch([string]$Name) { Join-Path $Output ($Name + '-' + [Guid]::NewGuid().ToString('N')) }
 
 if (-not $SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') }
+# A tag offset outside the generated views fails the run; only non-tag format files are allow-listed.
+if ($Tooling) {
+    $registryGen = Join-Path $Tooling 'tools/registry-gen/RegistryGen.csproj'
+    Invoke-Dotnet 'Build failed: registry-gen' @('build', $registryGen, '-c', 'Release', '-nologo', '-v:q')
+    Invoke-Dotnet 'Tag lint found hand-written tag offsets.' @((Join-Path $Tooling 'tools/registry-gen/bin/Release/net9.0/registry-gen.dll'),
+        'lint', '--root', (Join-Path $PSScriptRoot 'src'), '--allow', (Join-Path $Tooling 'tools/registry-gen/lint-allow.json'))
+}
 # The weapon checks are not in the solution, so they build here.
 $weaponChecks = @('WeaponParticleBinding.Tests', 'WeaponPresentation.Tests')
 if ($Game -and -not $SkipBuild) {
@@ -46,13 +54,15 @@ $studioChecks = [ordered]@{
     'Animation.Tests' = 'net9.0'; 'MaterialInterchange.Tests' = 'net9.0'; 'Interchange.Tests' = 'net9.0-windows'
     'MeshAuthoring.Tests' = 'net9.0-windows'; 'AssetSurface.Tests' = 'net9.0-windows'; 'Shading.Tests' = 'net9.0-windows'
     'PackageReplacement.Tests' = 'net9.0'; 'Editor.Tests' = 'net9.0-windows'; 'Creation.Tests' = 'net9.0-windows'
-    'OriginalAsset.Tests' = 'net9.0'; 'Shortcuts.Tests' = 'net9.0-windows'
+    'OriginalAsset.Tests' = 'net9.0'; 'Shortcuts.Tests' = 'net9.0-windows'; 'Tags.Tests' = 'net9.0'
+    'WorldAuthoring.Tests' = 'net9.0'
 }
 # The arguments each check takes with -Game; checks not listed take none.
 $gameArgs = @{
     'Cui.Gpu.Tests' = @('--game-root', $Game, '--output', (Join-Path $Output 'cui-fonts'))
     'Investment.Tests' = @('--game-root', $Game, '--ui', (Join-Path $Output 'features/investment-stat-authoring.png'))
-    'LivePose.Tests' = @('--game', $Game); 'Animation.Tests' = @('--game', $Game)
+    'LivePose.Tests' = @('--game', $Game); 'Animation.Tests' = @('--game', $Game); 'Tags.Tests' = @('--game', $Game, '--tft', '5')
+    'WorldAuthoring.Tests' = @('--game', $Game)
     'CollisionView.Tests' = @('--game-root', $Game, '--output', (New-Scratch 'collision'))
     'AssetSurface.Tests' = @('--game-root', $Game, '--output', (Join-Path $Output 'isolated-native-asset.png'))
 }
@@ -67,6 +77,7 @@ foreach ($name in $studioChecks.Keys) {
     if ($Game -and $gameArgs.Contains($name)) { $checkArgs += $gameArgs[$name] }
     if ($Game -and $Blender -and $name -eq 'CollisionView.Tests') { $checkArgs += @('--blender', $Blender) }
     if ($Blender -and $name -eq 'AnimationAuthoring.Tests') { $checkArgs += @('--blender', $Blender) }
+    if ($name -eq 'Tags.Tests') { $checkArgs += @('--registry', (Join-Path $PSScriptRoot 'registry/86657.json')) }
     Invoke-Dotnet "Check failed: $name" $checkArgs
 }
 
@@ -141,6 +152,8 @@ if ($Blender) {
         Invoke-Dotnet 'Guardian Blender export check failed.' @((Get-Check 'Editor.Tests' 'net9.0-windows'), '--guardian-export', $Game, $guardianOutput)
         Invoke-Blender 'Guardian Blender material check failed.' 'SunriseStudio.Interchange.Tests/blender_guardian_materials.py' @(
             (Join-Path $guardianOutput 'guardian-export/asset.sunrise-bundle.json'), $addon)
+        Invoke-Blender 'Blender shader program check failed.' 'SunriseStudio.Interchange.Tests/blender_shader_programs.py' @(
+            $addon, (Join-Path $guardianOutput 'guardian-export/asset.sunrise-bundle.json'), (Join-Path $ownedBundleOutput 'asset.sunrise-bundle.json'))
     }
     $materialOutput = New-Scratch 'material'
     $materialCheck = Get-Check 'MaterialInterchange.Tests' 'net9.0'

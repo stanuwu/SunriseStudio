@@ -67,10 +67,19 @@ internal static class MergeSidecarChecks
         // The element shape of shape 2 must come after it.
         Refused(bytes, broken => BinaryPrimitives.WriteUInt16LittleEndian(broken.AsSpan(ShapeFieldAt(2, 0) + 6), 1));
         Refused(bytes, broken => BinaryPrimitives.WriteUInt16LittleEndian(broken.AsSpan(ShapeFieldAt(0, 0) + 6), 9));
-        // An object pointer is 8 bytes and names no shape.
-        var objects = file with { Shapes = [.. file.Shapes.Take(3), new(24, [new(8, MergeFieldKind.ObjectPointer, MergeSidecarFormat.NoElementShape)])] };
-        Check(MergeSidecarFormat.Read(MergeSidecarFormat.Write(objects)).Shapes[3].Fields.SequenceEqual(objects.Shapes[3].Fields),
+        // An object pointer is 8 bytes. From version 3 it may name a later shape, the object's; version 2 still reads.
+        var objects = file with
+        {
+            Shapes = [.. file.Shapes.Take(3), new(24, [new(8, MergeFieldKind.ObjectPointer, 4)]),
+                new(16, [new(0, MergeFieldKind.ObjectPointer, MergeSidecarFormat.NoElementShape)])]
+        };
+        byte[] objectBytes = MergeSidecarFormat.Write(objects);
+        Check(MergeSidecarFormat.Read(objectBytes).Shapes[3].Fields.SequenceEqual(objects.Shapes[3].Fields),
             "An object pointer field changed across write and read.");
+        Refused(objectBytes, broken => broken[4] = (byte)MergeSidecarFormat.OldestVersion);
+        byte[] oldest = bytes.ToArray();
+        oldest[4] = (byte)MergeSidecarFormat.OldestVersion;
+        Check(MergeSidecarFormat.Read(oldest).Entries.Count == file.Entries.Count, "A version 2 sidecar no longer reads.");
         Throws<InvalidDataException>(() => MergeSidecarFormat.Write(objects with
         {
             Shapes = [.. file.Shapes.Take(3), new(24, [new(8, MergeFieldKind.ObjectPointer, 1)])]
@@ -115,8 +124,8 @@ internal static class MergeSidecarChecks
         string install = Path.Combine(parent, "merge-install");
         string packageDirectory = Path.Combine(install, "packages");
         Directory.CreateDirectory(packageDirectory);
-        int tableEntry = (int)(ItemIndex & 0x1FFF);
-        ushort tablePackage = (ushort)((ItemIndex - 0x80800000U) >> 13);
+        int tableEntry = TagHashes.Entry(ItemIndex);
+        ushort tablePackage = (ushort)TagHashes.Package(ItemIndex);
         byte[] stock = IndexTable(StockRows, IndexRowClass), displays = IndexTable(StockRows, DisplayRowClass);
         Install(packageDirectory, ItemIndex, IndexClass, stock, "An installed entry no merge recipe covers."u8.ToArray());
         byte[] inPlace = "An installed entry edited in place."u8.ToArray();
@@ -130,14 +139,14 @@ internal static class MergeSidecarChecks
 
         var project = StudioProject.Create(Path.Combine(parent, "merge-project"), "Merge sidecars");
         const ushort itemPackage = 0x0C00;
-        uint itemTag = 0x80800000U + ((uint)itemPackage << 13);
+        uint itemTag = TagHashes.Make(itemPackage, 0);
         byte[] grown = AppendRow(stock, 0xA1B2C3D4, itemTag);
         project.ApplyEdit(ItemIndex, grown, catalog);
         project.ApplyEdit(DisplayIndex, AppendRow(displays, 0xA1B2C3D4, itemTag + 1), catalog);
-        uint opaqueTag = 0x80800000U + ((uint)tablePackage << 13);
+        uint opaqueTag = TagHashes.Make(tablePackage, 0);
         project.ApplyEdit(opaqueTag, [.. catalog.ReadOriginal(opaqueTag), 1, 2, 3], catalog);
         // Two bytes in different words of a same-size installed edit.
-        uint inPlaceTag = 0x80800000U + (((DisplayIndex - 0x80800000U) >> 13) << 13);
+        uint inPlaceTag = TagHashes.Make((ushort)TagHashes.Package(DisplayIndex), 0);
         byte[] editedInPlace = inPlace.ToArray();
         editedInPlace[3] ^= 0x20; editedInPlace[20] ^= 0x20;
         project.ApplyEdit(inPlaceTag, editedInPlace, catalog);
@@ -151,8 +160,8 @@ internal static class MergeSidecarChecks
         Check(built.Length == 3 && built.SequenceEqual(sidecars), "A built package has no merge sidecar beside it.");
         using (var receipt = JsonDocument.Parse(File.ReadAllBytes(build.ReceiptPath)))
             Check(receipt.RootElement.GetProperty("mergeSidecars").GetArrayLength() == 3, "The receipt does not list the sidecars.");
-        var displayPatch = Bound(Path.Combine(packages, $"w64_test_{(DisplayIndex - 0x80800000U) >> 13:x4}_1.pkg"));
-        var display = displayPatch.Entries.Single(entry => entry.Index == (DisplayIndex & 0x1FFF));
+        var displayPatch = Bound(Path.Combine(packages, $"w64_test_{TagHashes.Package(DisplayIndex):x4}_1.pkg"));
+        var display = displayPatch.Entries.Single(entry => entry.Index == TagHashes.Entry(DisplayIndex));
         Check(display.Kind == SidecarEntryKind.Table && display.Ops.Single().PairGroup == TableMergeRecipes.PairGroupId("item"),
             "The item display index does not pair with the item index.");
         var sameSize = displayPatch.Entries.Single(entry => entry.Index == 0);
@@ -240,8 +249,8 @@ internal static class MergeSidecarChecks
     /** Writes a package that holds `table` at the tag's own entry, and `first` at entry 0. */
     private static void Install(string directory, uint tag, uint tableClass, byte[] table, byte[]? first = null)
     {
-        int entry = (int)(tag & 0x1FFF);
-        ushort package = (ushort)((tag - 0x80800000U) >> 13);
+        int entry = TagHashes.Entry(tag);
+        ushort package = (ushort)TagHashes.Package(tag);
         var entries = Enumerable.Range(0, entry + 1).Select(_ => new AuthoredPackageEntry(0, 0, [])).ToArray();
         if (first is not null) entries[0] = new(0x80800001, 0x100A, first);
         entries[entry] = new(tableClass, 0x100A, table);

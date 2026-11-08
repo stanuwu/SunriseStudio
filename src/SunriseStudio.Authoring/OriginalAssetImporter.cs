@@ -80,21 +80,19 @@ public static class OriginalAssetImporter
         int cursor = checked(first + 8);
         var materialTags = new Dictionary<int, uint>();
         var materials = new List<ProjectAssetAddition>();
-        var skippedMaterials = new List<string>();
         foreach (int index in meshes.Select(mesh => mesh.MaterialIndex ?? -1).Distinct())
         {
             var material = OriginalAssetMaterials.Prepare(catalog, document.RootElement, index < 0 ? null : index,
                 images, options.Name + ".material" + materialTags.Count, options.PackageId, cursor,
                 options.SkipUnsupported, cancellationToken);
             materialTags.Add(index, material.MaterialTag); materials.AddRange(material.Assets);
-            skippedMaterials.AddRange(material.Skipped);
             cursor = checked(cursor + material.Assets.Count);
         }
         var model = MeshAssetImporter.PrepareParts(catalog, meshes,
             meshes.Select(mesh => materialTags[mesh.MaterialIndex ?? -1]).ToArray(), options.Name,
             options.PackageId, first, options.TemplateTag, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        var skippedNames = refused.Select(surface => surface.Name).Concat(skippedMaterials).Distinct().ToArray();
+        var skippedNames = refused.Select(surface => surface.Name).Distinct().ToArray();
         string skipped = skippedNames.Length == 0 ? "" : $" Skipped: {string.Join(", ", skippedNames)}.";
         string summary = $"Added {options.Name} as model {model.ModelTag:X8} ({Plural(model.VertexCount, "vertex", "vertices")}, "
             + $"{Plural(model.TriangleCount, "triangle", "triangles")}, {Plural(meshes.Length, "part", "parts")}) with "

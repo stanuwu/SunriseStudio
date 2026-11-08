@@ -1,5 +1,7 @@
 using System.Numerics;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using static SunriseStudio.Animation.AnimationIkSolver;
 
 namespace SunriseStudio.Animation;
@@ -111,24 +113,35 @@ public sealed class AuthoredRootMotionReader(PackageCatalog catalog)
     public AuthoredRootMotionClip Read(uint tag)
     {
         var info = new ClipMetadataReader(catalog).Read(tag);
-        var data = new AnimationControlReader.Data(catalog.Read(tag));
-        var cycle = new BoneTransform(new Quaternion(data.F32(0x70), data.F32(0x74),
-            data.F32(0x78), data.F32(0x7C)), new Vector3(data.F32(0x80), data.F32(0x84), data.F32(0x88)),
-            data.F32(0x8C));
+        byte[] bytes = catalog.Read(tag);
+        var data = new AnimationControlReader.Data(bytes);
+        ref readonly var clip = ref TagView.Checked<SAnimationClip>(bytes, 0).H42cf5d81;
+        Quaternion cycleRotation = clip.RootCycleRotation;
+        Vector3 cycleTranslation = clip.RootCycleTranslation;
+        var cycle = new BoneTransform(new Quaternion(Finite(cycleRotation.X), Finite(cycleRotation.Y),
+            Finite(cycleRotation.Z), Finite(cycleRotation.W)), new Vector3(Finite(cycleTranslation.X),
+            Finite(cycleTranslation.Y), Finite(cycleTranslation.Z)), Finite(clip.RootCycleScale));
         SkeletonReader.CheckTransform(cycle);
         cycle = cycle with { Rotation = Quaternion.Normalize(cycle.Rotation) };
-        byte mode = data.U8(0x142);
-        if (data.I64(0x60) == 0)
+        byte mode = clip.RootMotionExtractionMode;
+        if (clip.PayloadSection10.IsNull)
             return new(tag, info.FrameCount, mode, -1, 0, cycle, [], []);
-        int payload = data.Pointer(0x60);
-        uint type = data.U32(payload - 4);
-        if (type != 0x80808F71 || data.U16(payload) != 2 || data.U16(payload + 2) != 0
-            || data.U16(payload + 4) != 1 || data.U16(payload + 6) != 1)
+        int payload = TagView.TargetOffset(bytes, in clip.PayloadSection10)!.Value;
+        uint type = AnimationControlReader.ClassBefore(bytes, payload);
+        if (type != SAnimationCodec2Quantized.Class || Word(bytes, payload, nameof(SAnimationCodec2Quantized.CodecId2)) != 2
+            || Word(bytes, payload, nameof(SAnimationCodec2Quantized.ScaleTrackCount)) != 0
+            || Word(bytes, payload, nameof(SAnimationCodec2Quantized.RotationTrackCount)) != 1
+            || Word(bytes, payload, nameof(SAnimationCodec2Quantized.TranslationTrackCount)) != 1)
             throw new NotSupportedException("Root motion payload is not the verified one-track codec-2 layout.");
-        int frames = checked((int)data.U32(payload + 0x10));
+        int frames = checked((int)AnimationControlReader.Member<SAnimationCodec2Quantized, uint>(bytes, payload,
+            nameof(SAnimationCodec2Quantized.FrameCount)));
         if (frames != info.FrameCount) throw new InvalidDataException("Root motion frame count differs from its clip.");
-        ushort[] words = data.Words(payload + 0x18);
-        float[] extent = data.Floats(payload + 0x28), bias = data.Floats(payload + 0x38);
+        ushort[] words = data.Words(payload + TagView.FieldOffset<SAnimationCodec2Quantized>(
+            nameof(SAnimationCodec2Quantized.ComponentWords)));
+        float[] extent = data.Floats(payload + TagView.FieldOffset<SAnimationCodec2Quantized>(
+            nameof(SAnimationCodec2Quantized.ComponentExtents)));
+        float[] bias = data.Floats(payload + TagView.FieldOffset<SAnimationCodec2Quantized>(
+            nameof(SAnimationCodec2Quantized.ComponentBiases)));
         if (words.Length != frames * 7 || extent.Length != 7 || bias.Length != 7)
             throw new InvalidDataException("Root motion quantizer or sample counts disagree.");
         var rotations = new Quaternion[frames];
@@ -146,4 +159,10 @@ public sealed class AuthoredRootMotionReader(PackageCatalog catalog)
         }
         return new(tag, frames, mode, payload, type, cycle, rotations, translations);
     }
+
+    private static ushort Word(byte[] bytes, int payload, string member) =>
+        AnimationControlReader.Member<SAnimationCodec2Quantized, ushort>(bytes, payload, member);
+
+    private static float Finite(float value) =>
+        float.IsFinite(value) ? value : throw new InvalidDataException("Animation quantizer is not finite.");
 }

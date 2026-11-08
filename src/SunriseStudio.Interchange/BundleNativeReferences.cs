@@ -1,7 +1,11 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Interchange;
 
@@ -13,7 +17,6 @@ public static partial class AssetBundle
     {
         var result = new List<BundleReference>();
         uint U32(int p) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(p, 4));
-        int Relative(int p) => checked((int)(p + BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(p, 8))));
         void Link(uint target, int offset, string role)
         {
             if (!catalog.ContainsTag(target) || target is 0 or uint.MaxValue) return;
@@ -27,18 +30,22 @@ public static partial class AssetBundle
             if (catalog.TryGetEntry(U32(p), out var target) && target.Reference == expected
                 && AssetCategories.IsStructured(target)) Link(target.TagHash, p, role);
         }
-        IEnumerable<int> Rows(int field, uint expected, int stride)
+        int Field<T>(int owner, string member) where T : unmanaged => owner + TagView.FieldOffset<T>(member);
+        IEnumerable<int> Rows<T>(int field, uint expected) where T : unmanaged
         {
-            long count = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(field, 8));
+            var array = new TagArray(bytes, field);
+            long count = array.Count;
             if (count == 0) return [];
-            int header = Relative(field + 8);
-            if (count < 0 || count > 1_000_000 || header < 4 || header > bytes.Length - 16
-                || U32(header - 4) != 0x80809FBD || U32(header + 8) != expected
-                || BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(header)) != count
-                || count > (bytes.Length - header - 16) / stride)
+            int header = array.HeaderOffset, stride = Unsafe.SizeOf<T>();
+            var block = array.Header;
+            if (count < 0 || count > TagArray.MaximumReaderRows || header < 4 || header > bytes.Length - TagArray.HeaderSize
+                || !TagArray.MarkerAt(bytes, header) || block.ElementClass != expected
+                || block.Count != count || !block.RowsFit(stride))
                 throw new InvalidDataException("Native reference array is invalid.");
-            return Enumerable.Range(0, (int)count).Select(index => header + 16 + index * stride);
+            int data = array.DataOffset;
+            return Enumerable.Range(0, (int)count).Select(index => data + index * stride);
         }
+        int TargetOrSelf(int field) => TagView.TargetOrSelf(bytes, in TagView.At<RelativePointer<Unknown>>(bytes, field));
         try
         {
             foreach (var link in new AssetConnectionReader(catalog).ReadNativeReferences(entry.TagHash, token))
@@ -52,68 +59,100 @@ public static partial class AssetBundle
                 if (entry.Type == 48 && pairedHeader.Type == 32 && pairedHeader.SubType is >= 1 and <= 3)
                 {
                     byte[] header = catalog.Read(pairedHeader.TagHash);
-                    if (header.Length == 40 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(12)) == 0xCAFE
-                        && BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(36)) == entry.TagHash)
+                    if (header.Length == Unsafe.SizeOf<TextureHeader>()
+                        && MemoryMarshal.Read<TextureHeader>(header) is { Marker: TextureHeader.MarkerValue } texture
+                        && texture.StreamedTag == entry.TagHash)
                         Link(pairedHeader.TagHash, -1, "Streamed header metadata");
                 }
             }
-            if (entry.Type == 32 && entry.SubType is >= 1 and <= 3 && bytes.Length == 40)
-                Link(U32(0x24), 0x24, "Streamed mips");
+            if (entry.Type == 32 && entry.SubType is >= 1 and <= 3 && bytes.Length == Unsafe.SizeOf<TextureHeader>())
+                Link(MemoryMarshal.Read<TextureHeader>(bytes).StreamedTag,
+                    TagView.FieldOffset<TextureHeader>(nameof(TextureHeader.StreamedTag)), "Streamed mips");
             if (!AssetCategories.IsStructured(entry)) return result;
-            if (entry.Reference == 0x80809C36 && bytes.Length >= 0x20)
+            if (entry.Reference == SEntityConfig.Class && TagView.FitsThrough<SEntityConfig>(bytes, 0, nameof(SEntityConfig.Definition)))
             {
-                foreach (int field in new[] { 0x10, 0x18 })
+                int definition = TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition));
+                foreach (int field in new[] { TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.DefaultInstance)), definition })
                 {
-                    int target = Relative(field);
+                    int target = TargetOrSelf(field);
                     if (target >= 4 && target <= bytes.Length - 4 && U32(target) == entry.TagHash)
                         Link(entry.TagHash, target, "Config identity");
                 }
-                int resource = Relative(0x18);
-                if (resource >= 4 && resource <= bytes.Length - 0x320 && U32(resource - 4) == 0x808072BD)
-                    foreach (int row in Rows(resource + 0x310, 0x80800014, 4)) Typed(row, EffectReader.MaterialClass, "External material");
-                for (int marker = 8; marker + 0x50 <= bytes.Length; marker += 4)
-                    if (U32(marker) == 0x80806CC5 && U32(marker - 4) == entry.TagHash && U32(marker - 8) == 0x80806CC6)
-                    {
-                        Link(entry.TagHash, marker - 4, "Particle node owner");
-                        foreach (int row in Rows(marker + 0x3C, 0x80806CC8, 0x18)) Typed(row + 0x10, EffectReader.SystemClass, "Particle system");
-                    }
-                for (int header = 4; header + 16 <= bytes.Length; header += 4)
-                    if (U32(header - 4) == 0x80809FBD && U32(header + 8) == 0x80800014)
-                    {
-                        long count = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(header));
-                        if (count < 0 || count > (bytes.Length - header - 16) / 4) continue;
-                        for (int i = 0; i < count; i++) Typed(header + 16 + i * 4, EffectReader.SystemClass, "Particle variant");
-                    }
-            }
-            if (entry.Reference == EffectReader.MaterialClass && bytes.Length >= 0x230)
-            {
-                foreach (int stage in new[] { 0x48, 0xE8, 0x188, 0x228, 0x2C8, 0x368 })
+                int resource = TargetOrSelf(definition);
+                if (resource >= 4 && TagView.FitsThrough<SModelComponent>(bytes, resource, "HF5b4dbc0.Materials")
+                    && TagView.ClassAt(bytes, resource) == SModelComponent.Class)
+                    foreach (int row in Rows<TagReferenceElement>(Field<SModelComponent>(resource, "HF5b4dbc0.Materials"),
+                        TagReferenceElement.Class))
+                        Typed(Field<TagReferenceElement>(row, nameof(TagReferenceElement.Tag)), EffectReader.MaterialClass, "External material");
+                // The node scan keeps one word past SystemRows inside the tag.
+                for (int node = TagView.ClassWordSize;
+                    TagView.FitsThrough<SEffectNode>(bytes, node + TagView.ClassWordSize, nameof(SEffectNode.SystemRows)); node += 4)
                 {
-                    if (stage + 0x88 > bytes.Length) continue;
-                    if (catalog.TryGetEntry(U32(stage + 0x84), out var constant) && constant.Type == 32 && constant.SubType == 7)
-                        Link(constant.TagHash, stage + 0x84, "Material constants");
-                    foreach (int row in Rows(stage + 0x40, 0x808073F3, 16))
-                        if (catalog.TryGetEntry(U32(row), out var sampler) && sampler.Type == 34 && sampler.SubType == 1)
-                            Link(sampler.TagHash, row, "Material sampler");
+                    var owner = TagOffsetPointer.Read(bytes, Field<SEffectNode>(node, nameof(SEffectNode.OwnerLink)));
+                    if (owner.Word != SEffectNodeLink.Class || owner.Tag != entry.TagHash
+                        || TagView.ClassAt(bytes, node) != SEffectNode.Class) continue;
+                    Link(entry.TagHash, Field<SEffectNode>(node, nameof(SEffectNode.OwnerLink)), "Particle node owner");
+                    foreach (int row in Rows<SEffectNodeRow>(Field<SEffectNode>(node, nameof(SEffectNode.SystemRows)), SEffectNodeRow.Class))
+                        Typed(Field<SEffectNodeRow>(row, nameof(SEffectNodeRow.ParticleSystem)), EffectReader.SystemClass, "Particle system");
                 }
-                foreach (int field in new[] { 0xE8, 0x188, 0x228 })
-                    if (catalog.TryGetEntry(U32(field), out var shader) && shader.Type == 33)
-                    {
-                        Link(shader.TagHash, field, "Additional shader stage");
-                        foreach (int row in Rows(field + 8, 0x80807211, 8))
-                            if (catalog.TryGetEntry(U32(row + 4), out var texture) && texture.Type == 32 && texture.SubType is >= 1 and <= 3)
-                                Link(texture.TagHash, row + 4, "Additional stage texture");
-                    }
+                int variantStride = Unsafe.SizeOf<TagReferenceElement>();
+                for (int header = TagView.ClassWordSize; header + TagArray.HeaderSize <= bytes.Length; header += 4)
+                {
+                    var block = new TagArrayHeader(bytes, header);
+                    if (!block.IsWellFormed || block.ElementClass != TagReferenceElement.Class || !block.RowsFit(variantStride))
+                        continue;
+                    int data = (int)block.DataOffset;
+                    for (int i = 0; i < block.Count; i++)
+                        Typed(Field<TagReferenceElement>(data + i * variantStride, nameof(TagReferenceElement.Tag)), EffectReader.SystemClass, "Particle variant");
+                }
             }
-            if (entry.Reference == EffectReader.SystemClass && bytes.Length >= 0x20)
+            if (entry.Reference == EffectReader.MaterialClass
+                && bytes.Length >= TagView.FieldOffset<STechnique>("GeometryShader.State"))
             {
-                Typed(0, EffectReader.EmitterClass, "Emitter");
-                foreach (int field in new[] { 4, 8, 0x10, 0x14 }) Typed(field, EffectReader.MaterialClass, "Particle material");
-                Link(U32(0x18), 0x18, "Particle mesh");
+                foreach (string name in new[] { "VertexShader", "HAb56cff8", "H91e27e07", "GeometryShader", "PixelShader", "ComputeShader" })
+                {
+                    int stage = TagView.FieldOffset<STechnique>(name);
+                    if (!TagView.FitsThrough<ShaderStage>(bytes, stage, "State.DynamicConstants.CbContainer")) continue;
+                    int container = Field<ShaderStage>(stage, "State.DynamicConstants.CbContainer");
+                    if (catalog.TryGetEntry(U32(container), out var constant) && constant.Type == 32 && constant.SubType == 7)
+                        Link(constant.TagHash, container, "Material constants");
+                    foreach (int row in Rows<SSamplerReference>(Field<ShaderStage>(stage, "State.DynamicConstants.HandleBuffer"),
+                        SSamplerReference.Class))
+                    {
+                        int header = Field<SSamplerReference>(row, nameof(SSamplerReference.SamplerHeader));
+                        if (catalog.TryGetEntry(U32(header), out var sampler) && sampler.Type == 34 && sampler.SubType == 1)
+                            Link(sampler.TagHash, header, "Material sampler");
+                    }
+                }
+                foreach (string name in new[] { "HAb56cff8", "H91e27e07", "GeometryShader" })
+                {
+                    int stage = TagView.FieldOffset<STechnique>(name), field = Field<ShaderStage>(stage, nameof(ShaderStage.Shader));
+                    if (!catalog.TryGetEntry(U32(field), out var shader) || shader.Type != 33) continue;
+                    Link(shader.TagHash, field, "Additional shader stage");
+                    foreach (int row in Rows<SMaterialTextureAssignment>(Field<ShaderStage>(stage, "State.StaticTextures.Textures"),
+                        SMaterialTextureAssignment.Class))
+                    {
+                        int slot = Field<SMaterialTextureAssignment>(row, nameof(SMaterialTextureAssignment.Texture));
+                        if (catalog.TryGetEntry(U32(slot), out var texture) && texture.Type == 32 && texture.SubType is >= 1 and <= 3)
+                            Link(texture.TagHash, slot, "Additional stage texture");
+                    }
+                }
+            }
+            if (entry.Reference == EffectReader.SystemClass && TagView.FitsThrough<SParticleSystem>(bytes, 0, nameof(SParticleSystem.Material4)))
+            {
+                Typed(TagView.FieldOffset<SParticleSystem>(nameof(SParticleSystem.Emitter)), EffectReader.EmitterClass, "Emitter");
+                foreach (string material in new[] { "Material0", "Material1", "Material2", "Material3" })
+                    Typed(TagView.FieldOffset<SParticleSystem>(material), EffectReader.MaterialClass, "Particle material");
+                int mesh = TagView.FieldOffset<SParticleSystem>(nameof(SParticleSystem.ParticleMesh));
+                Link(U32(mesh), mesh, "Particle mesh");
             }
             if (entry.Reference == EffectReader.FlareClass)
-                foreach (int row in Rows(0x20, 0x80806F6D, 12))
-                { Typed(row, EffectReader.MaterialClass, "Flare material"); Link(U32(row + 4), row + 4, "Flare parameters"); }
+                foreach (int row in Rows<SLensFlareElement>(TagView.FieldOffset<SLensFlare>(nameof(SLensFlare.Elements)), SLensFlareElement.Class))
+                {
+                    Typed(Field<SLensFlareElement>(row, nameof(SLensFlareElement.Material)), EffectReader.MaterialClass, "Flare material");
+                    int parameters = Field<SLensFlareElement>(row, nameof(SLensFlareElement.Parameters));
+                    Link(U32(parameters), parameters, "Flare parameters");
+                }
         }
         catch (Exception error) when (Recoverable(error))
         { notices?.Add(new("Dependency", "Partial", error.Message, entry.TagHash)); }

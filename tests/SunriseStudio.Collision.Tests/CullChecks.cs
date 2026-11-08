@@ -4,6 +4,8 @@ using SunriseStudio.Authoring;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using static Checks;
 using static StaticIsolationFixture;
 
@@ -35,12 +37,13 @@ internal static class CullChecks
                 new("staged-removal", new HashSet<ushort>())).GeneratedAssets.Count == 4,
                 "Explicit staged options inherited a removed graph overlay.");
             catalog.SetOverlayEntries([]);
+            AddedGraph(catalog, edit, compiled);
             var again = Compiler.Compile([edit], catalog.ReadOriginal, catalog);
             Check(compiled.Assets.All(x => x.Value.SequenceEqual(again.Assets[x.Key]))
                 && compiled.GeneratedAssets.Zip(again.GeneratedAssets).All(x => x.First.TagHash == x.Second.TagHash
                     && x.First.Data.SequenceEqual(x.Second.Data)), "Repeated compilation changed generated identities or bytes.");
-            var changedBounds = new NativeRows(compiled.Assets[Bounds]);
-            ulong fresh = changedBounds.U64(changedBounds.Rows(8, 0x80809673, 48)[1] + 32);
+            byte[] changedBounds = compiled.Assets[Bounds];
+            ulong fresh = TagRows.VisibilityId(changedBounds, TagRows.Boxes(changedBounds)[1]);
             Check(fresh != candidate && !RowIds.Contains(fresh), "Fresh id collides with an occupied map key or bounds id.");
             var hidden = Compiler.Compile([Edit(catalog, Table, 2, 3)], catalog.ReadOriginal, catalog);
             Check(hidden.GeneratedAssets.Count == 0 && !hidden.Assets.ContainsKey(Owner), "An authored hidden row gained geometry.");
@@ -78,6 +81,44 @@ internal static class CullChecks
             Console.WriteLine("PASS cull-isolation original-owner=unchanged hidden=retained compact=1 bounds=empty mode=1/1 aliases=original duplicate=absent dynamic-id=repaired refusals=checked");
         }
         finally { if (Directory.Exists(folder)) Directory.Delete(folder, true); }
+    }
+
+    /** Added graph entries join the scopes: they get replacements where Studio can write, and refusals where it cannot. */
+    private static void AddedGraph(PackageCatalog catalog, ObjectEdit edit, ObjectEditCompilation baseline)
+    {
+        const uint AddedList = 0x80A02000, AddedContainer = 0x80A02001, AddedTable = 0x80A02002;
+        ObjectEditCompileOptions Options(params AddedObjectEntry[] entries) =>
+            new("added-graph", new HashSet<ushort>())
+            {
+                AddedNativeReferences = entries.Select(x => x.Class).ToHashSet(),
+                AddedEntries = entries
+            };
+        AddedObjectEntry Added(uint tag, uint type, byte[] bytes) => new(tag, type, 0x1000, WideHashAliases.Empty, () => bytes);
+        var unrelated = Compiler.Compile([edit], catalog.ReadOriginal, catalog,
+            Options(Added(AddedList, 0x808099D6, StaticPlacementList(Base + 30))));
+        Check(unrelated.GeneratedAssets.Count == baseline.GeneratedAssets.Count,
+            "An added list that places another owner changed the isolation.");
+        // The installed container carries the added list through a raw change, which isolation can extend.
+        byte[] container = ContainerMembers(List, MapList, AddedList);
+        var joined = Compiler.Compile([edit], tag => tag == Container ? container : catalog.ReadOriginal(tag), catalog,
+            Options(Added(AddedList, 0x808099D6, StaticPlacementList(Owner))));
+        Check(joined.GeneratedAssets.Count == baseline.GeneratedAssets.Count + 1
+            && joined.GeneratedAssets.Any(x => x.SourceTag == AddedList),
+            "An added list that places the edited owner got no replacement list.");
+        byte[] bubbleList = BubbleContainers(Container, AddedContainer);
+        var refusal = Throws<InvalidDataException>(() => Compiler.Compile([edit],
+            tag => tag == ContainerList ? bubbleList : catalog.ReadOriginal(tag), catalog,
+            Options(Added(AddedList, 0x808099D6, StaticPlacementList(Owner)),
+                Added(AddedContainer, 0x80808A54, ContainerMembers(AddedList)))));
+        Check(refusal.Message.Contains("this project's container", StringComparison.Ordinal),
+            "An added container that places the edited owner was not refused by name.");
+        byte[] sharing = catalog.ReadOriginal(LoneTable);
+        BinaryPrimitives.WriteUInt32LittleEndian(sharing.AsSpan(0x18), Bounds);
+        var shared = Throws<InvalidDataException>(() => Compiler.Compile([edit], catalog.ReadOriginal, catalog,
+            Options(Added(AddedTable, 0x8080966D, sharing))));
+        Check(shared.Message.Contains("shared", StringComparison.OrdinalIgnoreCase),
+            "An added table that shares the edited bounds was not refused.");
+        Console.WriteLine("PASS cull-added-graph unrelated=unchanged placed=replaced added-container=refused shared-bounds=refused");
     }
 
     /** Owned source rows and masks remain byte exact outside the single edited row. */
@@ -120,30 +161,33 @@ internal static class CullChecks
                 "Warm isolation rescanned the installed config payloads.");
             Verify(catalog, compiled, edit.Target.SourceTag, edit.Target.Index);
             var nativeMap = new InstanceVisibilityMap(catalog.ReadOriginal(0x80FAA377));
-            var before = new NativeRows(catalog.ReadOriginal(0x80FAA005));
-            var after = new NativeRows(compiled.Assets[0x80FAA005]);
-            int[] boxes = before.Rows(8, 0x80809673, 48);
-            Check(boxes.Length == 6869 && boxes.Count(row => !nativeMap.Contains(before.U64(row + 32))) == 159,
+            byte[] before = catalog.ReadOriginal(0x80FAA005), after = compiled.Assets[0x80FAA005];
+            int[] boxes = TagRows.Boxes(before);
+            Check(boxes.Length == 6869 && boxes.Count(row => !nativeMap.Contains(TagRows.VisibilityId(before, row))) == 159,
                 "The owned visibility baseline changed.");
-            Check(boxes.Count(row => !nativeMap.Contains(after.U64(row + 32))) == 160,
+            Check(boxes.Count(row => !nativeMap.Contains(TagRows.VisibilityId(after, row))) == 160,
                 "The replacement did not hide exactly the edited original row.");
             Check(!compiled.Assets.ContainsKey(0x80FAA28F), "The owned original owner changed.");
             var generatedList = compiled.GeneratedAssets.Single(x => x.Native.Reference == 0x808099D6);
-            var list = new NativeRows(generatedList.Data);
-            int row = list.Rows(8, 0x808099D8, 144).Single();
+            byte[] list = generatedList.Data;
+            int row = TagRows.Offsets<SMapPlacements, AuthoredPlacementEntry>(list, nameof(SMapPlacements.Placements),
+                AuthoredPlacementEntry.Class).Single();
+            int payload = TagView.FieldOffset<AuthoredPlacementEntry>(nameof(AuthoredPlacementEntry.Payload));
+            int attachment = TagView.FieldOffset<AuthoredPlacementEntry>(nameof(AuthoredPlacementEntry.AttachmentPtrMustBe0));
             byte[] sourceList = catalog.ReadOriginal(0x80FAA290);
-            Check(list.Span(row, 0x78).SequenceEqual(sourceList.AsSpan(48, 0x78))
-                && list.Span(row + 0x80, 16).SequenceEqual(sourceList.AsSpan(48 + 0x80, 16)),
+            Check(TagRows.Span(list, row, payload).SequenceEqual(sourceList.AsSpan(48, payload))
+                && TagRows.Span(list, row + attachment, 16).SequenceEqual(sourceList.AsSpan(48 + attachment, 16)),
                 "The isolated placement changed its class, QTS, scope or attachment lanes.");
-            int auxiliary = checked(row + 0x78 + (int)list.I64(row + 0x78));
-            Check(list.Span(auxiliary - 8, 24).SequenceEqual(sourceList.AsSpan(192, 24))
-                && list.Span(auxiliary + 20, 4).SequenceEqual(sourceList.AsSpan(220, 4)),
+            int auxiliary = checked(row + payload
+                + (int)ObjectRows.Field<AuthoredPlacementEntry, RelativePointer<Unknown>>(list, row, nameof(AuthoredPlacementEntry.Payload)).Relative);
+            Check(TagRows.Span(list, auxiliary - 8, 24).SequenceEqual(sourceList.AsSpan(192, 24))
+                && TagRows.Span(list, auxiliary + 20, 4).SequenceEqual(sourceList.AsSpan(220, 4)),
                 "The isolated constructor prefix, ordinal or opaque tail changed.");
-            var oldContainer = new NativeRows(catalog.ReadOriginal(0x80FAA350));
-            var newContainer = new NativeRows(compiled.Assets[0x80FAA350]);
-            var oldMembers = oldContainer.Rows(0x28, 0x80808BB0, 4).Select(oldContainer.U32).ToArray();
-            var newMembers = newContainer.Rows(0x28, 0x80808BB0, 4).Select(newContainer.U32).ToArray();
-            Check(newContainer.Span(8, 32).SequenceEqual(oldContainer.Span(8, 32))
+            byte[] oldContainer = catalog.ReadOriginal(0x80FAA350), newContainer = compiled.Assets[0x80FAA350];
+            var oldMembers = Members(oldContainer);
+            var newMembers = Members(newContainer);
+            int mask = TagView.FieldOffset<SMapContainer>(nameof(SMapContainer.BubbleMask));
+            Check(TagRows.Span(newContainer, mask, 32).SequenceEqual(TagRows.Span(oldContainer, mask, 32))
                 && newMembers.Take(oldMembers.Length).SequenceEqual(oldMembers)
                 && newMembers.Length == oldMembers.Length + 1 && newMembers[^1] == generatedList.TagHash,
                 "The derived list changed the original container mask or membership order.");
@@ -176,10 +220,10 @@ internal static class CullChecks
 
     private static void Verify(PackageCatalog catalog, ObjectEditCompilation compiled, uint table, int index)
     {
-        var original = new NativeRows(catalog.ReadOriginal(table));
-        uint boundsTag = original.U32(0x18);
+        byte[] original = catalog.ReadOriginal(table);
+        uint boundsTag = ObjectRows.Field<SStaticMeshInstances, uint>(original, 0, nameof(SStaticMeshInstances.BoundsTable));
         byte[] bounds = catalog.ReadOriginal(boundsTag), after = compiled.Assets[boundsTag];
-        int[] rows = new NativeRows(bounds).Rows(8, 0x80809673, 48);
+        int[] rows = TagRows.Boxes(bounds);
         for (int i = 0; i < rows.Length; i++)
             if (i != index) Check(bounds.AsSpan(rows[i], 48).SequenceEqual(after.AsSpan(rows[i], 48)), $"Untouched bounds row {i} changed.");
         foreach (var owner in catalog.Entries.Where(x => x.Reference == 0x80806EF4))
@@ -187,24 +231,34 @@ internal static class CullChecks
                 Check(!compiled.Assets.ContainsKey(owner.TagHash), "Original table owner changed visibility mode.");
         var generated = compiled.GeneratedAssets;
         var compact = generated.Single(x => x.Native.Reference == 0x8080966D);
-        var data = new NativeRows(compact.Data);
-        int[] compactRows = data.Rows(0x40, 0x808071A3, 48);
-        Check(compactRows.Length == 1 && data.I64(0x38) == 1 && data.I64(0) == compact.Data.Length,
+        byte[] data = compact.Data;
+        int[] compactRows = TagRows.StaticInstances(data);
+        Check(compactRows.Length == 1 && ObjectRows.Field<SStaticMeshInstances, long>(data, 0, "Instances.InstanceCount") == 1
+            && ObjectRows.Field<SStaticMeshInstances, long>(data, 0, nameof(SStaticMeshInstances.TagByteLength)) == compact.Data.Length,
             "Compact native count/length differs from its typed rows.");
-        int originalRow = original.Rows(0x40, 0x808071A3, 48)[index];
+        int originalRow = TagRows.StaticInstances(original)[index];
+        // The retained tag is compared with the four padding bytes after it.
+        int retained = TagView.FieldOffset<SStaticMeshInstances>("Instances.Unk20");
         Check(compact.Data.AsSpan(compactRows[0], 48).SequenceEqual(compiled.Assets[table].AsSpan(originalRow, 48))
-            && data.U64(0x50) == original.U64(0x50) && data.U64(0x78) == original.U64(0x78),
+            && TagRows.Span(data, retained, 8).SequenceEqual(TagRows.Span(original, retained, 8))
+            && ObjectRows.Field<SStaticMeshInstances, ulong>(data, 0, "Instances.AmbientOcclusionKey")
+                == ObjectRows.Field<SStaticMeshInstances, ulong>(original, 0, "Instances.AmbientOcclusionKey"),
             "Compaction changed native row fields, the retained tag or AO key.");
         Check(compact.InstanceOrigins[0] == new PackageInstanceOrigin(table, index), "Compact row lost its source identity.");
         var empty = generated.Single(x => x.Native.Reference == 0x80809671);
-        Check(empty.Data.Length == 24 && new NativeRows(empty.Data).Rows(8, 0x80809673, 48).Length == 0,
+        Check(empty.Data.Length == 24 && TagRows.Boxes(empty.Data).Length == 0,
             "The replacement allocates native per-row visibility entries.");
         Check(generated.Where(x => x.Native.Reference == 0x80806EF4)
             .All(x => x.Data[0x20] == 1 && x.Data[0x21] == 1 && BitConverter.ToUInt64(x.Data, 0x18) == ulong.MaxValue),
             "The replacement owner does not use the native aggregate-only profile.");
-        Check(compiled.Assets[table].AsSpan(0x80, 32).SequenceEqual(original.Bytes.AsSpan(0x80, 32)),
+        int aggregate = TagView.FieldOffset<SStaticMeshInstances>("Instances.AggregateMinimumW1");
+        Check(compiled.Assets[table].AsSpan(aggregate, 32).SequenceEqual(original.AsSpan(aggregate, 32)),
             "The retained original aggregate was widened by the isolated edit.");
     }
+
+    private static uint[] Members(byte[] container) =>
+        TagRows.Offsets<SMapContainer, ContainerMember>(container, nameof(SMapContainer.Contents), ContainerMember.Class)
+            .Select(row => ObjectRows.Field<ContainerMember, uint>(container, row, nameof(ContainerMember.MemberTag))).ToArray();
 
     /** A build-only rule runs in a build compile and never in an editor compile. */
     private static void BuildOnly(PackageCatalog catalog, ObjectEdit edit)
@@ -233,10 +287,11 @@ internal static class CullChecks
     private static void MapAdmission(PackageCatalog catalog)
     {
         byte[] original = catalog.ReadOriginal(Map);
-        var data = new NativeRows(original);
-        int bucket = data.Rows(0x20, 0x8080733E, 16).Single(row => data.U64(row) == RowIds[1]);
-        uint control = data.U32(bucket + 8), slot = control & 0x3FFFFFFF;
-        int value = data.Rows(0x30, 0x80800007, 4)[slot];
+        int[] buckets = TagRows.Offsets<SVisibilityTomeMap, SVisibilityBucket>(original, "HAda0152e.Buckets", SVisibilityBucket.Class);
+        int bucket = buckets.Single(row => ObjectRows.Field<SVisibilityBucket, ulong>(original, row, nameof(SVisibilityBucket.InstanceId)) == RowIds[1]);
+        uint control = ObjectRows.Field<SVisibilityBucket, uint>(original, bucket,
+            nameof(SVisibilityBucket.ControlBit30HasSlotBit31ContinueLow30Slot)), slot = control & 0x3FFFFFFF;
+        int value = TagRows.Offsets<SVisibilityTomeMap, SI32Element>(original, "HAda0152e.Values", SI32Element.Class)[slot];
         Check(new InstanceVisibilityMap(original).Contains(RowIds[1]), "The occupied fixture key is not found.");
         byte[] unused = original.ToArray(); BinaryPrimitives.WriteUInt32LittleEndian(unused.AsSpan(bucket + 8), control & ~0x40000000u);
         Check(!new InstanceVisibilityMap(unused).Contains(RowIds[1]), "An unused key was admitted.");
@@ -245,7 +300,7 @@ internal static class CullChecks
         byte[] invalid = original.ToArray(); BinaryPrimitives.WriteUInt32LittleEndian(invalid.AsSpan(bucket + 8), 0x7FFFFFFF);
         Throws<InvalidDataException>(() => new InstanceVisibilityMap(invalid).Contains(RowIds[1]));
         byte[] loop = original.ToArray();
-        foreach (int row in data.Rows(0x20, 0x8080733E, 16))
+        foreach (int row in buckets)
             BinaryPrimitives.WriteUInt32LittleEndian(loop.AsSpan(row + 8), 0x80000000);
         Throws<InvalidDataException>(() => new InstanceVisibilityMap(loop).Contains(999));
     }

@@ -3,6 +3,8 @@ using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
@@ -10,7 +12,9 @@ namespace SunriseStudio.Editor;
 public sealed record BrowserAsset(PackageEntry Entry, string Kind, StudioNameIndex Names)
 {
     public string Name => Names.Describe(Entry);
-    public string SearchText => $"{Name} {Kind} {Tags} {Entry.PackageName} {Entry.TagHash:X8} {Entry.Reference:X8}";
+    public string SearchText => $"{Name} {Kind} {Tags} {Entry.PackageName} {Entry.TagHash:X8} {Entry.Reference:X8} {ClassWords}";
+    /** Registry names of a tag class, so a search finds rows by class. */
+    private string ClassWords => AssetCategories.IsStructured(Entry) ? ClassNames.SearchText(Entry.Reference) : "";
     public string Category { get; } = AssetCategories.SplitKind(Kind).Category;
     /** Empty when the category has no types. */
     public string Type { get; } = AssetCategories.SplitKind(Kind).Type;
@@ -28,11 +32,8 @@ public sealed record WorkNotice(string Text, bool Failed, string? Folder = null,
 /** Tags of the entries a project adds to new packages. */
 internal static class ProjectTags
 {
-    // New-package tags start at 0x80800000; the package id sits above a 13-bit entry index.
-    public static uint Tag(ushort package, int entry) => checked(0x80800000U + ((uint)package << 13) + (uint)entry);
-
     public static uint Tag(this NativeAssetMetadata native) =>
-        Tag(native.PackageId, native.EntryIndex ?? throw new InvalidDataException("A project asset needs an entry index."));
+        TagHashes.Make(native.PackageId, native.EntryIndex ?? throw new InvalidDataException("A project asset needs an entry index."));
 }
 
 /** Added asset names are file names, so path characters are replaced. */
@@ -76,12 +77,14 @@ public sealed partial class StudioWorkspace : IDisposable
         IReadOnlyDictionary<string, AddedAssetSnapshot?>? AddedStates = null,
         IReadOnlyDictionary<string, ObjectEdit?>? ObjectStates = null,
         IReadOnlyList<ProjectConfigBinding>? ConfigStates = null,
-        ImportSelection? ReverseSelection = null);
+        ImportSelection? ReverseSelection = null,
+        IReadOnlyDictionary<string, byte[]>? ContentFiles = null);
     private sealed record ImportSelection(uint Tag, string? AddedId, AssetOpenContext? Context);
     private readonly Stack<EditFrame> undo = [];
     private readonly Stack<EditFrame> redo = [];
     private Dictionary<uint, AddedProjectAsset> nativeAdditions = [];
-    public AssetInspectionService Inspectors { get; } = new();
+    /** The typed inspectors, then the schema inspector for every class the shipped registry describes. */
+    public AssetInspectionService Inspectors { get; } = CreateInspectors();
     public PackageCatalog? Catalog { get; private set; }
     public StudioCacheOptions CacheOptions { get; set; } = new();
     public StudioProject? Project { get; private set; }
@@ -115,6 +118,7 @@ public sealed partial class StudioWorkspace : IDisposable
     {
         if (IsBusy) return;
         string root = StudioSettings.ResolveGameRoot(path);
+        if (string.IsNullOrWhiteSpace(keys)) keys = TestKeySource?.Invoke(root);
         BeforeAssetMutation?.Invoke();
         BeginWork(OpeningPackages, () =>
         {
@@ -196,7 +200,7 @@ public sealed partial class StudioWorkspace : IDisposable
         ReportProgress(progress.Stage, progress.Completed, progress.Total);
     });
 
-    public static string AssetKind(PackageEntry entry) => AssetInspectionService.Classify(entry);
+    public static string AssetKind(PackageEntry entry) => AssetCategories.CategoryOf(entry);
 
     private static string FriendlyKind(PackageEntry entry)
     {
@@ -299,7 +303,7 @@ public sealed partial class StudioWorkspace : IDisposable
     /** An entity opens on its first authored spawn unless a spawn or a variant was chosen. */
     private SceneLoadOptions PreviewOptions(PackageCatalog catalog, uint tag, uint previewVariant, SpawnPick? spawn)
     {
-        if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != 0x80809C0F)
+        if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != SEntity.Class)
             return new() { PreviewVariant = previewVariant };
         var spawns = SpawnIndex(catalog).For(tag);
         return new()
@@ -318,15 +322,15 @@ public sealed partial class StudioWorkspace : IDisposable
         if (Catalog is not { } catalog || IsBusy) return;
         if (context is { WeaponItemTag: > 0, WeaponEffectClipTag: 0 }
             && tag != context.WeaponItemTag && catalog.TryGetEntry(tag, out var requested)
-            && requested.Reference == 0x80808F49)
+            && requested.Reference == SAnimationClip.Class)
         {
             context = context with { SelectedAnimationClipTag = tag };
             tag = context.WeaponItemTag;
         }
         if (!catalog.TryGetEntry(tag, out var entry)) { Error = $"Asset {tag:X8} is not installed."; return; }
         string? addedId = nativeAdditions.GetValueOrDefault(tag)?.Id;
-        if (World is null && entry.Reference == 0x808091DE) { OpenMap(tag); return; }
-        if (World is null && entry.Reference == 0x80809994 && WorldCatalog is { } worlds)
+        if (World is null && entry.Reference == SMapRoot.Class) { OpenMap(tag); return; }
+        if (World is null && entry.Reference == SScenario.Class && WorldCatalog is { } worlds)
         {
             var mission = worlds.Missions.FirstOrDefault(row => row.Tag == tag);
             if (mission?.MapTags.FirstOrDefault() is > 0 and var map) { OpenMission(map, tag); return; }
@@ -334,7 +338,7 @@ public sealed partial class StudioWorkspace : IDisposable
         string name = DisplayName(entry);
         // No context opens the category view; an explicit empty context is a plain open.
         context ??= DefaultContext(tag);
-        bool preview = World is null || entry.Reference is not (0x808091DE or 0x80809994);
+        bool preview = World is null || entry.Reference is not (SMapRoot.Class or SScenario.Class);
         BeginWork($"Opening {name}", () =>
         {
             var document = ReadDocument(catalog, entry, name, preview, context, previewVariant, spawn)
@@ -476,13 +480,13 @@ public sealed partial class StudioWorkspace : IDisposable
         byte[] bytes = project.ReadAddedAsset(asset.Id, Catalog);
         var metadata = asset.Native;
         int index = metadata?.EntryIndex ?? 0;
-        uint tag = metadata is null ? 0 : ProjectTags.Tag(metadata.PackageId, index);
+        uint tag = metadata is null ? 0 : TagHashes.Make(metadata.PackageId, index);
         var entry = new PackageEntry(tag, metadata?.Reference ?? 0,
             (int)((metadata?.TypeInfo ?? 0) >> 9 & 127), (int)((metadata?.TypeInfo ?? 0) >> 6 & 7),
             bytes.Length, project.Name, metadata?.PackageId ?? 0, index)
         { TypeInfo = metadata?.TypeInfo ?? 0 };
         if (metadata is not null && Catalog is { } catalog)
-            return ReadDocument(catalog, entry, asset.Name, World is null || entry.Reference is not (0x808091DE or 0x80809994), context)
+            return ReadDocument(catalog, entry, asset.Name, World is null || entry.Reference is not (SMapRoot.Class or SScenario.Class), context)
                 with
             { AddedAssetId = asset.Id };
         var inspection = Inspectors.Inspect(new(tag, entry.Reference, bytes, asset.Name,
@@ -523,7 +527,11 @@ public sealed partial class StudioWorkspace : IDisposable
     /** Decoders see project bytes while delta creation always reads the installed original. */
     private void AdoptProject(StudioProject? project)
     {
-        if (project is not null && Catalog is { } catalog) project.ValidateWideHashAliases(catalog);
+        if (project is not null && Catalog is { } catalog)
+        {
+            project.ValidateWideHashAliases(catalog);
+            project.EnsureTagAllocator(catalog);
+        }
         BeforeAssetMutation?.Invoke();
         if (project is not null) project.ObjectEditCompiler ??= ObjectEditCompiler.Default;
         if (project is not null) project.ConfigBindingCompiler ??= CuiConfigBindingCompiler.Default;
@@ -653,7 +661,7 @@ public sealed partial class StudioWorkspace : IDisposable
     }
 
     // The world catalog reads only map roots, map definitions and scenarios.
-    private static readonly HashSet<uint> WorldCatalogClasses = [0x808091DE, 0x80809962, 0x80809994];
+    private static readonly HashSet<uint> WorldCatalogClasses = [SMapRoot.Class, SMapLocationNames.Class, SScenario.Class];
 
     /** Overlay metadata lets package decoders follow new project entries without writing packages. */
     private void RefreshOverlay(IEnumerable<uint>? changedTags = null)
@@ -682,6 +690,7 @@ public sealed partial class StudioWorkspace : IDisposable
             catalog.ReadOverride = null;
             catalog.SetOverlayEntries([]);
             nativeAdditions = [];
+            contentTags = []; contentStamp = ""; ProjectContentError = "";
             RefreshComponentRows(changedTags ?? previousCategoryTags);
             RefreshAddedBrowserRows();
             return;
@@ -704,7 +713,7 @@ public sealed partial class StudioWorkspace : IDisposable
         {
             var metadata = asset.Native!;
             int index = metadata.EntryIndex!.Value;
-            uint tag = ProjectTags.Tag(metadata.PackageId, index);
+            uint tag = TagHashes.Make(metadata.PackageId, index);
             var entry = new PackageEntry(tag, metadata.Reference, (int)(metadata.TypeInfo >> 9 & 127),
                 (int)(metadata.TypeInfo >> 6 & 7), checked((int)asset.Size),
                 $"w64_sunrise_{metadata.PackageId:x4}_0", metadata.PackageId, index)
@@ -712,6 +721,9 @@ public sealed partial class StudioWorkspace : IDisposable
             rows.Add(new(entry, asset.Name) { WideHashes = metadata.WideHashes ?? WideHashAliases.Empty });
             additions.Add(tag, asset);
         }
+        var content = ProjectContent(project, catalog, project.AddedAssets.Where(asset => asset.Native is not null)
+            .Select(asset => asset.Native!.PackageId).Concat(compiledObjects.GeneratedAssets.Select(asset => asset.Native.PackageId)));
+        rows.AddRange(ContentRows());
         var generated = compiledObjects.GeneratedAssets.ToDictionary(asset => asset.TagHash);
         foreach (var asset in generated.Values)
         {
@@ -735,6 +747,7 @@ public sealed partial class StudioWorkspace : IDisposable
             ? project.ReadAddedAsset(added.Id, catalog)
             : generated.TryGetValue(tag, out var derived) ? derived.Data.ToArray()
             : objects.Assets.TryGetValue(tag, out var compiled) ? compiled.ToArray()
+            : content.TryGetValue(tag, out var authored) ? authored.Data.ToArray()
             : project.ContainsEdit(tag) ? project.ReadAsset(tag, catalog) : null;
         RefreshComponentRows(changedTags ?? previousCategoryTags.Concat(rows.Select(row => row.Entry.TagHash))
             .Concat(objects.Assets.Keys));
@@ -744,6 +757,7 @@ public sealed partial class StudioWorkspace : IDisposable
     /** Undo captures only affected raw payloads, object edits and asset membership. */
     private EditFrame ReadFrame(EditFrame frame)
     {
+        if (frame.ContentFiles is { } files) return frame with { ContentFiles = ReadContentFiles(files) };
         var bytes = frame.Selection == 0 && frame.AddedAssetId is { } id && frame.Bytes.ContainsKey(0)
             ? new Dictionary<uint, byte[]> { [0] = Project!.ReadAddedAsset(id, Catalog) }
             : frame.Bytes.Keys.ToDictionary(tag => tag, ReadRawBytes);
@@ -762,6 +776,11 @@ public sealed partial class StudioWorkspace : IDisposable
 
     private void RestoreFrame(EditFrame frame)
     {
+        if (frame.ContentFiles is { } files)
+        {
+            RestoreContentFiles(files);
+            return;
+        }
         if (frame.ConfigStates is { } config)
         {
             MutateProject(() => Project!.SetConfigBindings(config, Catalog!), []);
@@ -838,7 +857,7 @@ public sealed partial class StudioWorkspace : IDisposable
         var catalog = Catalog!;
         BeginWork("Building packages", () =>
         {
-            var result = project.Build(catalog, output);
+            var result = project.Build(catalog, output, tagSchema: TagSchema);
             return () =>
             {
                 LastBuild = result; Status = "Packages built";

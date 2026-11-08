@@ -7,5 +7,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/SunriseStudio.Editor/SunriseStudio.Editor.csproj" />
     <Compile Include="../SunriseStudio.World.Tests/WorldFixture.cs" Link="WorldFixture.cs" />
+    <Compile Include="../Fixtures/TestFixtures.cs" Link="TestFixtures.cs" />
   </ItemGroup>
 </Project>

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Collections.Frozen;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags;
 
 namespace SunriseStudio.Projects;
 
@@ -95,7 +96,7 @@ public sealed partial class StudioProject
         if (edits.Count == 0 || raw.Count == 0 && !restoring && !additionsChanged) return;
         if (catalog is null) throw new InvalidOperationException("Object edits need the original installation.");
         byte[] ReadStaged(uint tag) => raw.TryGetValue(tag, out var bytes) ? bytes : ReadAsset(tag, catalog);
-        var options = CompileOptions(stagedAssets is null ? manifest : manifest with { AddedAssets = stagedAssets }) with
+        var options = CompileOptions(stagedAssets is null ? manifest : manifest with { AddedAssets = stagedAssets }, ReadTagAllocator(), catalog) with
         { RawChangedTags = manifest.Changes.Select(change => change.TagHash).Concat(raw.Keys).ToFrozenSet() };
         if (restoring) { CompileOn(edits, ReadStaged, catalog, options: options); return; }
         ObjectEditCompilation before;
@@ -136,7 +137,7 @@ public sealed partial class StudioProject
             && ReferenceEquals(cache.Compiler, compiler) && cache.RecipeHash == recipeHash)
             return cache.Result;
         var result = CompileOn(edits, tag => ReadRaw(source, tag, catalog), catalog, compiler, generation,
-            CompileOptions(source) with { Build = build });
+            CompileOptions(source, ReadTagAllocator(), catalog) with { Build = build });
         RequireRecipeHash(edits, recipeHash);
         var stored = new ObjectEditCache(source, catalog, generation, compiler, recipeHash, result);
         if (build) buildCache = stored; else objectCache = stored;
@@ -162,7 +163,7 @@ public sealed partial class StudioProject
     {
         compiler ??= RequireCompiler();
         var baseline = manifest;
-        options ??= CompileOptions(baseline);
+        options ??= CompileOptions(baseline, ReadTagAllocator(), catalog);
         long generation = readGeneration ?? catalog.ReadGeneration;
         string recipeHash = RecipeHash(edits);
         try
@@ -189,13 +190,33 @@ public sealed partial class StudioProject
         }
     }
 
-    private static ObjectEditCompileOptions CompileOptions(ProjectManifest source) =>
+    /**
+     * Moves generated object data of a project from before the mod probe onto it. Its generated
+     * tags change, so a mod installed from it must be installed again.
+     */
+    // TODO: call from an editor command that opts an older project in; no such command exists yet.
+    public void UseModProbeForGeneratedData()
+    {
+        if (ReadTagAllocator() is not { IdentityGeneratedPackages: true } allocator) return;
+        allocator.IdentityGeneratedPackages = false;
+        SaveTagAllocator(allocator);
+        objectCache = null;
+        buildCache = null;
+    }
+
+    /** Without allocation.json the project predates the mod probe and keeps its old ids. */
+    private ObjectEditCompileOptions CompileOptions(ProjectManifest source, TagAllocator? allocation, PackageCatalog catalog) =>
         new(source.Mod?.Id ?? source.Name, source.AddedAssets.Where(asset => asset.Native is not null)
             .Select(asset => asset.Native!.PackageId).ToFrozenSet())
         {
             AddedNativeReferences = source.AddedAssets.Where(asset => asset.Native is not null)
                 .Select(asset => asset.Native!.Reference).ToFrozenSet(),
-            RawChangedTags = source.Changes.Select(change => change.TagHash).ToFrozenSet()
+            AddedEntries = source.AddedAssets.Where(asset => asset.Native is not null)
+                .Select(asset => new AddedObjectEntry(TagHashes.Make(asset.Native!.PackageId, asset.Native!.EntryIndex!.Value), asset.Native!.Reference, asset.Native.TypeInfo,
+                    asset.Native.WideHashes ?? WideHashAliases.Empty, () => ReadAddedAsset(asset.Id, catalog))).ToArray(),
+            RawChangedTags = source.Changes.Select(change => change.TagHash).ToFrozenSet(),
+            ModProbe = allocation is { IdentityGeneratedPackages: false },
+            TagPackages = (allocation?.Packages ?? []).ToFrozenSet(),
         };
 
     /** A compiler cannot replace installed or authored entries with its private generated assets. */

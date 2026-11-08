@@ -18,7 +18,7 @@ public static class SandboxPerkIconAuthoring
     {
         var perk = InvestmentSandboxPerkAuthoring.Read(catalog, perkIndex);
         bool Own(NativeAssetMetadata? native) => native is not null && native.EntryIndex is { } index
-            && 0x80800000u + ((uint)native.PackageId << 13) + (uint)index == perk.GameplayTag;
+            && TagHashes.Make(native.PackageId, index) == perk.GameplayTag;
         if (!project.AddedAssets.Any(asset => Own(asset.Native))
             && plannedAssets?.Any(asset => Own(asset.Native)) != true)
             throw new InvalidDataException("Assign an icon to a project-authored sandbox perk.");

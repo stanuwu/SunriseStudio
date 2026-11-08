@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Packages;
 
@@ -38,16 +39,16 @@ public sealed partial class PackageCatalog
             throw new InvalidDataException("A generated entry needs an installed source and an unused package.");
         foreach (var (index, origin) in entry.InstanceOrigins)
             if (index < 0 || origin is null || origin.SourceIndex < 0
-                || !byTag.TryGetValue(origin.SourceTag, out var original) || original.Reference != 0x8080966D)
+                || !byTag.TryGetValue(origin.SourceTag, out var original) || original.Reference != SStaticMeshInstances.Class)
                 throw new InvalidDataException("Generated instance origin is invalid.");
         foreach (var (offset, origin) in entry.PlacementOrigins)
             if (offset < 0 || origin is null || origin.SourceOffset < 0 || origin.SourceIndex < 0
-                || !byTag.TryGetValue(origin.SourceTag, out var original) || original.Reference != 0x808099D6)
+                || !byTag.TryGetValue(origin.SourceTag, out var original) || original.Reference != SMapPlacements.Class)
                 throw new InvalidDataException("Generated placement origin is invalid.");
         foreach (var replacement in entry.Replaces)
             if (replacement is null || replacement.SourceIndex < 0 || replacement.PlacementSourceOffset < 0
-                || !byTag.TryGetValue(replacement.SourceTag, out var table) || table.Reference != 0x8080966D
-                || !byTag.TryGetValue(replacement.PlacementSourceTag, out var placement) || placement.Reference != 0x808099D6)
+                || !byTag.TryGetValue(replacement.SourceTag, out var table) || table.Reference != SStaticMeshInstances.Class
+                || !byTag.TryGetValue(replacement.PlacementSourceTag, out var placement) || placement.Reference != SMapPlacements.Class)
                 throw new InvalidDataException("Generated instance replacement is invalid.");
         return entry with
         {

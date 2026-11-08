@@ -1,6 +1,8 @@
 using System.Numerics;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Viewport;
 
@@ -8,8 +10,8 @@ namespace SunriseStudio.Viewport;
 public static class NativeGearDye
 {
     public static readonly TfxExternKey Key = new(86, 0);
-    // Entity part row byte +0x1A is the dye slot: pair index times two plus the bit.
-    private const int PartSlotByte = 0x1A;
+    // The dye slot is the pair index times two plus the bit.
+    private static readonly int PartSlotByte = TagView.FieldOffset<SEntityModelPart>(nameof(SEntityModelPart.DyeSlot));
 
     /** The extern starts at zero, so a part that is not an entity part row reads bit 0; the cloth draw 0x7FF742E78D60 writes 0. */
     public static int PartBit(MeshInstance instance) =>

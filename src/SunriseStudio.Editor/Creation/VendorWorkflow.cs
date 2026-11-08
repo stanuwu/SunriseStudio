@@ -1,7 +1,8 @@
-using System.Buffers.Binary;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Editor.Creation;
 
@@ -41,23 +42,24 @@ public sealed partial class VendorWorkflow : CreationWorkflow
         packageIdentity = packages?.GetPackageFileIdentity() ?? "";
         baseVendor = new("Base vendor policies", CreationFieldKind.Tag, true, "Copied gameplay/display records and category policies")
         { Search = search => SearchVendors(search, true), Hint = "Keeps this vendor's categories, conditions and resets." };
-        name = new("Name", CreationFieldKind.Text, true, "Vendor display +64 bank and hash")
+        name = new("Name", CreationFieldKind.Text, true, "Vendor display DisplayProperties.NameBank and NameHash")
         { Evidence = "The native vendor screen resolves this exact display field." };
-        subtitle = new("Secondary text", CreationFieldKind.Text, false, "Vendor display +72 bank and hash")
+        subtitle = new("Secondary text", CreationFieldKind.Text, false, "Vendor display DisplayProperties.SubtitleBank and SubtitleHash")
         { Hint = editing is null ? "Blank keeps the base text." : "Blank clears this text." };
         package = PackageField(workspace);
-        icon = new("Icon from vendor", CreationFieldKind.Tag, false, "Vendor display +88 icon index")
+        icon = new("Icon from vendor", CreationFieldKind.Tag, false, "Vendor display DisplayProperties.IconIndex")
         {
             Search = search => SearchVendors(search, false), Hint = "Blank keeps the current icon.",
             Part = new("New", "No vendor icon writer", [])
         };
         interaction = new("Existing interaction", CreationFieldKind.Tag, editing is null,
-            "Verified launch-owner resource +752 vendor identity")
+            "Verified launch-owner resource VendorHash")
         {
             Rows = () => interactions.Rows,
             Part = new("New", "No NPC writer", []),
             Hint = "Sends this interaction to the vendor.",
-            Evidence = "Primary 808063B0 and resource 808063B1 form reciprocal links read by native activation."
+            Evidence = $"Primary {SVendorInteractionPrimary.Class:X8} and resource {SVendorInteractionResource.Class:X8} "
+                + "form reciprocal links read by native activation."
         };
         stock = new("Sales and prices", CreationFieldKind.Rows, true, "Paired sale arrays and isolated payment arrays")
         { DrawRows = DrawStock };
@@ -177,12 +179,16 @@ public sealed partial class VendorWorkflow : CreationWorkflow
             var drafts = Drafts();
             InvestmentVendorAuthoring.ValidateBudget(budget, editing is null ? 1 : 0,
                 drafts.Count - (editing is null ? 0 : detail.Sales.Count),
-                editing is null ? checked((int)BinaryPrimitives.ReadInt64LittleEndian(definition.AsSpan(32))) : 0);
+                editing is null ? BaseCategoryCount() : 0);
             if (stringTemplate is not null && TextChanged) StringBankWriter.Validate(stringTemplate, Texts());
         }
         catch (Exception failure) when (Failure(failure)) { invalid = failure.Message; }
         if (invalid is not null) yield return invalid;
     }
+
+    /** The base vendor's category count; a definition that ends before the count throws ArgumentOutOfRangeException. */
+    private int BaseCategoryCount() =>
+        checked((int)TagView.At<long>(definition, TagView.FieldOffset<SInvestmentVendor>("CategoryList.Count")));
 
     private IEnumerable<CreationChoice> SearchVendors(string search, bool installedOnly)
     {

@@ -1,9 +1,10 @@
-using System.Buffers.Binary;
 using System.Text.Json;
 using SunriseStudio.Animation;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 internal static class AssetAudit
 {
@@ -23,23 +24,22 @@ internal static class AssetAudit
             var errors = new List<string>();
             var connections = new AssetConnectionReader(catalog).Read(tag);
             var configs = new List<object>();
-            if (entry.Reference == 0x80809C0F)
+            if (entry.Reference == SEntity.Class)
             {
-                var data = new AnimationControlReader.Data(catalog.Read(tag));
-                foreach (int row in data.Rows(0x10, 0x80809C04, 12))
+                byte[] entity = catalog.Read(tag);
+                foreach (ref readonly var component in TagView.Rows(entity, in TagView.At<SEntity>(entity).Components, SPatternComponent.Class))
                 {
-                    uint config = data.U32(row);
+                    uint config = component.Config;
                     if (!catalog.TryGetEntry(config, out var configEntry)) continue;
                     byte[] bytes = catalog.Read(config);
-                    string Resource(int field)
+                    string Resource(string member)
                     {
-                        if (bytes.Length < field + 8) return "";
-                        long pointer = field + BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(field));
-                        return pointer < 4 || pointer > bytes.Length ? "" :
-                            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan((int)pointer - 4)).ToString("X8");
+                        if (!TagView.FitsThrough<SEntityConfig>(bytes, 0, member)) return "";
+                        long pointer = TagView.TargetOrSelf(bytes, in TagView.Member<SEntityConfig, RelativePointer<Unknown>>(bytes, 0, member));
+                        return pointer < 4 || pointer > bytes.Length ? "" : TagRead.U32(bytes, (int)pointer - 4).ToString("X8");
                     }
                     configs.Add(new { tag = $"{config:X8}", type = $"{configEntry.Reference:X8}",
-                        primary = Resource(0x10), secondary = Resource(0x18) });
+                        primary = Resource(nameof(SEntityConfig.DefaultInstance)), secondary = Resource(nameof(SEntityConfig.Definition)) });
                 }
             }
             SkeletonRig? rig = null;

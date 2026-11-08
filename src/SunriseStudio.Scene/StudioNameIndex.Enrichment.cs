@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -23,15 +25,25 @@ public sealed partial class StudioNameIndex
     }
 
     // Investment index, table and class tags the name pass reads.
-    private const uint StringBankIndexTag = 0x81A27211, StringBankIndexClass = 0x80805F98;
+    private const uint StringBankIndexTag = 0x81A27211, StringBankIndexClass = StringBankIndex.Class;
     private const uint ItemIndexTag = InvestmentTags.ItemIndex, ItemDisplayIndexTag = InvestmentTags.ItemDisplayIndex;
     private const uint ItemClass = InvestmentTags.ItemClass, ItemDisplayClass = InvestmentTags.ItemDisplayClass;
     private const uint VendorIndexTag = InvestmentTags.VendorIndex, VendorDisplayIndexTag = InvestmentTags.VendorDisplayIndex;
     private const uint VendorClass = InvestmentTags.VendorClass, VendorDisplayClass = InvestmentTags.VendorDisplayClass;
-    private const uint PerkProgramMapTag = 0x80EC3F60, PerkProgramMapClass = 0x80809780, PerkProgramRowClass = 0x80809252;
+    private const uint PerkProgramMapTag = 0x80EC3F60, PerkProgramMapClass = SRuntimeNameMap.Class;
     private const uint PerkProgramClass = InvestmentTags.PerkProgramClass;
     // Unset bucket and tier; an item whose definition cannot be read keeps these.
     private const byte UnreadByte = 255;
+    // Item display name and type: a bank member and its hash member.
+    private const string ItemNameBank = nameof(ItemDisplayStrings.DisplayProperties) + "." + nameof(C80805cef.NameBank);
+    private const string ItemNameHash = nameof(ItemDisplayStrings.DisplayProperties) + "." + nameof(C80805cef.NameHash);
+    private const string ItemTypeBank = nameof(ItemDisplayStrings.DisplayProperties) + "." + nameof(C80805cef.TypeBank);
+    private const string ItemTypeHash = nameof(ItemDisplayStrings.DisplayProperties) + "." + nameof(C80805cef.TypeHash);
+    private const string VendorNameBank = nameof(SInvestmentVendorDisplay.DisplayProperties) + "." + nameof(C808058fc.NameBank);
+    private const string VendorNameHash = nameof(SInvestmentVendorDisplay.DisplayProperties) + "." + nameof(C808058fc.NameHash);
+    private const string ItemInventory = nameof(ItemDefinition.InventoryItemBlock);
+    private static readonly int ItemNameOffset = TagView.FieldOffset<ItemDisplayStrings>(ItemNameBank);
+    private static readonly int VendorNameOffset = TagView.FieldOffset<SInvestmentVendorDisplay>(VendorNameBank);
 
     /** Facts of every 0x80807BEA in the item index, keyed by definition tag. */
     private readonly ConcurrentDictionary<uint, InvestmentItemFacts> itemFacts = [];
@@ -53,15 +65,15 @@ public sealed partial class StudioNameIndex
             TryRead($"Item display {row.Tag:X8}", () =>
             {
                 if (!catalog.TryGetEntry(row.Tag, out var entry) || entry.Reference != ItemDisplayClass) return;
-                var data = new TagData(catalog.Read(row.Tag));
-                if (InvestmentText(data, 144) is { Length: > 0 } line) typeLines[index] = line;
-                string? name = InvestmentText(data, 132);
+                byte[] data = catalog.Read(row.Tag);
+                if (InvestmentText(data, ItemTypeBank, ItemTypeHash) is { Length: > 0 } line) typeLines[index] = line;
+                string? name = InvestmentText(data, ItemNameBank, ItemNameHash);
                 if (string.IsNullOrWhiteSpace(name)) return;
                 itemNames[index] = name;
                 AddTag(row.Tag, new(name, StudioNameSource.Localization, StudioNameConfidence.Authored,
-                    "Item display name", 10, row.Tag, 132));
+                    "Item display name", 10, row.Tag, ItemNameOffset));
                 AddHash(row.Hash, new(name, StudioNameSource.Localization, StudioNameConfidence.Authored,
-                    "Investment definition identity", 10, row.Tag, 132));
+                    "Investment definition identity", 10, row.Tag, ItemNameOffset));
             });
         }
         TryRead("Item definition index", () =>
@@ -78,7 +90,7 @@ public sealed partial class StudioNameIndex
                 string? name = displayTag != 0 ? itemNames.GetValueOrDefault(index) : null;
                 if (name is not null)
                     AddTag(target, new(name, StudioNameSource.Localization, StudioNameConfidence.Authored,
-                        "Item definition and display index join", 10, displayTag, 132));
+                        "Item definition and display index join", 10, displayTag, ItemNameOffset));
                 var facts = UnreadItem((ushort)index, identity, displayTag, line);
                 if (TryData($"Item {target:X8}", target) is { } item)
                 {
@@ -112,27 +124,38 @@ public sealed partial class StudioNameIndex
         });
     }
 
-    /** Perk rows of the stats block at +112; each u16 is a sandbox perk index. */
-    private static void AddPerkOwners(TagData item, string name, Dictionary<uint, HashSet<string>> perkOwners)
+    /** Perk rows of the stats block; each is a sandbox perk index. */
+    private static void AddPerkOwners(byte[] item, string name, Dictionary<uint, HashSet<string>> perkOwners)
     {
-        if (!item.Has(112, 8) || item.I64(112) == 0) return;
-        int block = item.Relative(112);
-        foreach (int p in item.Rows(block + 16, 0x808077BC, 24))
+        if (!TagView.FitsThrough<ItemDefinition>(item, 0, nameof(ItemDefinition.StatsItemBlock))) return;
+        ref readonly var stats = ref TagView.Member<ItemDefinition, RelativePointer<SItemSandboxPerkBlock>>(item, 0,
+            nameof(ItemDefinition.StatsItemBlock));
+        if (TagView.TargetOffset(item, in stats) is not { } block) return;
+        foreach (ref readonly var row in EntityFields.Rows<SItemSandboxPerkBlock, ItemSandboxPerk>(item, block,
+                     nameof(SItemSandboxPerkBlock.ItemPerks), ItemSandboxPerk.Class))
         {
-            uint perk = item.U16(p);
+            uint perk = row.SandboxPerkIndex;
             if (perk == ushort.MaxValue) continue;
             if (!perkOwners.TryGetValue(perk, out var owners)) perkOwners[perk] = owners = [];
             owners.Add(name);
         }
     }
 
-    /** Bucket +184, tier +186; the objective +48, plug +64 and sack +88 blocks are set when non-zero. */
-    private static InvestmentItemFacts ItemFacts(TagData item, ushort index, uint hash, uint displayTag, string line)
+    /** The objective, plug and sack blocks are set when their pointers are not null. */
+    private static InvestmentItemFacts ItemFacts(byte[] item, ushort index, uint hash, uint displayTag, string line)
     {
-        if (!item.Has(180, 8)) throw new InvalidDataException("Item fixed fields are truncated.");
-        return new(index, hash, displayTag, item.U8(184), item.U8(186), line,
-            item.I64(48) != 0, item.I64(64) != 0, item.I64(88) != 0);
+        if (!TagView.FitsThrough<ItemDefinition>(item, 0, $"{ItemInventory}.{nameof(C808077f5.Instanced)}"))
+            throw new InvalidDataException("Item fixed fields are truncated.");
+        return new(index, hash, displayTag,
+            TagView.Member<ItemDefinition, byte>(item, 0, $"{ItemInventory}.{nameof(C808077f5.InventoryBucket)}"),
+            TagView.Member<ItemDefinition, byte>(item, 0, $"{ItemInventory}.{nameof(C808077f5.Tier)}"), line,
+            IsSet(item, nameof(ItemDefinition.ObjectiveItemBlock)), IsSet(item, nameof(ItemDefinition.PlugItemBlock)),
+            IsSet(item, nameof(ItemDefinition.SackItemBlock)));
     }
+
+    /** True when the item definition's block pointer `member` is not null. */
+    private static bool IsSet(byte[] item, string member) =>
+        !TagView.Member<ItemDefinition, RelativePointer<Unknown>>(item, 0, member).IsNull;
 
     private static InvestmentItemFacts UnreadItem(ushort index, uint hash, uint displayTag, string line) =>
         new(index, hash, displayTag, UnreadByte, UnreadByte, line, false, false, false);
@@ -145,13 +168,14 @@ public sealed partial class StudioNameIndex
     {
         string line = "";
         if (displayTag != 0 && catalog.TryGetEntry(displayTag, out var shown) && shown.Reference == ItemDisplayClass)
-            TryRead($"Item display {displayTag:X8}", () => line = InvestmentText(new TagData(catalog.Read(displayTag)), 144) ?? "");
+            TryRead($"Item display {displayTag:X8}",
+                () => line = InvestmentText(catalog.Read(displayTag), ItemTypeBank, ItemTypeHash) ?? "");
         var facts = UnreadItem(index, hash, displayTag, line);
-        TryRead($"Item facts {definition:X8}", () => facts = ItemFacts(new TagData(catalog.Read(definition)), index, hash, displayTag, line));
+        TryRead($"Item facts {definition:X8}", () => facts = ItemFacts(catalog.Read(definition), index, hash, displayTag, line));
         return facts;
     }
 
-    /** Vendor display names: a u16 bank at +64 and its hash at +68; the first line is the name. */
+    /** Vendor display names; the first line of the display name is the name. */
     private void ReadVendorNames()
     {
         var displays = ReadIndex(VendorDisplayIndexTag);
@@ -162,11 +186,14 @@ public sealed partial class StudioNameIndex
                 || !catalog.TryGetEntry(display.Tag, out var shown) || shown.Reference != VendorDisplayClass) continue;
             TryRead($"Vendor display {display.Tag:X8}", () =>
             {
-                var data = new TagData(catalog.Read(display.Tag));
-                if (!data.Has(64, 8) || data.U16(64) > short.MaxValue) return;
-                if (BankText(data.U16(64), data.U32(68)) is not { Length: > 0 } text) return;
+                byte[] data = catalog.Read(display.Tag);
+                if (!TagView.FitsThrough<SInvestmentVendorDisplay>(data, 0, VendorNameHash)) return;
+                ushort bank = TagView.Member<SInvestmentVendorDisplay, ushort>(data, 0, VendorNameBank);
+                if (bank > short.MaxValue) return;
+                uint nameHash = TagView.Member<SInvestmentVendorDisplay, uint>(data, 0, VendorNameHash);
+                if (BankText(bank, nameHash) is not { Length: > 0 } text) return;
                 AddTag(row.Tag, new(text.Split('\n')[0], StudioNameSource.Localization, StudioNameConfidence.Authored,
-                    "Vendor display name", 10, display.Tag, 64));
+                    "Vendor display name", 10, display.Tag, VendorNameOffset));
             });
         }
     }
@@ -176,34 +203,57 @@ public sealed partial class StudioNameIndex
     {
         Dictionary<uint, uint> programs = [];
         if (!catalog.TryGetEntry(PerkProgramMapTag, out var entry) || entry.Reference != PerkProgramMapClass) return programs;
-        var data = new TagData(catalog.Read(PerkProgramMapTag));
-        foreach (int p in data.Rows(8, PerkProgramRowClass, 8))
-            if (data.U32(p) is not (0 or 0x811C9DC5)) programs[data.U32(p)] = data.U32(p + 4);
+        byte[] data = catalog.Read(PerkProgramMapTag);
+        foreach (ref readonly var row in EntityFields.Rows<SRuntimeNameMap, SRuntimeNameRow>(data, 0,
+                     nameof(SRuntimeNameMap.TagEntries), SRuntimeNameRow.Class))
+            if (row.NameHash is not (0 or StringHash.Empty)) programs[row.NameHash] = row.ProgramTag;
         return programs;
     }
 
     private uint[] ReadBanks()
     {
         if (!catalog.TryGetEntry(StringBankIndexTag, out var entry) || entry.Reference != StringBankIndexClass) return [];
-        var data = new TagData(catalog.Read(StringBankIndexTag));
-        return SafeRows(data, 8, 8).Select(p => data.U32(p + 4)).ToArray();
+        byte[] data = catalog.Read(StringBankIndexTag);
+        var rows = TableRows<StringBankIndex, StringBankRow>(data, nameof(StringBankIndex.Table));
+        var banks = new uint[rows.Length];
+        for (int i = 0; i < rows.Length; i++) banks[i] = rows[i].Container;
+        return banks;
     }
 
-    /** Investment index rows by row number: identity hash at +0, target tag at +16. */
+    /**
+     * Investment index rows by row number: identity hash and target tag.
+     * @param tag One of the item, item display, vendor and vendor display index tags; another throws.
+     */
     private Dictionary<uint, (uint Hash, uint Tag)> ReadIndex(uint tag)
     {
         if (!catalog.TryGetEntry(tag, out _)) return [];
-        var data = new TagData(catalog.Read(tag));
-        var rows = SafeRows(data, 8, 24);
+        byte[] data = catalog.Read(tag);
+        return tag switch
+        {
+            ItemIndexTag => IndexRows(TableRows<ItemIndexTable, ItemIndexRow>(data, nameof(ItemIndexTable.Table)),
+                static row => (row.ItemHash, row.ItemDefinition)),
+            ItemDisplayIndexTag => IndexRows(TableRows<C80805cdb, ItemStringsIndexRow>(data, nameof(C80805cdb.Table)),
+                static row => (row.ItemHash, row.ItemDisplay)),
+            VendorIndexTag => IndexRows(TableRows<SVendorIndex, VendorIndexRow>(data, nameof(SVendorIndex.Table)),
+                static row => (row.VendorHash, row.DefinitionTag)),
+            VendorDisplayIndexTag => IndexRows(TableRows<SVendorDisplayIndex, C808058ec>(data, nameof(SVendorDisplayIndex.Table)),
+                static row => (row.Unk0, row.Unk10)),
+            _ => throw new ArgumentException($"Tag 0x{tag:X8} is not an investment index.", nameof(tag))
+        };
+    }
+
+    private static Dictionary<uint, (uint Hash, uint Tag)> IndexRows<T>(ReadOnlySpan<T> rows, Func<T, (uint Hash, uint Tag)> read)
+        where T : unmanaged
+    {
         var result = new Dictionary<uint, (uint Hash, uint Tag)>(rows.Length);
-        for (int i = 0; i < rows.Length; i++) result[(uint)i] = (data.U32(rows[i]), data.U32(rows[i] + 16));
+        for (int i = 0; i < rows.Length; i++) result[(uint)i] = read(rows[i]);
         return result;
     }
 
-    private TagData? TryData(string label, uint tag)
+    private byte[]? TryData(string label, uint tag)
     {
-        TagData? data = null;
-        TryRead(label, () => data = new TagData(catalog.Read(tag)));
+        byte[]? data = null;
+        TryRead(label, () => data = catalog.Read(tag));
         return data;
     }
 
@@ -213,21 +263,24 @@ public sealed partial class StudioNameIndex
         return bank < banks.Length && GameNames is { } game ? game.Strings.Get(banks[bank], hash)?.Trim() : null;
     }
 
-    private string? InvestmentText(TagData data, int offset) =>
-        data.Has(offset, 8) ? BankText(data.U32(offset), data.U32(offset + 4)) : null;
+    /** The bank is a u16; 0xFFFF names no bank. */
+    private string? InvestmentText(ReadOnlySpan<byte> data, string bank, string hash) =>
+        TagView.FitsThrough<ItemDisplayStrings>(data, 0, hash)
+            ? BankText(TagView.Member<ItemDisplayStrings, ushort>(data, 0, bank), TagView.Member<ItemDisplayStrings, uint>(data, 0, hash))
+            : null;
 
     /** Embedded source paths name their containing resource, not every object that links to it. */
     private void ReadContentNames(CancellationToken token, Action<string>? progress)
     {
         var selected = catalog.Entries.Where(x => x.Type is 8 or 16
-            && x.Reference is 0x80804825 or 0x8080496A or 0x8080941E or 0x80800000).ToArray();
+            && x.Reference is CuiResource.Class or SCuiHierarchy.Class or ObjectBehaviorRoot.Class or PackageReflectionMetadata.Class).ToArray();
         for (int i = 0; i < selected.Length; i++)
         {
             token.ThrowIfCancellationRequested();
             var entry = selected[i];
             TryRead($"Content names {entry.TagHash:X8}", () =>
             {
-                var data = new TagData(catalog.Read(entry.TagHash));
+                var data = catalog.Read(entry.TagHash);
                 var names = InlineStrings(data).ToArray();
                 foreach (var (text, offset) in names)
                     AddHash(Fnv1(text), new(text, StudioNameSource.PackageSource, StudioNameConfidence.Authored,
@@ -236,10 +289,11 @@ public sealed partial class StudioNameIndex
                 if (paths.Length == 1)
                     AddTag(entry.TagHash, new(SourceLeaf(paths[0]), StudioNameSource.PackageSource,
                         StudioNameConfidence.Contextual, paths[0], 45, entry.TagHash));
-                if (entry.Reference == 0x8080496A && data.Has(28, 4))
+                if (entry.Reference == SCuiHierarchy.Class
+                    && TagView.FitsThrough<SCuiHierarchy>(data, 0, nameof(SCuiHierarchy.CuiResource)))
                 {
-                    uint child = data.U32(28);
-                    if (catalog.TryGetEntry(child, out var target) && target.Reference == 0x80804825)
+                    uint child = TagView.Member<SCuiHierarchy, uint>(data, 0, nameof(SCuiHierarchy.CuiResource));
+                    if (catalog.TryGetEntry(child, out var target) && target.Reference == CuiResource.Class)
                         AddContext(child, Describe(entry), "CUI resource", entry.TagHash);
                 }
             });
@@ -249,7 +303,7 @@ public sealed partial class StudioNameIndex
     }
 
     /** Only bounded UTF-8 inline strings are package-backed preimages; each carries its own offset. */
-    private static IEnumerable<(string Text, int Offset)> InlineStrings(TagData data) =>
+    private static IEnumerable<(string Text, int Offset)> InlineStrings(byte[] data) =>
         InlineStringBlocks.Strings(data).Select(item => (item.Text, item.Start)).ToList();
 
     private static bool IsContentPath(string text) => text.Contains('/') || text.Contains('\\')
@@ -264,13 +318,16 @@ public sealed partial class StudioNameIndex
             : Path.GetFileNameWithoutExtension(leaf);
     }
 
-    private static int[] SafeRows(TagData data, int field, int stride)
+    /** Rows of the name table `member` of a T at the tag start, of any element class; an empty table needs no header. */
+    private static ReadOnlySpan<R> TableRows<T, R>(ReadOnlySpan<byte> data, string member) where T : unmanaged where R : unmanaged
     {
-        if (!data.Has(field, 16)) throw new InvalidDataException("Missing name table descriptor.");
-        if (data.I64(field) == 0) return [];
-        int header = data.Relative(field + 8);
-        if (!data.Has(header, 16)) throw new InvalidDataException("Name table header leaves its asset.");
-        return data.Rows(field, data.U32(header + 8), stride);
+        if (!TagView.FitsThrough<T>(data, 0, member)) throw new InvalidDataException("Missing name table descriptor.");
+        ref readonly var table = ref TagView.Member<T, TagArray<R>>(data, 0, member);
+        if (table.Count == 0) return [];
+        int header = new TagArray(data, TagView.FieldOffset<T>(member)).HeaderOffset;
+        if (header < 0 || header > data.Length - TagArray.HeaderSize)
+            throw new InvalidDataException("Name table header leaves its asset.");
+        return EntityFields.Rows(data, in table);
     }
 
     private void TryRead(string label, Action action)

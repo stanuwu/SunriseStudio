@@ -1,5 +1,6 @@
 using System.Numerics;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene.Collision;
 
@@ -96,7 +97,7 @@ public static class CollisionImport
 
     /**
      * The package for new collision shapes: the project's collision shape package when it has one,
-     * else the lowest new package id that is neither installed nor used by the project.
+     * else the first id of the mod's probe that is neither installed nor used by the project.
      */
     public static CollisionShapePackage ShapePackage(StudioProject project, PackageCatalog catalog)
     {
@@ -106,9 +107,9 @@ public static class CollisionImport
             .ToDictionary(group => group.Key, group => group.ToArray());
         foreach (var (id, assets) in packages.OrderBy(pair => pair.Key))
             if (assets.All(IsShape)) return new(id, assets.Max(asset => asset.Native!.EntryIndex ?? -1) + 1);
-        for (int id = PackageWriter.FirstNewPackageId; id <= PackageWriter.LastNewPackageId; id++)
-            if (!packages.ContainsKey((ushort)id) && !catalog.ContainsInstalledPackage((ushort)id)) return new((ushort)id, 0);
-        throw new InvalidOperationException("No new package id is free for collision shapes.");
+        var tagPackages = project.ReadTagAllocator()?.Packages ?? [];
+        return new(TagAllocator.PreferredPackage(project.Mod?.Id ?? project.Name,
+            id => packages.ContainsKey(id) || catalog.ContainsInstalledPackage(id) || tagPackages.Contains(id)), 0);
     }
 
     private static List<ObjectEdit> PlanPlacements(PackageCatalog catalog, CollisionScene baseline,
@@ -316,8 +317,8 @@ public static class CollisionImport
             var (nodes, domainMin, domainMax) = shape.Refit(leaves);
             var file = shape.File;
             nodes.CopyTo(bytes, file.Absolute(shape.NodeData));
-            NativeRows.Write(bytes, file.Absolute(shape.DomainOffset), domainMin.X, domainMin.Y, domainMin.Z);
-            NativeRows.Write(bytes, file.Absolute(shape.DomainOffset + 16), domainMax.X, domainMax.Y, domainMax.Z);
+            CollisionCompoundWriter.WriteFloats(bytes, file.Absolute(shape.DomainOffset), domainMin.X, domainMin.Y, domainMin.Z);
+            CollisionCompoundWriter.WriteFloats(bytes, file.Absolute(shape.DomainOffset + 16), domainMax.X, domainMax.Y, domainMax.Z);
             assets[compound.Key] = bytes;
             notes.Add($"Compound {compound.Key:X8}: tree refit around {compound.Count()} grown instances.");
         }
@@ -339,7 +340,7 @@ public static class CollisionImport
             var shape = StaticCompoundShape.Parse(HavokPackfile.Parse(bytes));
             var leaves = shape.LeafBoxes();
             var touched = new HashSet<int>();
-            int storedBits = (sbyte)shape.File.U8(shape.File.RootOffset + 0x30), bits = storedBits;
+            int storedBits = CollisionCompoundWriter.ChildKeyBits(shape.File), bits = storedBits;
             foreach (var owner in group)
                 foreach (var instance in shape.Instances)
                 {
@@ -366,8 +367,8 @@ public static class CollisionImport
             {
                 var (nodes, min, max) = shape.Refit(leaves);
                 nodes.CopyTo(bytes, shape.File.Absolute(shape.NodeData));
-                NativeRows.Write(bytes, shape.File.Absolute(shape.DomainOffset), min.X, min.Y, min.Z);
-                NativeRows.Write(bytes, shape.File.Absolute(shape.DomainOffset + 16), max.X, max.Y, max.Z);
+                CollisionCompoundWriter.WriteFloats(bytes, shape.File.Absolute(shape.DomainOffset), min.X, min.Y, min.Z);
+                CollisionCompoundWriter.WriteFloats(bytes, shape.File.Absolute(shape.DomainOffset + 16), max.X, max.Y, max.Z);
             }
             assets[group.Key] = bytes;
             notes.Add($"Compound {group.Key:X8}: {touched.Count} shared shape bounds refit, child keys {bits} bits.");

@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Packages;
 
@@ -35,7 +37,7 @@ internal sealed class PackageFile
         EntryCount = checked((int)U32(header, 0xB4));
         BlockCount = checked((int)U32(header, 0xD0));
         MiscOffset = U32(header, 0xF0);
-        if (EntryCount is < 1 or > 8192 || BlockCount is < 1 or > 16384)
+        if (EntryCount is < 1 or > TagHashes.EntriesPerPackage || BlockCount is < 1 or > 16384)
             throw new InvalidDataException($"Invalid package table counts: {path}");
         if (Variant == 0)
         {
@@ -50,19 +52,19 @@ internal sealed class PackageFile
             throw new InvalidDataException($"Unsupported package variant: {Variant}");
     }
 
-    /** Tag hashes use addition because the package bits overlap the fixed tag base. */
+    /** Reads the entry table and the block table. */
     internal void LoadTables()
     {
         if (Variant == 1)
         {
             byte[] prefix = ReadAt(Path, EntryOffset - 20, 20);
             ulong physicalCount = U64(prefix, 4);
-            if (U32(prefix, 0) != 0x80809FBD || U32(prefix, 12) != 0x80809EF3
-                || physicalCount < (ulong)EntryCount || physicalCount > 8192)
+            if (U32(prefix, 0) != TagArray.Marker || U32(prefix, 12) != PackageEntryRecord.Class
+                || physicalCount < (ulong)EntryCount || physicalCount > TagHashes.EntriesPerPackage)
                 throw new InvalidDataException($"Invalid entry region: {Path}");
             BlockOffset = checked(EntryOffset + (long)physicalCount * 16 + 32);
             prefix = ReadAt(Path, BlockOffset - 20, 20);
-            if (U32(prefix, 0) != 0x80809FBD || U32(prefix, 12) != 0x80809EEE
+            if (U32(prefix, 0) != TagArray.Marker || U32(prefix, 12) != PackageBlockRecord.Class
                 || U64(prefix, 4) < (ulong)BlockCount || U64(prefix, 4) > 16384)
                 throw new InvalidDataException($"Invalid block region: {Path}");
         }
@@ -74,7 +76,7 @@ internal sealed class PackageFile
             int offset = i * 16;
             uint typeInfo = U32(entries, offset + 4);
             ulong blockInfo = U64(entries, offset + 8);
-            Entries[i] = new PackageEntry(checked(0x80800000U + ((uint)Id << 13) + (uint)i),
+            Entries[i] = new PackageEntry(TagHashes.Make(Id, i),
                 U32(entries, offset), (int)((typeInfo >> 9) & 127),
                 (int)((typeInfo >> 6) & 7), checked((int)(blockInfo >> 28)), name, Id, i)
             {

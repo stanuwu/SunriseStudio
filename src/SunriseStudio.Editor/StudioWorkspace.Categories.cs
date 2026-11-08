@@ -1,5 +1,6 @@
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Editor;
 
@@ -39,11 +40,11 @@ public sealed partial class StudioWorkspace
 
     internal static PickClass? ClassOf(PackageEntry entry) => entry switch
     {
-        { Reference: 0x808071E8, Type: 8 or 16 } => PickClass.Material,
+        { Reference: STechnique.Class, Type: 8 or 16 } => PickClass.Material,
         { Type: 32, SubType: >= 1 and <= 3 } => PickClass.Texture,
-        { Reference: 0x808071A7, Type: 8 or 16 } => PickClass.StaticMesh,
-        { Reference: 0x80809C36 } => PickClass.InteractionConfig,
-        { Reference: 0x80804A69 } => PickClass.CuiBitmap,
+        { Reference: SStaticMesh.Class, Type: 8 or 16 } => PickClass.StaticMesh,
+        { Reference: SEntityConfig.Class } => PickClass.InteractionConfig,
+        { Reference: SIconBitmap.Class } => PickClass.CuiBitmap,
         _ => null
     };
 
@@ -119,7 +120,7 @@ public sealed partial class StudioWorkspace
     private static (string Kind, string Tags, int Tier) BrowserKind(PackageEntry entry, StudioNameIndex names)
     {
         if (StudioCategories.Classify(entry, names) is { } match) return (match.Kind, match.Tags, match.Tier);
-        if (!AssetCategories.IsStructured(entry) || entry.Reference is not (0x80809C0F or 0x80809C36))
+        if (!AssetCategories.IsStructured(entry) || entry.Reference is not (SEntity.Class or SEntityConfig.Class))
             return (AssetKind(entry), "", -1);
         var (kind, tags) = AssetCategories.Classify(entry, names.GameNames);
         return (kind, StudioCategories.SearchTags(tags), -1);
@@ -127,7 +128,7 @@ public sealed partial class StudioWorkspace
 
     /** Rows whose kind can change when component or item facts refresh. */
     private static bool IsComponentRow(PackageEntry entry) =>
-        entry.Reference is 0x80809C0F or 0x80809C36 or 0x80809802 or InvestmentTags.ItemClass;
+        entry.Reference is SEntity.Class or SEntityConfig.Class or SWwiseEvent.Class or InvestmentTags.ItemClass;
 
     private void PublishBrowserKinds() => BrowserKinds =
         [.. kindCounts.Where(pair => pair.Value > 0).Select(pair => pair.Key).Order(StringComparer.Ordinal)];

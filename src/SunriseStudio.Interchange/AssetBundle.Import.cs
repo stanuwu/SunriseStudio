@@ -292,5 +292,5 @@ public static partial class AssetBundle
         return output;
     }
 
-    private static uint NativeTag(NativeAssetMetadata value) => checked(0x80800000u + ((uint)value.PackageId << 13) + (uint)value.EntryIndex!.Value);
+    private static uint NativeTag(NativeAssetMetadata value) => TagHashes.Make(value.PackageId, value.EntryIndex!.Value);
 }

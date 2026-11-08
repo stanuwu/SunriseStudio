@@ -3,6 +3,7 @@ using ImGuiNET;
 using SunriseStudio.Editor.Creation;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 using System.Numerics;
 
 namespace SunriseStudio.Editor;
@@ -179,7 +180,7 @@ public sealed partial class CuiPage
             {
                 if (contentValues.TryGetValue(CuiVisualPropertyKind.Bitmap, out uint bitmap)
                     && (context.Workspace.Catalog is not { } catalog || !catalog.TryGetEntry(bitmap, out var entry)
-                        || entry.Reference != 0x80804A69))
+                        || entry.Reference != SIconBitmap.Class))
                     throw new InvalidDataException("Choose an installed or project bitmap asset.");
                 save(CuiVisualProperties.Apply(ownerDocument.Data.Span, ownerDocument, rectangle.Node, rectangle.Component,
                     contentValues, contentTint is null ? null : editedTint), "Saved CUI content");
@@ -280,7 +281,7 @@ public sealed partial class CuiPage
                 if (!string.IsNullOrEmpty(name)) ImGui.TextWrapped(name);
                 if (property.Kind == CuiVisualPropertyKind.Bitmap)
                     valid = context.Workspace.Catalog is { } catalog && catalog.TryGetEntry(overrideValue, out var entry)
-                        && entry.Reference == 0x80804A69;
+                        && entry.Reference == SIconBitmap.Class;
             }
         }
         ImGui.BeginDisabled(!valid);

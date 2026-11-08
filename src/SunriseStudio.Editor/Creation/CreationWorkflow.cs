@@ -75,16 +75,14 @@ public abstract class CreationWorkflow
     protected static ushort PackageId(CreationField field) =>
         ushort.Parse(field.Text.Trim().Replace("0x", "", StringComparison.OrdinalIgnoreCase), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
 
-    /** The newest package the project already adds to, else 0AA0. */
-    private static string DefaultPackage(StudioWorkspace workspace) =>
-        workspace.Project?.AddedAssets.LastOrDefault(asset => asset.Native is not null)?.Native!.PackageId.ToString("X4") ?? "0AA0";
+    private static string DefaultPackage(StudioWorkspace workspace) => workspace.DefaultPackageText;
 
     /** Next free entry index in a package, as project staging allocates it. */
     protected static int NextEntryIndex(StudioProject project, ushort packageId) =>
         project.AddedAssets.Where(asset => asset.Native?.PackageId == packageId)
             .Select(asset => asset.Native!.EntryIndex ?? -1).DefaultIfEmpty(-1).Max() + 1;
 
-    protected static uint TagOf(ushort packageId, int entryIndex) => ProjectTags.Tag(packageId, entryIndex);
+    protected static uint TagOf(ushort packageId, int entryIndex) => TagHashes.Make(packageId, entryIndex);
 
     protected static string FileName(string name) => AssetNames.FileName(name);
 

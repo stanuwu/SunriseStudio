@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
@@ -81,7 +82,7 @@ public sealed partial class StudioForm
             if (ImGui.MenuItem("Import animation controls...", "", false, SelectedClipTag() is not null
                 && workspace.CanEdit)) ImportAnimationControls();
             if (ImGui.MenuItem("Export material to Blender...", "", false,
-                workspace.Document?.Entry.Reference == 0x808071E8 && !workspace.IsBusy)) ExportMaterialBundle();
+                workspace.Document?.Entry.Reference == STechnique.Class && !workspace.IsBusy)) ExportMaterialBundle();
             if (ImGui.MenuItem("Export collision...", "", false, CanExportCollision)) ExportCollision();
             if (ImGui.MenuItem("Import collision...", "", false, workspace.CanEdit && CanExportCollision)) ImportCollision();
             if (ImGui.MenuItem("Import as delta...", "", false, workspace.CanEdit && workspace.Document is not null)) ImportDelta();
@@ -232,7 +233,7 @@ public sealed partial class StudioForm
         DrawConfigBindings();
         if (setup || settingsDialog) ImGui.OpenPopup("Sunrise location");
         if (projectDialog) { ImGui.OpenPopup("New project"); projectDialog = false; }
-        if (addDialog) { ImGui.OpenPopup("Add asset"); addDialog = false; }
+        if (addDialog) { ImGui.OpenPopup("Add asset"); addDialog = false; addPackageId = workspace.DefaultPackageText; }
         if (cacheDialog) { ImGui.OpenPopup("Disk cache"); cacheDialog = false; cacheStats = null; }
         if (modDialog) { ImGui.OpenPopup("Mod details"); modDialog = false; }
         if (shortcutsDialog) { ImGui.OpenPopup("Shortcuts"); shortcutsDialog = false; }

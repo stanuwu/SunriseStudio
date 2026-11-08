@@ -1,9 +1,7 @@
 // The .Generated.cs name marks this file as generated code, which turns nullable checks off.
 #nullable enable
-using System.Buffers.Binary;
-using System.Security.Cryptography;
-using System.Text;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags;
 using SunriseStudio.Projects;
 
 namespace SunriseStudio.Authoring;
@@ -50,22 +48,24 @@ public sealed partial class ObjectEditContext
         working[tag] = bytes;
     }
 
-    /** Stable recipe order and project identity choose unused native package namespaces. */
+    /** Stable recipe order and the mod id choose unused package ids; a project from before the mod probe keeps its old seed. */
     internal uint ReserveGenerated(string id, string name, uint sourceTag)
     {
         if (generatedIds.TryGetValue(id, out uint existing)) return existing;
-        if (!Catalog.TryGetEntry(sourceTag, out var source)) throw new InvalidDataException("A generated asset template is missing.");
+        // A project entry can be the template too, such as a placement list a project added.
+        (uint Reference, uint TypeInfo) source = Catalog.TryGetEntry(sourceTag, out var installed)
+            ? (installed.Reference, installed.TypeInfo)
+            : Options.AddedEntries.FirstOrDefault(entry => entry.Tag == sourceTag) is { } added
+                ? (added.Class, added.TypeInfo)
+                : throw new InvalidDataException("A generated asset template is missing.");
         if (generatedPackage is null || generatedIndex == 8192)
         {
-            byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("Sunrise object edits\n" + Options.Identity));
-            int count = PackageWriter.LastNewPackageId - PackageWriter.FirstNewPackageId + 1;
-            int first = (int)(BinaryPrimitives.ReadUInt32LittleEndian(digest) % count);
+            string seed = Options.ModProbe ? TagAllocator.ModSeed + Options.Identity : "Sunrise object edits\n" + Options.Identity;
             generatedPackage = null;
-            for (int offset = 0; offset < count; offset++)
+            foreach (ushort candidate in TagAllocator.Probe(seed))
             {
-                ushort candidate = (ushort)(PackageWriter.FirstNewPackageId + (first + offset) % count);
                 if (Catalog.ContainsInstalledPackage(candidate) || Options.ReservedPackageIds.Contains(candidate)
-                    || generatedPackages.Contains(candidate)) continue;
+                    || Options.TagPackages.Contains(candidate) || generatedPackages.Contains(candidate)) continue;
                 generatedPackage = candidate; generatedPackages.Add(candidate); generatedIndex = 0; break;
             }
             if (generatedPackage is null) throw new InvalidDataException("No unused package namespace is available for generated object data.");

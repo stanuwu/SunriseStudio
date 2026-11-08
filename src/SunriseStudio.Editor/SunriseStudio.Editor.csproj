@@ -19,5 +19,6 @@
     <ProjectReference Include="../SunriseStudio.Live/SunriseStudio.Live.csproj" />
     <ProjectReference Include="../SunriseStudio.Audio/SunriseStudio.Audio.csproj" />
     <ProjectReference Include="../SunriseStudio.Viewport/SunriseStudio.Viewport.csproj" />
+    <ProjectReference Include="../SunriseStudio.World/SunriseStudio.World.csproj" />
   </ItemGroup>
 </Project>

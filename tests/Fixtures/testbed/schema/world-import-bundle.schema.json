@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:sunrise-studio:world-import-bundle:0",
+  "title": "World Import Bundle bubble, version 0 draft",
+  "description": "One bubble.json per bubble folder. Draft: version 1 freezes it. Units are metres. Axes are the game's: right-handed, Z up. A glb stores glTF Y-up; Studio's glTF reader maps glTF (x, y, z) to game (x, -z, y). That undoes Blender's default glTF export (+Y Up on), so a scene modelled Z-up in Blender lands in the game unchanged. Convert units and axes once, in Blender. Studio never converts. A static's transform applies scale, then rotation, then position. $defs/bundle describes bundle.json.",
+  "type": "object",
+  "required": ["schema_version", "name", "kind", "bounds", "neighbours", "statics"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 0 },
+    "name": {
+      "$ref": "#/$defs/name",
+      "description": "Bubble name. Must match the bubble's folder name."
+    },
+    "kind": {
+      "enum": ["outdoor", "interior"],
+      "description": "An interior bubble sits in an off-map pocket and is reached by a spawn-point teleport, not by walking."
+    },
+    "bounds": { "$ref": "#/$defs/bounds" },
+    "neighbours": {
+      "description": "Names of bubbles this bubble streams next to. Each link is listed on both sides.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/name" },
+      "uniqueItems": true
+    },
+    "statics": {
+      "description": "Static meshes placed in this bubble. May be empty.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/static" }
+    },
+    "spawn_points": {
+      "description": "Optional. Named places the player can arrive at.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/spawn_point" }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$",
+      "maxLength": 64
+    },
+    "vec3": {
+      "description": "x, y, z in metres, game axes (Z up).",
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "quaternion": {
+      "description": "Rotation as x, y, z, w in game axes. Must be unit length.",
+      "type": "array",
+      "items": { "type": "number", "minimum": -1, "maximum": 1 },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "bounds": {
+      "description": "Axis-aligned box in metres, game axes. Each min lane is below its max lane.",
+      "type": "object",
+      "required": ["min", "max"],
+      "additionalProperties": false,
+      "properties": {
+        "min": { "$ref": "#/$defs/vec3" },
+        "max": { "$ref": "#/$defs/vec3" }
+      }
+    },
+    "static": {
+      "type": "object",
+      "required": ["glb", "position", "rotation", "scale"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name",
+          "description": "Optional. Unique within the bubble."
+        },
+        "glb": {
+          "description": "Path to a .glb, relative to the bubble folder, with forward slashes. It may not leave the folder.",
+          "type": "string",
+          "pattern": "^(?!.*\\.\\.)(?!/)[A-Za-z0-9_][A-Za-z0-9_./-]*\\.glb$"
+        },
+        "position": { "$ref": "#/$defs/vec3" },
+        "rotation": { "$ref": "#/$defs/quaternion" },
+        "scale": {
+          "description": "Uniform scale.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "spawn_point": {
+      "type": "object",
+      "required": ["name", "position"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name",
+          "description": "Unique within the bubble."
+        },
+        "position": { "$ref": "#/$defs/vec3" },
+        "facing": {
+          "description": "Optional. Yaw in degrees about +Z. 0 faces +X, 90 faces +Y.",
+          "type": "number",
+          "minimum": -360,
+          "maximum": 360
+        }
+      }
+    },
+    "bundle": {
+      "description": "bundle.json at the bundle root. Lists the bubble folders in bubble order.",
+      "type": "object",
+      "required": ["schema_version", "name", "bubbles"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": 0 },
+        "name": { "$ref": "#/$defs/name" },
+        "bubbles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/name" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

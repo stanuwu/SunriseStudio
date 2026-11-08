@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Globalization;
 using ImGuiNET;
 using System.Runtime.CompilerServices;
@@ -7,6 +6,8 @@ using SunriseStudio.Authoring;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor.Creation;
@@ -31,8 +32,6 @@ public sealed class ItemWorkflow : CreationWorkflow
         loreTitle, loreSubtitle, loreText, frameName, frameDescription, frameIcon, family, gameplay, weaponOnly;
     // A frame socket allows this plug category, on stock and project weapons alike.
     private const uint FrameCategory = 0x67FBA961;
-    // Definition pointers to the objective, plug and sack blocks; zero means no block.
-    private const int ObjectivesBlock = 48, PlugBlock = 64, SackBlock = 88;
     /** The base has a plug block, or the category is Mods and plugs. */
     private bool plugItem;
     /** False when the base display has no perk display block, so it can carry no perks. */
@@ -82,36 +81,36 @@ public sealed class ItemWorkflow : CreationWorkflow
         editing = edit;
         bool mods = category == InvestmentItemKinds.Mods;
         plugItem = mods;
-        baseItem = new("Base item", CreationFieldKind.Tag, true, "Copied: definition 0x80807BEA, display 0x80805CE1 and both index rows")
+        baseItem = new("Base item", CreationFieldKind.Tag, true, $"Copied: definition 0x{ItemDefinition.Class:X8}, display 0x{ItemDisplayStrings.Class:X8} and both index rows")
         {
             Rows = () => workspace.CategoryRowsOf(category),
             RowFilter = row => !workspace.IsProjectTag(row.Entry.TagHash) && HasDisplay(row),
             Evidence = "The item and display index tables are parallel 24-byte rows; the row index is the item identity.",
             Hint = mods ? "Choose a plug, such as a barrel, magazine or mod." : ""
         };
-        name = new("Name", CreationFieldKind.Text, true, "display +132 {u32 bank, u32 hash}, text in the package string bank")
+        name = new("Name", CreationFieldKind.Text, true, "display DisplayProperties.NameBank and NameHash, text in the package string bank")
         { Evidence = "The investment catalog resolves item names through this pair." };
-        description = new("Description", CreationFieldKind.Text, false, "display +152 {u32 bank, u32 hash}, text in the package string bank")
+        description = new("Description", CreationFieldKind.Text, false, "display DisplayProperties.DescriptionBank and DescriptionHash, text in the package string bank")
         {
             Lines = 3, Evidence = "The investment catalog reads this pair as the item's flavor text.",
             Hint = edit is null ? "Blank keeps the base item's text." : ""
         };
         weaponType = new("Weapon type", CreationFieldKind.Text, false,
-            "display +144 type line, definition +164 type identifier and weapon_type trait")
+            "display DisplayProperties type line, definition WeaponTypeIdentifier and weapon_type trait")
         {
             Visible = weapon,
             Evidence = "No native code keys on a weapon type; filters compare the identifier hash and the UI reads the trait.",
             Hint = "A stock name like Auto Rifle keeps its trait; a new name does not."
         };
-        loreTitle = new("Lore title", CreationFieldKind.Text, false, "lore row +12 {u16 bank, u32 hash}")
+        loreTitle = new("Lore title", CreationFieldKind.Text, false, "LoreTextRow TitleBank and TitleHash")
         {
             Visible = edit is not null,
             Evidence = "Inspect's Show Lore reads the row the item's lore block names.",
             Hint = "Clear all three lore fields to remove the lore."
         };
-        loreSubtitle = new("Lore subtitle", CreationFieldKind.Text, false, "lore row +20 {u16 bank, u32 hash}")
+        loreSubtitle = new("Lore subtitle", CreationFieldKind.Text, false, "LoreTextRow SubtitleBank and SubtitleHash")
         { Visible = edit is not null };
-        loreText = new("Lore text", CreationFieldKind.Text, false, "lore row +28 {u16 bank, u32 hash}")
+        loreText = new("Lore text", CreationFieldKind.Text, false, "LoreTextRow BodyBank and BodyHash")
         { Visible = edit is not null, Lines = 6 };
         package = PackageField(workspace);
         customIcon = new("Custom icon (PNG)", CreationFieldKind.File, false,
@@ -121,7 +120,7 @@ public sealed class ItemWorkflow : CreationWorkflow
             Hint = "Match the current icon's dimensions.",
             Evidence = "The primary bitmap and item-hash icon row are copied before retargeting."
         };
-        icon = new("Icon from item", CreationFieldKind.Tag, false, "display +128 u16 shared icon row index")
+        icon = new("Icon from item", CreationFieldKind.Tag, false, "display DisplayProperties.IconIndex, a shared icon row index")
         {
             Rows = () => workspace.CategoryRowsOf(category), RowFilter = HasDisplay,
             Part = new("New PNG", edit is null ? "Add a PNG with Edit after create"
@@ -175,24 +174,24 @@ public sealed class ItemWorkflow : CreationWorkflow
             Visible = false,
             Hint = "Blank keeps the current size."
         };
-        frameName = new("Frame name", CreationFieldKind.Text, false, "intrinsic plug display +132 {u32 bank, u32 hash}")
+        frameName = new("Frame name", CreationFieldKind.Text, false, "intrinsic plug display DisplayProperties.NameBank and NameHash")
         {
             Visible = false,
             Evidence = "The frame is the intrinsic plug; its socket type allows plug category 0x67FBA961.",
             Hint = "Also renames a project frame perk. " + StudioUi.MayNotWork
         };
-        frameDescription = new("Frame description", CreationFieldKind.Text, false, "intrinsic plug display +152 {u32 bank, u32 hash}")
+        frameDescription = new("Frame description", CreationFieldKind.Text, false, "intrinsic plug display DisplayProperties.DescriptionBank and DescriptionHash")
         { Visible = false, Lines = 2, Hint = StudioUi.MayNotWork };
-        frameIcon = new("Frame icon from item", CreationFieldKind.Tag, false, "intrinsic plug display +128 u16 shared icon row index")
+        frameIcon = new("Frame icon from item", CreationFieldKind.Tag, false, "intrinsic plug display DisplayProperties.IconIndex, a shared icon row index")
         {
             Visible = false, Rows = AllItemRows, RowFilter = HasDisplay,
             Part = new("New PNG", "No frame icon writer yet", []),
             Hint = "Blank keeps the frame's icon. " + StudioUi.MayNotWork
         };
-        family = new("Weapon family", CreationFieldKind.Scalar, false, "gear row +20 type key")
+        family = new("Weapon family", CreationFieldKind.Scalar, false, "gear row type key")
         {
             Visible = false, Choices = FamilyChoices,
-            Evidence = "The client picks the translation group whose selector key equals gear row +20. A key no row holds picks group 0.",
+            Evidence = "The client picks the translation group whose selector key equals the gear row type key. A key no row holds picks group 0.",
             Hint = "Sets the gameplay tables; firing may keep the old family. " + StudioUi.MayNotWork
         };
         gameplay = new("Gameplay values", CreationFieldKind.Rows, false, "translation config group tables")
@@ -201,31 +200,31 @@ public sealed class ItemWorkflow : CreationWorkflow
             Hint = "Inspect bars do not change. " + StudioUi.MayNotWork,
             Evidence = "Each table reads one stat. The game maps the stat range onto the rows and blends the two nearest rows."
         };
-        tier = new("Rarity", CreationFieldKind.Scalar, false, "definition +186 u8")
+        tier = new("Rarity", CreationFieldKind.Scalar, false, "definition InventoryItemBlock.Tier")
         { Choices = () => Rarities, Evidence = "The investment editor edits this field; the catalog reads it as rarity." };
-        bucket = new("Inventory bucket", CreationFieldKind.Scalar, false, "definition +184 u8")
+        bucket = new("Inventory bucket", CreationFieldKind.Scalar, false, "definition InventoryItemBlock.InventoryBucket")
         {
             Choices = BucketChoices, Visible = !mods,
             Evidence = "The client compares this byte between items on the equip path.",
             Hint = "Buckets this category uses."
         };
-        stats = new("Base stats", CreationFieldKind.Rows, false, "definition stats block, 40-byte stat rows")
+        stats = new("Base stats", CreationFieldKind.Rows, false, "definition stats block, stat rows")
         { DrawRows = DrawStats, Evidence = "The investment editor adds, removes and edits these rows." };
-        perks = new("Sandbox perks", CreationFieldKind.Rows, false, "definition stats block, 24-byte perk rows")
+        perks = new("Sandbox perks", CreationFieldKind.Rows, false, "definition stats block, perk rows")
         {
             DrawRows = DrawPerks, Part = new("New perk", "Only exotic New registers new perks", []),
             Evidence = "The investment editor adds and removes these rows."
         };
-        sockets = new("Socket plugs", CreationFieldKind.Rows, false, "definition socket rows +2 u16 initial plug")
+        sockets = new("Socket plugs", CreationFieldKind.Rows, false, "definition socket rows, InitialPlugItem")
         {
             DrawRows = DrawSockets, Visible = !mods, Part = new("New plug", "Clone a plug in Mods and plugs first", []),
             Evidence = "Project plugs copied from an embedded choice keep that choice's conditions."
         };
         collection = new("Collections", CreationFieldKind.Scalar, false,
-            "collectible 0x81327CDE and display 0x81327D67 rows; presentation node 0x8131933F +120 child row")
+            "collectible 0x81327CDE and display 0x81327D67 rows; presentation node 0x8131933F Children.Collectibles row")
         {
             Choices = CollectionChoices, Visible = edit is null, Text = "0",
-            Evidence = "A collectible names its item by index at +44; a node lists its collectibles at +120.",
+            Evidence = "A collectible names its item by ItemIndex; a node lists its collectibles in Children.Collectibles.",
             Hint = "Defaults to the base item's page."
         };
         if (edit is not null)
@@ -273,8 +272,11 @@ public sealed class ItemWorkflow : CreationWorkflow
             {
                 limits.Add("Keeps the base art, gear and lore.");
                 if (KeptByCategory.TryGetValue(category, out string? kept)) limits.Add(kept);
-                string[] blocks = [.. new[] { (ObjectivesBlock, "objectives"), (SackBlock, "sack"), (PlugBlock, "plug data") }
-                    .Where(block => Block(block.Item1)).Select(block => block.Item2)];
+                string[] blocks = [.. new[]
+                    {
+                        (nameof(ItemDefinition.ObjectiveItemBlock), "objectives"), (nameof(ItemDefinition.SackItemBlock), "sack"),
+                        (nameof(ItemDefinition.PlugItemBlock), "plug data")
+                    }.Where(block => Block(block.Item1)).Select(block => block.Item2)];
                 if (blocks.Length != 0) limits.Add("Keeps the base " + string.Join(", ", blocks) + ".");
                 limits.Add("Shares the base item's Collections unlock.");
             }
@@ -291,9 +293,9 @@ public sealed class ItemWorkflow : CreationWorkflow
         }
     }
 
-    /** True when the base definition points to the block at this offset. */
-    private bool Block(int offset) => detailBytes.Length >= offset + 8
-        && BinaryPrimitives.ReadInt64LittleEndian(detailBytes.AsSpan(offset)) != 0;
+    /** True when the base definition's block pointer `member` is set; a definition that ends before the pointer has none. */
+    private bool Block(string member) => TagView.FitsThrough<ItemDefinition>(detailBytes, 0, member)
+        && !TagView.At<RelativePointer<Unknown>>(detailBytes, TagView.FieldOffset<ItemDefinition>(member)).IsNull;
 
     /** Worker-safe: dictionary reads only. */
     private bool HasDisplay(BrowserAsset row) => workspace.Investment?.FindItem(row.Entry.TagHash) is { DisplayTag: not 0 };
@@ -333,7 +335,7 @@ public sealed class ItemWorkflow : CreationWorkflow
             if (source.Tag != tag) { baseItem.Tag = loadedBase = source.Tag; baseItem.TagLabel = source.Name; }
             detailBytes = workspace.Catalog!.Read(source.Tag);
             detail = investment.ReadItem(source.Tag, detailBytes);
-            plugItem = category == InvestmentItemKinds.Mods || Block(PlugBlock);
+            plugItem = category == InvestmentItemKinds.Mods || Block(nameof(ItemDefinition.PlugItemBlock));
             bucket.Visible = sockets.Visible = !plugItem;
             perkIcon.Visible = editing is not null && plugItem;
             tier.Text = detail.Item.Tier.ToString(CultureInfo.InvariantCulture);
@@ -952,7 +954,7 @@ public sealed class ItemWorkflow : CreationWorkflow
         if (LoreChanged) definition = EditLore(packages, definition, stringBank, edits);
         if (DescriptionChanged && itemDescription.Length == 0)
             display = InvestmentItemClone.SetDisplayString(display, InvestmentItemClone.DisplayFlavor,
-                InvestmentItemClone.ReadDisplayString(display, InvestmentItemClone.DisplayFlavor).Bank, InvestmentItemClone.EmptyStringHash);
+                InvestmentItemClone.ReadDisplayString(display, InvestmentItemClone.DisplayFlavor).Bank, StringHash.Empty);
         if (!icon.MakeNew && icon.Tag is { } iconItem)
         {
             var from = investment.FindItem(iconItem) ?? throw new InvalidDataException("The icon item is missing.");
@@ -1113,7 +1115,7 @@ public sealed class ItemWorkflow : CreationWorkflow
             string title = frameName.Text.Trim(), flavor = frameDescription.Text.Trim();
             (uint Bank, uint Hash) nameText = (stringBank, StringBankWriter.Hash(title));
             (uint Bank, uint Hash) flavorText = flavor.Length != 0 ? (stringBank, StringBankWriter.Hash(flavor))
-                : (InvestmentItemClone.ReadDisplayString(display, InvestmentItemClone.DisplayFlavor).Bank, InvestmentItemClone.EmptyStringHash);
+                : (InvestmentItemClone.ReadDisplayString(display, InvestmentItemClone.DisplayFlavor).Bank, StringHash.Empty);
             display = InvestmentItemClone.SetDisplayString(display, InvestmentItemClone.DisplayName, nameText.Bank, nameText.Hash);
             display = InvestmentItemClone.SetDisplayString(display, InvestmentItemClone.DisplayFlavor, flavorText.Bank, flavorText.Hash);
             var perks = investment.ReadItem(plug.Tag, packages.Read(plug.Tag)).Perks;
@@ -1150,7 +1152,7 @@ public sealed class ItemWorkflow : CreationWorkflow
         int index = loreIndex is { } current && current != InvestmentLore.None ? current : -1;
         if (index < installed || index >= InvestmentLore.Count(client))
         {
-            uint hash = InvestmentItemClone.NewDefinitionHash("lore:" + source!.Hash.ToString("X8", CultureInfo.InvariantCulture),
+            uint hash = StringHash.NewDefinitionHash("lore:" + source!.Hash.ToString("X8", CultureInfo.InvariantCulture),
                 InvestmentLore.Hashes(client));
             (client, exe, index) = InvestmentLore.Append(client, exe, index >= 0 && index < installed ? index : 0, hash);
             edits[InvestmentLore.ExeTable] = exe;
@@ -1168,13 +1170,13 @@ public sealed class ItemWorkflow : CreationWorkflow
         var current = investment.ReadItem(tag, bytes);
         if (tier.TryParse(out ulong rarity) && rarity != current.Item.Tier)
         {
-            bytes = investment.Edit(tag, bytes, current.Fields.Single(field => field.Offset == 186), rarity.ToString(CultureInfo.InvariantCulture));
+            bytes = investment.Edit(tag, bytes, current.Fields.Single(field => field.Offset == ItemFields.Tier), rarity.ToString(CultureInfo.InvariantCulture));
             current = investment.ReadItem(tag, bytes);
         }
         if (bucket.Visible && bucket.TryParse(out ulong slot) && slot != current.Item.Bucket)
         {
             if (BucketChoices().All(choice => choice.Value != slot)) throw new InvalidDataException("Choose a bucket installed items of this kind use.");
-            bytes = investment.Edit(tag, bytes, current.Fields.Single(field => field.Offset == 184), slot.ToString(CultureInfo.InvariantCulture));
+            bytes = investment.Edit(tag, bytes, current.Fields.Single(field => field.Offset == ItemFields.Bucket), slot.ToString(CultureInfo.InvariantCulture));
             current = investment.ReadItem(tag, bytes);
         }
         foreach (var draft in statDrafts.Where(draft => draft.Source >= 0 && !draft.Remove))

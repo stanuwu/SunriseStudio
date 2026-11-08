@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/SunriseStudio.World/SunriseStudio.World.csproj" />
+    <ProjectReference Include="../../src/SunriseStudio.Scene/SunriseStudio.Scene.csproj" />
+    <ProjectReference Include="../../src/SunriseStudio.Projects/SunriseStudio.Projects.csproj" />
+    <ProjectReference Include="../../src/SunriseStudio.Authoring/SunriseStudio.Authoring.csproj" />
+    <Compile Include="../Fixtures/TestFixtures.cs" Link="TestFixtures.cs" />
+  </ItemGroup>
+</Project>

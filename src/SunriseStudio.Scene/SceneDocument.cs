@@ -1,3 +1,4 @@
+using SunriseStudio.Tags.Generated;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
@@ -69,7 +70,7 @@ public sealed class MeshInstance
     /** Null keeps unresolved runtime state visible for inspection. */
     public bool? InitiallyVisible { get => initiallyVisible; init => initiallyVisible = value; }
     public string? InitialVisibilityReason { get => initialVisibilityReason; init => initialVisibilityReason = value; }
-    public bool RequiresClothSimulation => ModelSourceResourceClass == 0x80807286;
+    public bool RequiresClothSimulation => ModelSourceResourceClass == SClothModelComponent.Class;
     public uint PlacementSourceTag { get; init; }
     public int PlacementSourceOffset { get; init; } = -1;
     public ulong PlacementIdentity { get; init; }
@@ -175,8 +176,8 @@ public sealed record SceneObjectChannel(int Index, uint NameHash, Vector4 Value,
 
 public sealed record BubbleInfo(uint TagHash, uint NameHash, string Name);
 
-/** A placed class-0x80807086 atmosphere resource; Settings are its bytes +0x10 to +0xF0. */
-public sealed record PlacedAtmosphere(uint BubbleHash, uint PlacementListTag, int PlacementOffset, byte[] Settings);
+/** A placed atmosphere resource; Payload is its whole UnknownAtmospherePayload. */
+public sealed record PlacedAtmosphere(uint BubbleHash, uint PlacementListTag, int PlacementOffset, byte[] Payload);
 
 /** A placed class-0x80806F61 time-of-day resource: +0x10 curve set tag, +0x14 day seconds, +0x18 start time. */
 public sealed record PlacedTimeOfDay(uint BubbleHash, uint PlacementListTag, uint CurveSetTag, float DaySeconds, float StartTime);

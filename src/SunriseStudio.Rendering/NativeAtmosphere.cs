@@ -1,37 +1,38 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 
 namespace SunriseStudio.Rendering;
 
-/** The 0xE0 bytes 0x7FF742EF7B60 copies from a class-0x80807086 resource into the atmosphere settings. */
+/** The atmosphere settings 0x7FF742EF7B60 copies from a payload, Unk10 to the end. */
 public sealed class NativeAtmosphereSettings
 {
-    public const int Size = 0xE0;
-    public const int KeyCount = 16;
+    /** Parse takes one whole class-0x80807086 payload. */
+    public static readonly int Size = Unsafe.SizeOf<UnknownAtmospherePayload>();
     private const uint NoHandle = uint.MaxValue;
-    /** Handles at +0x80: the mode-0 3D lookup, an optional second 3D lookup, and a 2D lookup. */
+    /** The mode-0 3D lookup, an optional second 3D lookup, and a 2D lookup. */
     public uint[] Lookups { get; }
-    /** Time-of-day keys at +0x90, one per lookup slice. */
+    /** Time-of-day keys, one per lookup slice. */
     public float[] Keys { get; }
 
-    /** Handle at +0x8C: the 16 x 256 RGBA8 object fog colour table 0x7FF742EFB590 reads. */
+    /** The 16 x 256 RGBA8 object fog colour table 0x7FF742EFB590 reads. */
     public uint FogTable { get; }
 
     private NativeAtmosphereSettings(uint[] lookups, float[] keys, uint fogTable)
     { Lookups = lookups; Keys = keys; FogTable = fogTable; }
 
-    public static NativeAtmosphereSettings Parse(ReadOnlySpan<byte> bytes)
+    public static NativeAtmosphereSettings Parse(ReadOnlySpan<byte> resource)
     {
-        if (bytes.Length != Size) throw new ArgumentException("Atmosphere settings are 0xE0 bytes.");
-        var lookups = new uint[3];
-        for (int i = 0; i < 3; i++) lookups[i] = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(0x80 + 4 * i)..]);
-        var keys = new float[KeyCount];
-        for (int i = 0; i < KeyCount; i++) keys[i] = BinaryPrimitives.ReadSingleLittleEndian(bytes[(0x90 + 4 * i)..]);
-        return new(lookups, keys, BinaryPrimitives.ReadUInt32LittleEndian(bytes[0x8C..]));
+        if (resource.Length != Size) throw new ArgumentException($"Atmosphere payloads are {Size} bytes.");
+        ref readonly var payload = ref TagView.At<UnknownAtmospherePayload>(resource);
+        uint[] lookups = [payload.Lookup3dMode0, payload.Lookup3dSecond, payload.Lookup2d];
+        float[] keys = ((ReadOnlySpan<float>)payload.TimeOfDayKeys).ToArray();
+        return new(lookups, keys, payload.ObjectFogTable);
     }
 
     /** The fill 0x7FF742EF1820 refuses mode 0 without the first and third handles. */
@@ -47,9 +48,9 @@ public sealed class NativeAtmosphereSettings
      */
     public bool TryPickKeyframe(float time, out float keyframe)
     {
-        for (int i = 0; i < KeyCount; i++)
+        for (int i = 0; i < Keys.Length; i++)
         {
-            int next = (i + 1) % KeyCount;
+            int next = (i + 1) % Keys.Length;
             float low = Keys[i], high = Keys[next];
             // The pair from the last key to the first wraps across midnight.
             if (next < i)

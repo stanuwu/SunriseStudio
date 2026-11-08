@@ -1,4 +1,7 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -25,12 +28,13 @@ public sealed partial class AssetSceneLoader
     {
         token.ThrowIfCancellationRequested();
         ulong key;
-        if (instance.Mesh.Native?.Kind == NativeMeshKind.Terrain && instance.NativeInstanceData.Length == 0x20)
-            key = new TagData(instance.NativeInstanceData.ToArray()).U64(0x10);
+        if (instance.Mesh.Native?.Kind == NativeMeshKind.Terrain && instance.NativeInstanceData.Length == Unsafe.SizeOf<STerrainPayload>())
+            key = TagView.At<STerrainPayload>(instance.NativeInstanceData.Span).AmbientOcclusionKey;
         else if (instance.Mesh.Native?.Kind != NativeMeshKind.Static || instance.InstanceSourceTag == 0
-            || Class(instance.InstanceSourceTag) != 0x8080966D)
+            || Class(instance.InstanceSourceTag) != SStaticMeshInstances.Class)
             throw new NotSupportedException("Native static shading needs an authored map instance.");
-        else key = Read(instance.InstanceSourceTag).U64(0x78);
+        else key = TagRead.U64(ReadBytes(instance.InstanceSourceTag),
+            TagView.FieldOffset<SStaticMeshInstances>("Instances.AmbientOcclusionKey"));
         if (occlusionMaps == null)
         {
             var maps = new Dictionary<ulong, List<NativeOcclusionMapMatch>>();
@@ -42,16 +46,18 @@ public sealed partial class AssetSceneLoader
                     token.ThrowIfCancellationRequested();
                     cancellation.ThrowIfCancellationRequested();
                 }
-                if (entry.Reference != 0x80807268) continue;
-                var data = Read(entry.TagHash);
-                var buffer = data.U32(8);
-                foreach (var row in data.Rows(0x10, 0x8080726A, 16))
+                if (entry.Reference != SOcclusionMap.Class) continue;
+                var data = ReadBytes(entry.TagHash);
+                var buffer = TagRead.U32(data, TagView.FieldOffset<SOcclusionMap>(nameof(SOcclusionMap.ScalarBufferHeader)));
+                ref readonly var offsets = ref TagView.At<TagArray<UnknownOcclusionMapInstance>>(data,
+                    TagView.FieldOffset<SOcclusionMap>(nameof(SOcclusionMap.Offsets)));
+                foreach (ref readonly var row in TagView.Rows(data, in offsets, UnknownOcclusionMapInstance.Class))
                 {
                     token.ThrowIfCancellationRequested();
-                    var itemKey = data.U64(row);
+                    var itemKey = row.InstanceKey;
                     if (!maps.TryGetValue(itemKey, out var matches)) maps[itemKey] = matches = [];
-                    matches.Add(new NativeOcclusionMapMatch(entry.TagHash, buffer, data.U32(0x70),
-                        itemKey, data.U32(row + 8)));
+                    matches.Add(new NativeOcclusionMapMatch(entry.TagHash, buffer,
+                        TagRead.U32(data, TagView.FieldOffset<SOcclusionMap>(nameof(SOcclusionMap.Selector))), itemKey, row.BaseByteOffset));
                 }
             }
             occlusionMaps = maps;
@@ -104,12 +110,12 @@ public sealed partial class AssetSceneLoader
         if (native is not { Kind: NativeMeshKind.Entity })
             throw new NotSupportedException("Native rigid-model shading needs entity geometry.");
         var m = instance.RenderTransform;
-        var header = new TagData(native.SourceHeader);
+        var header = native.SourceHeader;
         return
         [
             new(m.M11, m.M12, m.M13, m.M14), new(m.M21, m.M22, m.M23, m.M24),
             new(m.M31, m.M32, m.M33, m.M34), new(m.M41, m.M42, m.M43, m.M44),
-            Vector(header, 0x50), Vector(header, 0x60), Vector(header, 0x70),
+            EntityScale(header), PositionOffset(NativeMeshKind.Entity, header), UvTransform(NativeMeshKind.Entity, header),
             // The basic draw wrapper seeds vector 7 from a constant; other routes are unverified.
             new(0, 0, 0, 1)
         ];
@@ -144,7 +150,7 @@ public sealed partial class AssetSceneLoader
     {
         token.ThrowIfCancellationRequested();
         var native = instance.Mesh.Native;
-        if (native == null || native.Kind != NativeMeshKind.Static || instance.NativeInstanceData.Length != 48)
+        if (native == null || native.Kind != NativeMeshKind.Static || instance.NativeInstanceData.Length != Unsafe.SizeOf<SStaticInstanceTransform>())
             throw new NotSupportedException("Native static shading needs the original 48-byte instance row.");
         var candidates = FindNativeOcclusionMaps(instance, token)
             .Where(m => occlusionMapTag == null || m.MapTag == occlusionMapTag.Value).ToArray();
@@ -156,9 +162,9 @@ public sealed partial class AssetSceneLoader
         var buffer = NativeStream(selected.BufferHeaderTag);
         if (buffer.Stride != 1 || buffer.Type != 0)
             throw new NotSupportedException("The authored AO buffer is not the verified R8_UNORM form.");
-        var row = new TagData(instance.NativeInstanceData.ToArray());
-        var instanceOffset = row.U32(0x28);
-        var single = row.U8(0x2C) != 0;
+        ref readonly var row = ref TagView.At<SStaticInstanceTransform>(instance.NativeInstanceData.Span);
+        var instanceOffset = row.AoInstanceByteOffset;
+        var single = row.AoSingleScalar != 0;
         var byteOffset = unchecked(selected.BaseByteOffset + instanceOffset);
         if ((byteOffset & 3) != 0 || (native.BufferGroupWord0C & 3) != 0)
             throw new InvalidDataException("AO offsets do not satisfy native four-byte packing.");

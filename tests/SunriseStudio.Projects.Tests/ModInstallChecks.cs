@@ -315,7 +315,7 @@ internal static class ModInstallChecks
         string target = Path.Combine(mods, Example.Id);
         Check(first.ModDirectory == target && first.PackageFiles == 1 && first.PatchFiles == 1 && first.ScriptFiles == 1,
             "Install counts differ.");
-        Check(Entries(target) == ".studio-sources.json|mod.json|packages|patches|scripts"
+        Check(Entries(target) == ".studio-live.json|.studio-sources.json|mod.json|packages|patches|refmap.bin|scripts"
             && Entries(Path.Combine(target, "patches")) == "w64_mod_0100_1.merge|w64_mod_0100_1.pkg"
             && Entries(Path.Combine(target, "packages")) == "w64_sunrise_0c00_0.merge|w64_sunrise_0c00_0.pkg",
             "Built packages or their merge sidecars were sorted into the wrong folders.");
@@ -327,7 +327,7 @@ internal static class ModInstallChecks
                     "An installed package or sidecar differs from its build output.");
         }
         SidecarInstall(project, catalog, first.Build, target, scripts);
-        Check(File.ReadAllBytes(Path.Combine(target, "mod.json")).SequenceEqual(ModManifest.Serialize(Example)), "Installed mod.json differs.");
+        Check(File.ReadAllBytes(Path.Combine(target, "mod.json")).SequenceEqual(ModManifest.Serialize(Example, null, [0x0C00])), "Installed mod.json differs.");
         Check(File.ReadAllBytes(Path.Combine(target, "scripts", "alpha", "alpha.lua")).SequenceEqual(controller), "Script layout differs.");
         Check(Entries(mods) == Example.Id, "Staging left a folder in mods.");
         Console.WriteLine("mod_install patches=installed_id packages=new_id scripts=stem_layout sdk=absent staging=removed");
@@ -335,7 +335,7 @@ internal static class ModInstallChecks
         File.WriteAllText(Path.Combine(target, "stale.txt"), "old");
         project.SetMod(Example with { Version = "1.1.0" });
         ModInstaller.BuildAndInstall(project, catalog, []);
-        Check(!File.Exists(Path.Combine(target, "stale.txt")) && Entries(target) == ".studio-sources.json|mod.json|packages|patches"
+        Check(!File.Exists(Path.Combine(target, "stale.txt")) && Entries(target) == ".studio-live.json|.studio-sources.json|mod.json|packages|patches|refmap.bin"
             && Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(target, "mod.json"))).Contains("\"1.1.0\"", StringComparison.Ordinal),
             "Reinstall did not replace the previous folder.");
         Check(Entries(mods) == Example.Id, "Swap left the previous install beside the new one.");
@@ -367,7 +367,7 @@ internal static class ModInstallChecks
         scriptsOnly.SetMod(new("dev.projectsunrise.scripts", "1.0.0", "Scripts only"));
         Throws<InvalidOperationException>(() => ModInstaller.BuildAndInstall(scriptsOnly, catalog, []));
         var onlyScripts = ModInstaller.BuildAndInstall(scriptsOnly, catalog, scripts);
-        Check(onlyScripts.Build is null && Entries(onlyScripts.ModDirectory) == ".studio-sources.json|mod.json|scripts",
+        Check(onlyScripts.Build is null && Entries(onlyScripts.ModDirectory) == ".studio-live.json|.studio-sources.json|mod.json|scripts",
             "A scripts-only mod created package folders.");
         Update(parent, catalog, scriptsOnly, onlyScripts.ModDirectory);
     }
@@ -407,7 +407,7 @@ internal static class ModInstallChecks
         Check(File.ReadAllBytes(Path.Combine(root, "alpha", "alpha.lua")).SequenceEqual(changed)
             && File.ReadAllBytes(Path.Combine(root, "beta", "beta.lua")).SequenceEqual(added)
             && Entries(root) == "alpha|beta" && Entries(Path.Combine(root, "alpha")) == "alpha.lua"
-            && Entries(Path.Combine(root, "beta")) == "beta.lua" && Entries(target) == ".studio-sources.json|mod.json|scripts"
+            && Entries(Path.Combine(root, "beta")) == "beta.lua" && Entries(target) == ".studio-live.json|.studio-sources.json|mod.json|scripts"
             && File.ReadAllBytes(Path.Combine(target, "mod.json")).SequenceEqual(manifest), "Update wrote the wrong files.");
         var removal = ModInstaller.BuildAndUpdate(project, catalog, [new("beta/beta.lua", added)]);
         Check(removal.Written == 0 && removal.Deleted == 1 && Entries(root) == "beta", "Update kept a dropped script.");

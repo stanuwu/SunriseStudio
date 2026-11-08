@@ -1,6 +1,7 @@
 using ImGuiNET;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
@@ -8,7 +9,6 @@ namespace SunriseStudio.Editor;
 /** Every config of an entity in one place: the known fields first, then the generic read. */
 public sealed partial class ComponentsPage : IStudioPage
 {
-    private const uint EntityClass = 0x80809C0F;
     // A config tag can be listed by many entities; an edit reaches all of them.
     private const string SharedEdit = StudioUi.MayNotWork + " Changes every entity using this config.";
     private const string FieldEdit = "Enter applies. Changes every entity using this config.";
@@ -21,7 +21,7 @@ public sealed partial class ComponentsPage : IStudioPage
     public string Id => "sunrise.components";
     public string Title => "Components";
     public bool CanOpen(StudioDocument document) =>
-        document.Entry.Reference == EntityClass && AssetCategories.IsStructured(document.Entry);
+        document.Entry.Reference == SEntity.Class && AssetCategories.IsStructured(document.Entry);
 
     /** Draw reads no package records; a worker reads the configs once per document and overlay. */
     public void Draw(StudioPageContext context)

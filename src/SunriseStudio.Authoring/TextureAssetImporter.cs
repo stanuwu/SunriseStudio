@@ -1,4 +1,5 @@
-using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
@@ -43,8 +44,8 @@ public static class TextureAssetImporter
             || payloadEntry.Type != 40 || payloadEntry.SubType != 1)
             throw new InvalidDataException("The RGBA8 template has no installed resident payload.");
         var (header, payload) = TextureEdits.CreateRgbaTexture(image, template.Header);
-        if (srgb is bool colorSpace) BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4), colorSpace ? 29u : 28u);
-        uint headerTag = checked(0x80800000U + ((uint)packageId << 13) + (uint)firstIndex);
+        if (srgb is bool colorSpace) MemoryMarshal.AsRef<TextureHeader>(header.AsSpan()).Format = colorSpace ? 29u : 28u;
+        uint headerTag = TagHashes.Make(packageId, firstIndex);
         uint payloadTag = headerTag + 1;
         ProjectAssetAddition[] added = [
             new(name + ".texture", header,
@@ -67,10 +68,9 @@ public static class TextureAssetImporter
             if (!catalog.ContainsInstalledPackage(candidate.PackageId)
                 || candidate.Type != 32 || candidate.SubType != 1 || candidate.Size != 40) continue;
             byte[] bytes = catalog.ReadOriginal(candidate.TagHash);
-            if (bytes.Length != 40 || BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x0C)) != 0xCAFE
-                || BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4)) is not (28 or 29)
-                || BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x12)) != 1
-                || BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(0x14)) != 1
+            if (bytes.Length != Unsafe.SizeOf<TextureHeader>()
+                || MemoryMarshal.Read<TextureHeader>(bytes) is not { Marker: TextureHeader.MarkerValue, Format: 28 or 29,
+                    Depth: 1, ArraySize: 1 }
                 || !catalog.TryGetEntry(candidate.Reference, out var payload)
                 || payload.Type != 40 || payload.SubType != 1) continue;
             return (candidate, bytes);

@@ -1,5 +1,6 @@
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Editor.Creation;
 
@@ -33,13 +34,18 @@ public static partial class CreationTypes
 
     private static readonly Dictionary<(string Key, CreationMode Mode), CreationType> Types = [];
 
+    /** A new destination copied from an installed one; it has no key, so the All other assets menu lists it. */
+    public static CreationType Destination { get; } = new("Destination",
+        "An installed scenario and its map, cut to chosen bubbles and named as a new destination.", "",
+        workspace => new DestinationWorkflow(workspace));
+
+    /** The free-roam activity of a destination the project made; the All other assets menu lists it. */
+    public static CreationType Activity { get; } = new("Activity",
+        "The free-roam activity and destination rows a new destination needs to launch.", "",
+        workspace => new ActivityWorkflow(workspace));
+
     /** Types with no key: nothing in Studio writes them. */
-    public static IReadOnlyList<CreationType> Blocked { get; } =
-    [
-        new("Activity", "", "Activity creation is not supported yet."),
-        new("Map", "", "Map creation is not supported yet."),
-        new("Animation", "", AnimationBlocker)
-    ];
+    public static IReadOnlyList<CreationType> Blocked { get; } = [new("Animation", "", AnimationBlocker)];
 
     static CreationTypes()
     {
@@ -78,8 +84,8 @@ public static partial class CreationTypes
     private static string KeyOf(PackageEntry entry) => entry switch
     {
         { Type: 32, SubType: >= 1 and <= 3 } => TextureKey,
-        { Reference: 0x808071E8 } => MaterialKey,
-        { Reference: 0x808071A7 } => StaticPropKey,
+        { Reference: STechnique.Class } => MaterialKey,
+        { Reference: SStaticMesh.Class } => StaticPropKey,
         _ => OtherKey
     };
 
@@ -91,7 +97,7 @@ public static partial class CreationTypes
         InvestmentCatalog.ItemClass or InvestmentCatalog.DisplayClass when document.Entry.Type is 8 or 16
             && document.Entry.TagHash is not (InvestmentCatalog.ItemIndexTag or InvestmentCatalog.DisplayIndexTag) => EditRoute.Item,
         InvestmentCatalog.VendorClass or InvestmentVendorAuthoring.DisplayClass when document.Entry.Type is 8 or 16 => EditRoute.Vendor,
-        0x808071E8 when document.Entry.Type is 8 or 16 => EditRoute.Material,
+        STechnique.Class when document.Entry.Type is 8 or 16 => EditRoute.Material,
         InvestmentSandboxPerkAuthoring.GameplayClass when document.Entry.Type is 8 or 16 => EditRoute.PerkPage,
         _ when CuiDocument.Supports(document.Entry.Reference) && document.Entry.Type is 8 or 16 => EditRoute.CuiPage,
         _ when document.Texture is not null && document.Entry.Type == 32 && document.Entry.SubType is >= 1 and <= 3 => EditRoute.Texture,

@@ -1,9 +1,18 @@
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+
 namespace SunriseStudio.Authoring;
 
 /** Visibility belongs to reachable bubble scopes, including edges across package boundaries. */
 internal sealed class InstanceIsolationScope
 {
     internal sealed record Placement(uint List, int Row, int Index, int Auxiliary, uint Owner);
+
+    /** Bytes before a static payload: its class word, padded to the payload's alignment. */
+    internal const int PayloadLead = (TagView.ClassWordSize + SStaticInstancesPayload.Align - 1) & -SStaticInstancesPayload.Align;
+
     private sealed class Scope
     {
         internal readonly HashSet<uint> Containers = [], Maps = [];
@@ -11,17 +20,20 @@ internal sealed class InstanceIsolationScope
     }
     private readonly ObjectEditContext context;
     private readonly InstanceIsolationSources sources;
-    private readonly Dictionary<uint, NativeRows> data = [];
+    private readonly Dictionary<uint, byte[]> data = [];
     private readonly Dictionary<uint, List<uint>> listContainers = [];
     private readonly Dictionary<uint, List<Scope>> containerScopes = [];
     private readonly Dictionary<uint, InstanceVisibilityMap> mapIds = [];
     private readonly HashSet<(uint Tag, uint Bubble)> visited = [];
     private readonly List<Placement> placements = [];
 
-    internal InstanceIsolationScope(ObjectEditContext context, IReadOnlySet<uint> owners, InstanceIsolationSources sources)
+    /** @param walk False skips the config refusal and the map walk; such a scope only validates placements. */
+    internal InstanceIsolationScope(ObjectEditContext context, IReadOnlySet<uint> owners, InstanceIsolationSources sources,
+        bool walk = true)
     {
         this.context = context; this.sources = sources;
-        foreach (var list in sources.OfClass(0x808099D6))
+        if (!walk) return;
+        foreach (var list in sources.OfClass(SMapPlacements.Class))
         {
             if (!list.Valid)
             {
@@ -32,36 +44,40 @@ internal sealed class InstanceIsolationScope
             placements.AddRange(list.Placements.Where(placement => owners.Contains(placement.Owner)));
         }
         RefuseConfigPlacements(owners);
-        foreach (var entry in context.Catalog.Entries.Where(x => x.Reference == 0x808091DE))
+        foreach (uint root in sources.Tags.OfClass(SMapRoot.Class))
         {
             visited.Clear();
-            TryVisit(entry.TagHash, 0, new Scope(), 0);
+            TryVisit(root, 0, new Scope(), 0);
         }
     }
+
+    /** True when the container is a project entry, which an object edit cannot rewrite. */
+    internal bool IsAdded(uint container) => sources.Tags.IsAdded(container);
 
     /** Raw config layers are streamed because staged changes can share the catalog's read generation. */
     private void RefuseConfigPlacements(IReadOnlySet<uint> owners)
     {
         byte[][] keys = owners.Select(BitConverter.GetBytes).ToArray();
-        IEnumerable<uint> configs = context.Catalog.Entries.Where(x => x.Reference == 0x80809C36).Select(x => x.TagHash);
+        var tags = sources.Tags;
+        IEnumerable<uint> configs = tags.OfClass(SEntityConfig.Class);
         if (context.IsolationSnapshot is { } snapshot)
             configs = owners.SelectMany(owner => snapshot.Candidates.GetValueOrDefault(owner) ?? [])
                 .Concat(context.Options.RawChangedTags!).Distinct()
-                .Where(tag => context.Catalog.TryGetEntry(tag, out var entry) && entry.Reference == 0x80809C36);
+                .Where(tag => !tags.IsAdded(tag) && tags.ClassOf(tag) == SEntityConfig.Class)
+                .Concat(tags.OfClass(SEntityConfig.Class).Where(tags.IsAdded));
         foreach (uint tag in configs)
         {
-            byte[] bytes = context.ReadLayer(tag);
+            byte[] bytes = tags.Read(tag);
             if (!keys.Any(key => bytes.AsSpan().IndexOf(key) >= 0)) continue;
-            var source = new NativeRows(bytes);
-            foreach (int descriptor in ObjectRows.SlotDescriptors(source, tag))
-                foreach (int row in source.Rows(descriptor + 0x58, 0x808099D8, 144))
-                    foreach (int auxiliary in Chain(source, row + 0x78))
-                        if (source.U32(auxiliary - 4) == 0x808071B3)
-                        {
-                            source.Span(auxiliary, 24);
-                            if (owners.Contains(source.U32(auxiliary + 0x10)))
-                                throw new InvalidDataException("The static owner also occurs in a config-held placement; isolation needs its authored scope.");
-                        }
+            foreach (int descriptor in ObjectRows.SlotDescriptors(bytes, tag))
+            {
+                foreach (int row in InstanceTagReads.Rows<ObjectSlotDefinitionType4, AuthoredPlacementEntry>(bytes, descriptor,
+                    nameof(ObjectSlotDefinitionType4.EmbeddedPlacements), AuthoredPlacementEntry.Class))
+                    foreach (var (auxiliary, type) in Chain(bytes, row))
+                        if (type == SStaticInstancesPayload.Class
+                            && owners.Contains(TagView.Checked<SStaticInstancesPayload>(bytes, auxiliary).StaticOwner))
+                            throw new InvalidDataException("The static owner also occurs in a config-held placement; isolation needs its authored scope.");
+            }
         }
     }
 
@@ -87,7 +103,7 @@ internal sealed class InstanceIsolationScope
                     uint map = scope.Maps.Single();
                     if (!mapIds.TryGetValue(map, out var ids))
                     {
-                        ids = new InstanceVisibilityMap(Read(map).Bytes);
+                        ids = new InstanceVisibilityMap(Read(map));
                         mapIds.Add(map, ids);
                     }
                     taken.UnionWith(ids.Keys);
@@ -102,25 +118,31 @@ internal sealed class InstanceIsolationScope
     }
 
     /** A copied class must construct only the one static component carried by its single context. */
-    private void ValidatePlacement(Placement placement)
+    internal void ValidatePlacement(Placement placement)
     {
-        var source = Read(placement.List);
+        byte[] source = Read(placement.List);
         int row = placement.Row, auxiliary = placement.Auxiliary;
-        if (source.I64(row + 0x80) != 0 || source.I64(auxiliary) != 0 || source.U64(auxiliary + 8) != 0
-            || source.U64(row + 0x70) != ulong.MaxValue || Relative(source, row + 0x78, 8, 24) != auxiliary)
+        if (InstanceTagReads.Field<AuthoredPlacementEntry, long>(source, row, "AttachmentPtrMustBe0.Relative") != 0
+            || InstanceTagReads.Field<SStaticInstancesPayload, long>(source, auxiliary, "Next.Relative") != 0
+            || InstanceTagReads.Field<SStaticInstancesPayload, ulong>(source, auxiliary, nameof(SStaticInstancesPayload.Unknown0x8MustBe0)) != 0
+            || InstanceTagReads.Field<AuthoredPlacementEntry, ulong>(source, row, nameof(AuthoredPlacementEntry.PlacementIdentity)) != ulong.MaxValue
+            || Relative(source, PayloadField(row), PayloadLead, Unsafe.SizeOf<SStaticInstancesPayload>()) != auxiliary)
             throw new InvalidDataException("Only anonymous single-component static placements can be isolated.");
-        uint entity = source.U32(row);
-        if (Class(entity) != 0x80809C0F) throw new InvalidDataException("The static placement class is invalid.");
-        var definition = Read(entity);
-        int[] actors = definition.Rows(0x10, 0x80809C04, 12);
-        if (actors.Length != 1 || definition.I64(0x20) != 0 || definition.I64(0x28) != 0
-            || definition.I64(0x30) != 0 || definition.I64(0x38) != 0)
+        uint entity = InstanceTagReads.Field<AuthoredPlacementEntry, uint>(source, row, nameof(AuthoredPlacementEntry.ClassTag));
+        if (Class(entity) != SEntity.Class) throw new InvalidDataException("The static placement class is invalid.");
+        byte[] definition = Read(entity);
+        int[] actors = InstanceTagReads.Rows<SEntity, SPatternComponent>(definition, 0, nameof(SEntity.Components), SPatternComponent.Class);
+        if (actors.Length != 1 || InstanceTagReads.Field<SEntity, long>(definition, 0, "HE3929a53.ConnectionList.Count") != 0
+            || InstanceTagReads.Field<SEntity, long>(definition, 0, "HE3929a53.ConnectionList.Relative") != 0
+            || InstanceTagReads.Field<SEntity, long>(definition, 0, "HE3929a53.Unknown0x30MustBe0.Count") != 0
+            || InstanceTagReads.Field<SEntity, long>(definition, 0, "HE3929a53.Unknown0x30MustBe0.Relative") != 0)
             throw new InvalidDataException("The static placement class has other components.");
-        uint config = definition.U32(actors[0]);
-        if (Class(config) != 0x80809C36) throw new InvalidDataException("The static component config is missing.");
-        var configData = Read(config);
-        int primary = Relative(configData, 0x10, 4, 0);
-        if (configData.U32(primary - 4) != 0x808071B2)
+        uint config = TagView.At<SPatternComponent>(definition, actors[0]).Config;
+        if (Class(config) != SEntityConfig.Class) throw new InvalidDataException("The static component config is missing.");
+        byte[] configData = Read(config);
+        int primary = Relative(configData, TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.DefaultInstance)),
+            TagView.ClassWordSize, 0);
+        if (TagView.ClassAt(configData, primary) != SStaticInstanceComponent.Class)
             throw new InvalidDataException("The copied placement does not contain the static instance component.");
     }
 
@@ -133,29 +155,29 @@ internal sealed class InstanceIsolationScope
         if (!source.Valid) { scope.Complete = false; return; }
         switch (source.Class)
         {
-            case 0x808091DE or 0x808091E0 or 0x8080925E:
+            case SMapRoot.Class or SBubbleDefinition.Class or SScenarioTagSet.Class:
                 foreach (var child in source.Children) VisitReference(child, bubble, scope, depth + 1);
                 break;
-            case 0x80807DAE:
+            case SBubbleParent.Class:
                 TryVisit(source.Link, tag, new Scope(), depth + 1);
                 break;
-            case 0x8080925B:
+            case SScenarioStateEntry.Class:
                 TryVisit(source.Link, bubble, scope, depth + 1);
                 break;
-            case 0x80808A54:
+            case SMapContainer.Class:
                 scope.Containers.Add(tag);
                 if (!containerScopes.TryGetValue(tag, out var scopes)) containerScopes[tag] = scopes = [];
                 if (!scopes.Contains(scope)) scopes.Add(scope);
                 foreach (var child in source.Children)
                 {
                     uint list = child.Tag;
-                    if (Class(list) != 0x808099D6) continue;
+                    if (Class(list) != SMapPlacements.Class) continue;
                     if (!listContainers.TryGetValue(list, out var containers)) listContainers[list] = containers = [];
                     if (!containers.Contains(tag)) containers.Add(tag);
                     var listData = sources.Read(list);
                     if (!listData.Valid) { scope.Complete = false; continue; }
                     foreach (uint map in listData.Maps)
-                        if (Class(map) != 0x80807320) scope.Complete = false;
+                        if (Class(map) != SVisibilityTomeMap.Class) scope.Complete = false;
                         else scope.Maps.Add(map);
                 }
                 break;
@@ -181,30 +203,87 @@ internal sealed class InstanceIsolationScope
         TryVisit(tag, bubble, scope, depth);
     }
 
-    private uint Reference(IsolationReference reference) => reference.Resolve(context.Catalog)
+    private uint Reference(IsolationReference reference) => reference.Resolve(sources.Tags)
         ?? throw new InvalidDataException("A map reference is unresolved.");
-    private uint Class(uint tag) => context.Catalog.TryGetEntry(tag, out var entry) ? entry.Reference : 0;
-    private NativeRows Read(uint tag) => data.TryGetValue(tag, out var value) ? value
-        : data[tag] = new NativeRows(context.ReadLayer(tag));
+    private uint Class(uint tag) => sources.Tags.ClassOf(tag);
+    private byte[] Read(uint tag) => data.TryGetValue(tag, out var value) ? value : data[tag] = sources.Tags.Read(tag);
 
-    /** Constructor links are bounded and cycle checked before their tags can establish ownership. */
-    internal static IEnumerable<int> Chain(NativeRows source, int field)
+    /**
+     * A placement row's constructor links, bounded and cycle checked before they can prove ownership.
+     * @param row Offset of an AuthoredPlacementEntry; the walk starts at its payload pointer.
+     * @return Each constructor's offset and the class word before it.
+     */
+    internal static IEnumerable<(int Target, uint Class)> Chain(byte[] source, int row)
     {
         var seen = new HashSet<int>();
-        for (int count = 0; source.I64(field) != 0; count++)
+        int field = PayloadField(row);
+        for (int count = 0; !IsNull(source, field); count++)
         {
-            int target = Relative(source, field, 8, 16);
+            int target = Relative(source, field, PayloadLead, 16);
             if ((target & 3) != 0) throw new InvalidDataException("The placement constructor is not four-byte aligned.");
             if (count >= 64 || !seen.Add(target)) throw new InvalidDataException("The placement constructor chain is invalid.");
-            yield return target; field = target;
+            yield return (target, TargetClass(source, field));
+            // Both constructor classes start with their Next pointer.
+            field = target;
         }
     }
 
-    private static int Relative(NativeRows source, int field, int before, int after)
+    private static int PayloadField(int row) => row + TagView.FieldOffset<AuthoredPlacementEntry>(nameof(AuthoredPlacementEntry.Payload));
+    private static bool IsNull(byte[] source, int field) => TagView.Checked<RelativePointer<Unknown>>(source, field).IsNull;
+    private static uint TargetClass(byte[] source, int field) =>
+        TagView.TargetClass(source, in TagView.Checked<RelativePointer<Unknown>>(source, field)) ?? 0;
+
+    private static int Relative(byte[] source, int field, int before, int after)
     {
-        long relative = source.I64(field);
-        if (relative < (long)before - field || relative > source.Bytes.Length - (long)after - field)
+        long relative = TagView.Checked<RelativePointer<Unknown>>(source, field).Relative;
+        if (relative < (long)before - field || relative > source.Length - (long)after - field)
             throw new InvalidDataException("A static placement pointer leaves its source.");
         return checked((int)(field + relative));
+    }
+}
+
+/** Placement member reads: only the bytes through the member read must fit, else InvalidDataException. */
+internal static class InstanceTagReads
+{
+    /** Throws unless the bytes from `offset` through `member` of a T lie inside the tag. */
+    internal static void Require<T>(ReadOnlySpan<byte> tag, int offset, string member) where T : unmanaged
+    {
+        if (!TagView.FitsThrough<T>(tag, offset, member)) throw new InvalidDataException("Placement range leaves its source.");
+    }
+
+    /** @return Member `member` of a T at `offset`; TField must be the member's type. */
+    internal static ref readonly TField Field<T, TField>(ReadOnlySpan<byte> tag, int offset, string member)
+        where T : unmanaged where TField : unmanaged
+    {
+        Require<T>(tag, offset, member);
+        return ref TagView.Member<T, TField>(tag, offset, member);
+    }
+
+    /** @return Member `member` of a T at `offset`, writable; TField must be the member's type. */
+    internal static ref TField EditField<T, TField>(Span<byte> tag, int offset, string member)
+        where T : unmanaged where TField : unmanaged
+    {
+        Require<T>(tag, offset, member);
+        return ref TagView.Edit<TField>(tag, offset + TagView.FieldOffset<T>(member));
+    }
+
+    /** @return The xyz lanes of a Vector4 member; its w lane need not fit. */
+    internal static Vector3 Xyz<T>(ReadOnlySpan<byte> tag, int offset, string member) where T : unmanaged
+    {
+        int at = offset + TagView.FieldOffset<T>(member);
+        if (offset < 0 || !TagView.Fits<Vector3>(tag, at)) throw new InvalidDataException("Placement range leaves its source.");
+        return TagView.At<Vector3>(tag, at);
+    }
+
+    /** @return Each row's tag offset of the array member `member` of a T at `offset`. */
+    internal static int[] Rows<T, TRow>(ReadOnlySpan<byte> tag, int offset, string member, uint elementClass)
+        where T : unmanaged where TRow : unmanaged =>
+        Offsets(tag, in Field<T, TagArray<TRow>>(tag, offset, member), elementClass);
+
+    /** @return Each row's tag offset; a count above MaximumReaderRows throws before any row is read. */
+    internal static int[] Offsets<T>(ReadOnlySpan<byte> tag, ref readonly TagArray<T> array, uint elementClass) where T : unmanaged
+    {
+        if (array.Count > TagArray.MaximumReaderRows) throw new InvalidDataException("A typed array has too many rows.");
+        return TagView.RowOffsets(tag, TagView.Rows(tag, in array, elementClass));
     }
 }

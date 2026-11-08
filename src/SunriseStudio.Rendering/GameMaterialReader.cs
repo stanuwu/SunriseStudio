@@ -1,7 +1,9 @@
-using System.Buffers.Binary;
-using System.Text;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using Vortice.D3DCompiler;
 using Vortice.DXGI;
 
@@ -50,17 +52,18 @@ public sealed partial class GameMaterialReader(PackageCatalog catalog)
     public GameMaterialInfo Read(uint materialTag)
     {
         if (materials.TryGetValue(materialTag, out var cached)) return cached;
-        if (!catalog.TryGetEntry(materialTag, out var entry) || entry.Reference != 0x808071E8)
+        if (!catalog.TryGetEntry(materialTag, out var entry) || entry.Reference != STechnique.Class)
             throw new NotSupportedException($"Tag 0x{materialTag:X8} is not a supported material.");
         byte[] bytes = catalog.Read(materialTag);
-        if (bytes.Length < 0x400 || U64(bytes, 0) != (ulong)bytes.Length)
+        if (!TagView.FitsThrough<STechnique>(bytes, 0, "ComputeShader.State.StaticSamplers.Samplers")
+            || Technique<ulong>(bytes, nameof(STechnique.TagSize)) != (ulong)bytes.Length)
             throw new InvalidDataException("Material size does not match its header.");
         var textures = new List<MaterialTextureBinding>();
         var emptySlots = new HashSet<(GameShaderStage, uint)>();
         var diagnostics = new List<string>();
-        GameShaderInfo? ReadStage(GameShaderStage stage, int shaderField, int textureField)
+        GameShaderInfo? ReadStage(GameShaderStage stage, string field)
         {
-            uint shaderTag = U32(bytes, shaderField);
+            uint shaderTag = Technique<uint>(bytes, $"{field}.Shader");
             GameShaderInfo? shader = null;
             if (shaderTag is not (0 or uint.MaxValue))
             {
@@ -70,9 +73,10 @@ public sealed partial class GameMaterialReader(PackageCatalog catalog)
                     && !error.Message.StartsWith("Package block authentication failed", StringComparison.Ordinal))
                 { diagnostics.Add($"{stage} shader 0x{shaderTag:X8}: {error.Message}"); }
             }
-            foreach (int row in TextureRows(bytes, textureField))
+            foreach (var row in TextureRows(bytes,
+                in Technique<TagArray<SMaterialTextureAssignment>>(bytes, $"{field}.State.StaticTextures.Textures")))
             {
-                uint slot = U32(bytes, row), textureTag = U32(bytes, row + 4);
+                uint slot = row.TextureSlot, textureTag = row.Texture;
                 if (slot >= 128) throw new InvalidDataException("Texture slot exceeds the DX11 limit.");
                 if (textureTag is 0 or uint.MaxValue)
                 {
@@ -86,12 +90,14 @@ public sealed partial class GameMaterialReader(PackageCatalog catalog)
                         || textureEntry.Type != 32 || textureEntry.SubType is < 1 or > 3)
                         throw new InvalidDataException("Binding does not reference a texture header.");
                     byte[] header = catalog.Read(textureTag);
-                    if (header.Length < 0x28 || U16(header, 0xC) != 0xCAFE)
+                    if (header.Length < Unsafe.SizeOf<TextureHeader>()
+                        || MemoryMarshal.Read<TextureHeader>(header).Marker != TextureHeader.MarkerValue)
                         throw new InvalidDataException("Texture header marker is invalid.");
+                    var texture = MemoryMarshal.Read<TextureHeader>(header);
                     var declaration = shader?.TextureSlots.FirstOrDefault(x => x.Slot == slot);
                     textures.Add(new(stage, slot, textureTag, declaration is not null,
-                        declaration?.Dimension, U16(header, 0xE), U16(header, 0x10),
-                        U16(header, 0x12), U16(header, 0x14), (Format)U32(header, 4)));
+                        declaration?.Dimension, texture.Width, texture.Height,
+                        texture.Depth, texture.ArraySize, (Format)texture.Format));
                     if (shader is not null && declaration is null)
                         diagnostics.Add($"{stage} texture t{slot} is absent from the shader declarations.");
                 }
@@ -101,21 +107,30 @@ public sealed partial class GameMaterialReader(PackageCatalog catalog)
             }
             return shader;
         }
-        var vertex = ReadStage(GameShaderStage.Vertex, 0x48, 0x50);
-        var pixel = ReadStage(GameShaderStage.Pixel, 0x2C8, 0x2D0);
-        var compute = ReadStage(GameShaderStage.Compute, 0x368, 0x370);
+        var vertex = ReadStage(GameShaderStage.Vertex, nameof(STechnique.VertexShader));
+        var pixel = ReadStage(GameShaderStage.Pixel, nameof(STechnique.PixelShader));
+        var compute = ReadStage(GameShaderStage.Compute, nameof(STechnique.ComputeShader));
         var additional = new List<AdditionalShaderHeader>();
-        foreach (int field in new[] { 0xE8, 0x188, 0x228 })
+        foreach (string stageField in (string[])[nameof(STechnique.HAb56cff8), nameof(STechnique.H91e27e07),
+            nameof(STechnique.GeometryShader)])
         {
-            uint shaderTag = U32(bytes, field);
+            int field = TagView.FieldOffset<STechnique>($"{stageField}.Shader");
+            uint shaderTag = Technique<uint>(bytes, $"{stageField}.Shader");
             if (shaderTag is 0 or uint.MaxValue) continue;
             if (!catalog.TryGetEntry(shaderTag, out var shaderEntry) || shaderEntry.Type != 33)
                 throw new InvalidDataException($"Material stage field 0x{field:X} has an invalid shader header.");
             additional.Add(new(field, shaderTag, shaderEntry.SubType));
         }
         return materials[materialTag] = new(materialTag, vertex, pixel, compute, textures, diagnostics)
-        { AdditionalShaderHeaders = additional, StateOverrides = U32(bytes, 0x20), EmptyTextureSlots = emptySlots };
+        {
+            AdditionalShaderHeaders = additional, StateOverrides = Technique<uint>(bytes, nameof(STechnique.StateOverrides)),
+            EmptyTextureSlots = emptySlots
+        };
     }
+
+    /** A material may end after the compute sampler array, short of the whole STechnique, so members are read alone. */
+    private static ref readonly T Technique<T>(byte[] bytes, string member) where T : unmanaged =>
+        ref TagView.Member<STechnique, T>(bytes, 0, member);
 
     /** Shader header and payload types must agree with the DXBC stage token. */
     public unsafe GameShaderInfo ReadShader(uint shaderTag, GameShaderStage expectedStage)
@@ -131,13 +146,15 @@ public sealed partial class GameMaterialReader(PackageCatalog catalog)
             || headerEntry.SubType != packageSubtype)
             throw new InvalidDataException("Shader header type does not match its material stage.");
         byte[] header = catalog.Read(shaderTag);
-        if (header.Length < 12 || U64(header, 0) != (ulong)header.Length)
+        // Only HeaderSize and BytecodeSize must be present, not the whole ShaderHeader.
+        if (!TagView.FitsThrough<ShaderHeader>(header, 0, nameof(ShaderHeader.BytecodeSize))
+            || TagView.Member<ShaderHeader, ulong>(header, 0, nameof(ShaderHeader.HeaderSize)) != (ulong)header.Length)
             throw new InvalidDataException("Shader header is truncated.");
         if (!catalog.TryGetEntry(headerEntry.Reference, out var payloadEntry)
             || payloadEntry.Type != 41 || payloadEntry.SubType != headerEntry.SubType)
             throw new InvalidDataException("Shader payload type does not match its header.");
         byte[] bytes = catalog.Read(payloadEntry.TagHash);
-        if (U32(header, 8) != bytes.Length)
+        if (TagView.Member<ShaderHeader, uint>(header, 0, nameof(ShaderHeader.BytecodeSize)) != bytes.Length)
             throw new InvalidDataException("Shader bytecode length does not match its header.");
         string profile = ValidateShaderContainer(bytes, expectedStage);
         string disassembly;
@@ -159,55 +176,57 @@ public sealed partial class GameMaterialReader(PackageCatalog catalog)
     /** Native disassembly only receives a bounded, internally consistent DXBC container. */
     private static string ValidateShaderContainer(byte[] bytes, GameShaderStage expectedStage)
     {
-        if (bytes.Length < 32 || !bytes.AsSpan(0, 4).SequenceEqual("DXBC"u8)
-            || U32(bytes, 24) != bytes.Length)
+        var fault = DxbcContainer.ReadHeader(bytes, out uint chunks);
+        if (fault == DxbcContainer.Fault.Header)
             throw new InvalidDataException("Shader payload has no valid DXBC header.");
-        uint chunks = U32(bytes, 28);
-        if (chunks > (bytes.Length - 32) / 4)
+        if (fault == DxbcContainer.Fault.ChunkTable)
             throw new InvalidDataException("DXBC chunk table exceeds its payload.");
         string? profile = null;
         for (int i = 0; i < chunks; i++)
         {
-            uint offset = U32(bytes, 32 + i * 4);
-            if (offset > bytes.Length - 8)
+            fault = DxbcContainer.ReadChunk(bytes, i, out var chunk);
+            if (fault == DxbcContainer.Fault.ChunkOffset)
                 throw new InvalidDataException("DXBC chunk offset is out of range.");
-            uint size = U32(bytes, (int)offset + 4);
-            if (size > bytes.Length - offset - 8)
+            if (fault == DxbcContainer.Fault.ChunkSize)
                 throw new InvalidDataException("DXBC chunk exceeds its payload.");
-            string kind = Encoding.ASCII.GetString(bytes, (int)offset, 4);
-            if (kind is not ("SHDR" or "SHEX")) continue;
-            if (size < 8) throw new InvalidDataException("Shader instruction chunk is truncated.");
-            uint token = U32(bytes, (int)offset + 8);
-            if ((token >> 16) != (uint)expectedStage)
+            if (chunk.Kind is not (DxbcContainer.ShaderChunk or DxbcContainer.ExtendedShaderChunk)) continue;
+            var version = DxbcContainer.ProgramVersion(bytes, in chunk)
+                ?? throw new InvalidDataException("Shader instruction chunk is truncated.");
+            if (version.Type != (uint)expectedStage)
                 throw new InvalidDataException("DXBC shader stage differs from its material field.");
             string prefix = expectedStage switch
             { GameShaderStage.Vertex => "vs", GameShaderStage.Pixel => "ps", GameShaderStage.Geometry => "gs",
                 GameShaderStage.Hull => "hs", GameShaderStage.Domain => "ds", _ => "cs" };
-            profile = $"{prefix}_{(token >> 4) & 15}_{token & 15}";
+            profile = $"{prefix}_{version.Major}_{version.Minor}";
         }
         return profile ?? throw new InvalidDataException("DXBC has no shader instruction chunk.");
     }
 
-    /** Texture records have a repeated count and a class-tagged eight-byte stride. */
-    private static int[] TextureRows(byte[] bytes, int field)
+    /** At most 128 texture rows, one per DX11 slot. */
+    private static SMaterialTextureAssignment[] TextureRows(byte[] bytes,
+        ref readonly TagArray<SMaterialTextureAssignment> array) =>
+        MemoryMarshal.Cast<byte, SMaterialTextureAssignment>(CheckedArray(bytes, in array,
+            SMaterialTextureAssignment.Class, Unsafe.SizeOf<SMaterialTextureAssignment>(), 128,
+            "Material texture count is invalid.", "Material texture array has an invalid header.")).ToArray();
+
+    /**
+     * Reads an array field; it needs the marker, a repeated count, the class and rows in the tag.
+     * @param maximum A larger count throws countError before the header is read.
+     * @return The row bytes; empty when the count and the link are both zero.
+     */
+    private static ReadOnlySpan<byte> CheckedArray<T>(byte[] bytes, ref readonly TagArray<T> array,
+        uint elementClass, int stride, long maximum, string countError, string headerError) where T : unmanaged
     {
-        long count = (long)U64(bytes, field), relative = (long)U64(bytes, field + 8);
-        if (count == 0 && relative == 0) return [];
-        if (count is < 0 or > 128) throw new InvalidDataException("Material texture count is invalid.");
-        long header = checked(field + 8 + relative);
-        if (header < 4 || header > bytes.Length - 16 || U32(bytes, (int)header - 4) != 0x80809FBD
-            || U64(bytes, (int)header) != (ulong)count || U32(bytes, (int)header + 8) != 0x80807211
-            || U32(bytes, (int)header + 12) != 0 || count * 8 > bytes.Length - header - 16)
-            throw new InvalidDataException("Material texture array has an invalid header.");
-        return Enumerable.Range(0, (int)count).Select(i => (int)header + 16 + i * 8).ToArray();
+        if (array.Count == 0 && array.Relative == 0) return [];
+        if (array.Count < 0 || array.Count > maximum) throw new InvalidDataException(countError);
+        long header = checked(TagView.OffsetOf(bytes, in array.Relative) + array.Relative);
+        var view = new TagArray(bytes, TagView.OffsetOf(bytes, in array));
+        if (header < 0 || header > bytes.Length || !view.IsWellFormed || view.ElementClass != elementClass
+            || !view.RowsFit(stride))
+            throw new InvalidDataException(headerError);
+        return bytes.AsSpan(view.DataOffset, checked((int)array.Count * stride));
     }
 
-    private static ushort U16(byte[] bytes, int offset) =>
-        BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset, 2));
-    private static uint U32(byte[] bytes, int offset) =>
-        BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset, 4));
-    private static ulong U64(byte[] bytes, int offset) =>
-        BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(offset, 8));
 
     [GeneratedRegex(@"^dcl_resource_(?<kind>\w+)[^\r\n]*?\bt(?<slot>\d+)\b", RegexOptions.Multiline)]
     private static partial Regex TextureDeclaration();

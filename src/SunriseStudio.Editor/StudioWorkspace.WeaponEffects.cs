@@ -2,6 +2,7 @@ using SunriseStudio.Authoring;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
@@ -23,7 +24,7 @@ public sealed partial class StudioWorkspace
     private StudioDocument ReadWeaponEffectDocument(PackageCatalog catalog, PackageEntry entry,
         string name, AssetOpenContext context)
     {
-        if (entry.Reference != 0x80809C0F || !catalog.TryGetEntry(context.WeaponItemTag, out var item)
+        if (entry.Reference != SEntity.Class || !catalog.TryGetEntry(context.WeaponItemTag, out var item)
             || item.Reference != InvestmentCatalog.ItemClass)
             throw new InvalidDataException("Choose a weapon and one of its authored particle events.");
         var links = WeaponEffectPreviewSource.Discover(catalog, new Dictionary<string, uint>

@@ -1,4 +1,7 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -38,16 +41,23 @@ public static class WeaponTranslationEdits
     public static readonly WeaponTranslationColumn MagazineReferenceRate = new(1, 0, "magazine reference rate");
     public static readonly WeaponTranslationColumn Precision = new(1, 1, "precision multiplier");
     public static readonly WeaponTranslationColumn MagazineBase = new(7, 0, "magazine base");
-    // Weapon-type groups at +0x430; each owns a table array. A table has a row array, and each row is a float
-    // array of columns.
-    private const int GroupsField = 0x430, GroupStride = 0x30, TableStride = 0x38, RowsField = 16, RowStride = 16;
-    private const uint GroupClass = 0x80803975, TableClass = 0x80803979, ColumnClass = 0x8080000F;
-    // A table names its key at +32 and its row offset at +36, maps the stat range +40..+44 onto its rows, and
-    // blends rows when +48 is set.
-    private const int TableKey = 32, TableRowOffset = 36, TableMinimum = 40, TableMaximum = 44, TableInterpolates = 48;
-    // Selector rows at +0x620, 40 bytes each: the row whose key at +16 equals the weapon's type key is the group.
-    // Each row starts with {i8 key, f32 value} overrides that pin a key's stat.
-    private const int SelectorsField = 0x620, SelectorStride = 40, SelectorKey = 16, OverrideStride = 8;
+    // Each weapon-type group owns a table array. A table has a row array, and each row is a float array of columns.
+    private static readonly int GroupsField =
+        TagView.FieldOffset<WeaponTranslationDefinition>(nameof(WeaponTranslationDefinition.Groups));
+    private static int GroupStride => Unsafe.SizeOf<SWeaponTranslationGroup>();
+    private static int TableStride => Unsafe.SizeOf<SWeaponTranslationTable>();
+    private static int RowStride => Unsafe.SizeOf<WeaponTranslationRow>();
+    private static int ColumnStride => Unsafe.SizeOf<SF32Column>();
+    private static readonly int RowsField = TagView.FieldOffset<SWeaponTranslationTable>(nameof(SWeaponTranslationTable.TableRows));
+    private const uint GroupClass = SWeaponTranslationGroup.Class, TableClass = SWeaponTranslationTable.Class,
+        ColumnClass = SF32Column.Class;
+    // The selector row whose type key matches the weapon's names its group.
+    private static readonly int SelectorsField =
+        TagView.FieldOffset<WeaponTranslationDefinition>(nameof(WeaponTranslationDefinition.Selectors));
+    private static int SelectorStride => Unsafe.SizeOf<WeaponTranslationSelectorRow>();
+    private static int OverrideStride => Unsafe.SizeOf<WeaponTranslationStatOverride>();
+    private static readonly int OverridesField =
+        TagView.FieldOffset<WeaponTranslationSelectorRow>(nameof(WeaponTranslationSelectorRow.Overrides));
 
     // Translation key -> weapon stat; keys 2, 12 and 19 read no stat.
     private static readonly byte?[] KeyStats =
@@ -56,14 +66,14 @@ public static class WeaponTranslationEdits
     public static byte? StatOf(int key) => key >= 0 && key < KeyStats.Length ? KeyStats[key] : null;
 
     public static int GroupCount(ReadOnlyMemory<byte> config) =>
-        new TagReader(config).Array(GroupsField, GroupClass, GroupStride).Count;
+        TagArray.Checked(config.Span, Definition(config.Span) + GroupsField, GroupClass, GroupStride).Count;
 
     /** The group the game selects for a weapon type key; a key no selector row holds selects group 0. */
     public static int SelectGroup(ReadOnlyMemory<byte> config, uint typeKey)
     {
-        var rows = new TagReader(config).Array(SelectorsField, stride: SelectorStride);
+        var rows = TagArray.Checked(config.Span, Definition(config.Span) + SelectorsField, stride: SelectorStride);
         for (int index = 0; index < rows.Count; index++)
-            if (BinaryPrimitives.ReadUInt32LittleEndian(config.Span[(rows.Data + index * SelectorStride + SelectorKey)..]) == typeKey)
+            if (TagView.At<WeaponTranslationSelectorRow>(config.Span, rows.Data + index * SelectorStride).TypeKey == typeKey)
                 return index < GroupCount(config) ? index : throw new InvalidDataException("A selector row has no weapon-type group.");
         return 0;
     }
@@ -71,23 +81,23 @@ public static class WeaponTranslationEdits
     /** The selector key of each group, in group order. */
     public static IReadOnlyList<uint> SelectorKeys(ReadOnlyMemory<byte> config)
     {
-        var rows = new TagReader(config).Array(SelectorsField, stride: SelectorStride);
+        var rows = TagArray.Checked(config.Span, Definition(config.Span) + SelectorsField, stride: SelectorStride);
         return Enumerable.Range(0, rows.Count).Select(index =>
-            BinaryPrimitives.ReadUInt32LittleEndian(config.Span[(rows.Data + index * SelectorStride + SelectorKey)..])).ToArray();
+            TagView.At<WeaponTranslationSelectorRow>(config.Span, rows.Data + index * SelectorStride).TypeKey).ToArray();
     }
 
     /** Stat values the selected row pins, by translation key. */
     public static IReadOnlyDictionary<int, float> Overrides(ReadOnlyMemory<byte> config, int group)
     {
-        var reader = new TagReader(config);
-        var rows = reader.Array(SelectorsField, stride: SelectorStride);
+        var rows = TagArray.Checked(config.Span, Definition(config.Span) + SelectorsField, stride: SelectorStride);
         var result = new Dictionary<int, float>();
+        if (group < 0) throw new InvalidDataException("The weapon-type group is outside the config.");
         if (group >= rows.Count) return result;
-        var overrides = reader.Array(rows.Data + group * SelectorStride, stride: OverrideStride);
+        var overrides = TagArray.Checked(config.Span, rows.Data + group * SelectorStride + OverridesField, stride: OverrideStride);
         for (int index = 0; index < overrides.Count; index++)
         {
-            int at = overrides.Data + index * OverrideStride;
-            result[(sbyte)config.Span[at]] = BinaryPrimitives.ReadSingleLittleEndian(config.Span[(at + 4)..]);
+            ref readonly var row = ref TagView.At<WeaponTranslationStatOverride>(config.Span, overrides.Data + index * OverrideStride);
+            result[row.Key] = row.Value;
         }
         return result;
     }
@@ -95,24 +105,28 @@ public static class WeaponTranslationEdits
     /** Every table of one group. */
     public static IReadOnlyList<WeaponTranslationTable> Tables(ReadOnlyMemory<byte> config, int group)
     {
-        var reader = new TagReader(config);
-        var tables = reader.Array(Group(reader, group), TableClass, TableStride);
+        var tables = TagArray.Checked(config.Span, Group(config.Span, group), TableClass, TableStride);
         return Enumerable.Range(0, tables.Count).Select(index =>
         {
             int table = tables.Data + index * TableStride;
-            var rows = reader.Array(table + RowsField, stride: RowStride);
+            var rows = TagArray.Checked(config.Span, table + RowsField, stride: RowStride);
             var values = Enumerable.Range(0, rows.Count).Select(row =>
             {
-                var columns = reader.Array(rows.Data + row * RowStride, ColumnClass, 4);
+                var columns = TagArray.Checked(config.Span, rows.Data + row * RowStride, ColumnClass, ColumnStride);
                 return (IReadOnlyList<float>)Enumerable.Range(0, columns.Count)
-                    .Select(column => BinaryPrimitives.ReadSingleLittleEndian(config.Span[(columns.Data + column * 4)..])).ToArray();
+                    .Select(column => TagView.At<SF32Column>(config.Span, columns.Data + column * ColumnStride).Value).ToArray();
             }).ToArray();
-            var span = config.Span;
-            return new WeaponTranslationTable(index, BinaryPrimitives.ReadInt32LittleEndian(span[(table + TableKey)..]),
-                BinaryPrimitives.ReadSingleLittleEndian(span[(table + TableMinimum)..]),
-                BinaryPrimitives.ReadSingleLittleEndian(span[(table + TableMaximum)..]),
-                BinaryPrimitives.ReadInt32LittleEndian(span[(table + TableRowOffset)..]), span[table + TableInterpolates] != 0, values);
+            return Table(config.Span, table, index, values);
         }).ToArray();
+    }
+
+    /** A table's key, stat range, row offset and blend flag, with its already-read rows. */
+    private static WeaponTranslationTable Table(ReadOnlySpan<byte> config, int table, int index,
+        IReadOnlyList<IReadOnlyList<float>> rows)
+    {
+        ref readonly var view = ref TagView.At<SWeaponTranslationTable>(config, table);
+        return new WeaponTranslationTable(index, view.Key, view.StatMinimum, view.StatMaximum, view.RowOffset,
+            view.Interpolates != 0, rows);
     }
 
     /** Every row of the column takes `value`. */
@@ -139,24 +153,34 @@ public static class WeaponTranslationEdits
     public static int Magazine(float magazineBase, float rate, float referenceRate) =>
         (int)Math.Round(magazineBase * rate / referenceRate, MidpointRounding.ToEven);
 
-    private static int Group(TagReader reader, int group)
+    /** @return The offset of the translation definition that SEntityConfig.Definition names; another class is refused. */
+    private static int Definition(ReadOnlySpan<byte> config)
     {
-        var groups = reader.Array(GroupsField, GroupClass, GroupStride);
+        ref readonly var entity = ref TagView.Checked<SEntityConfig>(config, 0);
+        if (TagView.TargetOffset(config, in entity.Definition) is not { } definition
+            || TagView.ClassAt(config, definition) != WeaponTranslationDefinition.Class
+            || !TagView.Fits<WeaponTranslationDefinition>(config, definition))
+            throw new InvalidDataException("The config has no weapon translation definition.");
+        return definition;
+    }
+
+    private static int Group(ReadOnlySpan<byte> config, int group)
+    {
+        var groups = TagArray.Checked(config, Definition(config) + GroupsField, GroupClass, GroupStride);
         if (group < 0 || group >= groups.Count) throw new InvalidDataException("The weapon-type group is outside the config.");
         return groups.Data + group * GroupStride;
     }
 
     private static IReadOnlyList<int> Offsets(ReadOnlyMemory<byte> config, int group, WeaponTranslationColumn column)
     {
-        var reader = new TagReader(config);
-        var tables = reader.Array(Group(reader, group), TableClass, TableStride);
+        var tables = TagArray.Checked(config.Span, Group(config.Span, group), TableClass, TableStride);
         if (column.Table < 0 || column.Table >= tables.Count)
             throw new InvalidDataException($"The weapon-type group has no table for the {column.Name}.");
-        var rows = reader.Array(tables.Data + column.Table * TableStride + RowsField, stride: RowStride);
+        var rows = TagArray.Checked(config.Span, tables.Data + column.Table * TableStride + RowsField, stride: RowStride);
         return Enumerable.Range(0, rows.Count).Select(row =>
         {
-            var columns = reader.Array(rows.Data + row * RowStride, ColumnClass, 4);
-            return column.Column < columns.Count ? columns.Data + column.Column * 4
+            var columns = TagArray.Checked(config.Span, rows.Data + row * RowStride, ColumnClass, ColumnStride);
+            return column.Column < columns.Count ? columns.Data + column.Column * ColumnStride
                 : throw new InvalidDataException($"A translation row has no column for the {column.Name}.");
         }).ToArray();
     }

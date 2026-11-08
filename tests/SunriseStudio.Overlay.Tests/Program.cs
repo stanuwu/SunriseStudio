@@ -13,8 +13,8 @@ try
     using var catalog = PackageCatalog.Open(root);
     var installed = catalog.Entries.Single();
     const ushort overlayPackage = 0x1000;
-    const uint headerTag = 0x80800000U + (overlayPackage << 13);
-    const uint payloadTag = headerTag + 1;
+    uint headerTag = TagHashes.Make(overlayPackage, 0);
+    uint payloadTag = headerTag + 1;
     byte[] header = new byte[40];
     byte[] pixels = [255, 0, 0, 255, 0, 255, 0, 255];
     BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)pixels.Length);

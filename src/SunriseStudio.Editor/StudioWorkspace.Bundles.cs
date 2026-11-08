@@ -2,6 +2,7 @@ using System.Numerics;
 using SunriseStudio.Interchange;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
@@ -62,7 +63,7 @@ public sealed partial class StudioWorkspace
     {
         var decorators = new NativeDecorators(catalog)
         {
-            SceneMap = catalog.TryGetEntry(scene.TagHash, out var sceneEntry) && sceneEntry.Reference == 0x808091DE ? scene.TagHash : 0
+            SceneMap = catalog.TryGetEntry(scene.TagHash, out var sceneEntry) && sceneEntry.Reference == SMapRoot.Class ? scene.TagHash : 0
         };
         var maps = scene.OcclusionOwners.GroupBy(owner => owner.BubbleHash)
             .ToDictionary(group => group.Key, group => (IReadOnlySet<uint>)group.Select(owner => owner.MapTag).ToHashSet());
@@ -126,9 +127,9 @@ public sealed partial class StudioWorkspace
     {
         RequireIdle();
         if (Document is not { } document || Catalog is not { } catalog) return;
-        // Clips (class 0x80808F49) use the same names as the Animations tab.
+        // Clips use the same names as the Animations tab.
         var options = new AssetBundleExportOptions(document.OpenContext, Project, NameResolver: tag =>
-            catalog.TryGetEntry(tag, out var entry) && entry.Reference == 0x80808F49 ? ResolveClipName(tag) : ResolveName(tag))
+            catalog.TryGetEntry(tag, out var entry) && entry.Reference == SAnimationClip.Class ? ResolveClipName(tag) : ResolveName(tag))
         { Scene = EntityInputs(document.Scene) };
         if (document.Guardian is { } guardian) { ExportGuardianBundle(folder, document, guardian, catalog, options); return; }
         BeginWork("Exporting Blender asset", () =>

@@ -1,7 +1,9 @@
 using System.Numerics;
+using System.Runtime.InteropServices;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Interchange;
 
@@ -20,7 +22,7 @@ public static partial class AssetBundle
             || element.Format is not (NativeVertexFormat.R16G16Float or NativeVertexFormat.R32G32Float)) return null;
         try
         {
-            if (!catalog.TryGetEntry(mesh.MaterialTag, out var entry) || entry.Reference != 0x808071E8
+            if (!catalog.TryGetEntry(mesh.MaterialTag, out var entry) || entry.Reference != STechnique.Class
                 || reader.Read(mesh.MaterialTag).VertexShader is not { } shader
                 || !ShaderVaryings.WritesDetailUv(shader.Disassembly))
                 return null;
@@ -34,11 +36,14 @@ public static partial class AssetBundle
             if (offset + 8 > stream.Data.Length) return null;
             var span = stream.Data.AsSpan(offset);
             Vector2 scale = element.Format == NativeVertexFormat.R16G16Float
-                ? new((float)BitConverter.UInt16BitsToHalf(BitConverter.ToUInt16(span)), (float)BitConverter.UInt16BitsToHalf(BitConverter.ToUInt16(span[2..])))
-                : new(BitConverter.ToSingle(span), BitConverter.ToSingle(span[4..]));
+                ? new((float)MemoryMarshal.Read<HalfPair>(span).X, (float)MemoryMarshal.Read<HalfPair>(span).Y)
+                : MemoryMarshal.Read<Vector2>(span);
             var uv = mesh.Vertices[vertex].TexCoord * scale;
             uvs[vertex] = [uv.X, uv.Y];
         }
         return uvs;
     }
+
+    /** One R16G16_FLOAT vertex element. */
+    private readonly record struct HalfPair(Half X, Half Y);
 }

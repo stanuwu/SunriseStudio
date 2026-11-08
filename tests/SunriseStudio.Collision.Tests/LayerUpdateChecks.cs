@@ -6,6 +6,7 @@ using SunriseStudio.Authoring;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene.Collision;
+using SunriseStudio.Tags.Generated;
 using static Checks;
 
 /** The Leviathan collision layer after a change, updated in place, must equal a full reload of the same bytes. */
@@ -25,12 +26,12 @@ internal static class LayerUpdateChecks
         // A static instance edit moves its compound instance.
         var (table, row) = OwnRow(catalog);
         byte[] tableBytes = catalog.ReadOriginal(table);
-        var rows = new NativeRows(tableBytes);
-        int offset = rows.Rows(0x40, 0x808071A3, 48)[row];
-        var turn = Quaternion.Normalize(Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.7f) * rows.Rotation(offset));
+        int offset = TagRows.StaticInstances(tableBytes)[row];
+        var stored = TagRows.StaticInstance(tableBytes, offset);
+        var turn = Quaternion.Normalize(Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.7f) * ObjectRows.Rotation(stored.Rotation));
         var target = new ObjectEditTarget(table, ObjectEditLayout.StaticInstance, offset, 48, row, 0, BinaryDelta.Hash(tableBytes.AsSpan(offset, 48)));
         var staticEdit = new ObjectEdit(ObjectEditKind.PlacementTransform, target, "Layer check",
-            [rows.V3(offset + 0x10).X + 3, rows.V3(offset + 0x10).Y - 2, rows.V3(offset + 0x10).Z + 1], [turn.X, turn.Y, turn.Z, turn.W], 2.5f);
+            [stored.Translation.X + 3, stored.Translation.Y - 2, stored.Translation.Z + 1], [turn.X, turn.Y, turn.Z, turn.W], 2.5f);
         var staticAssets = ObjectEditCompiler.Default.Compile([staticEdit], catalog.ReadOriginal, catalog).Assets;
         string staticText = Compare(catalog, lists, baseline, staticAssets, "static-instance", expectMoved: true, expectShapes: 0);
 
@@ -55,7 +56,7 @@ internal static class LayerUpdateChecks
         string shapeText = Compare(catalog, lists, baseline, assets, "instance-and-shape", expectMoved: true, expectShapes: 1);
 
         // An object list edit of bytes the layer does not read changes nothing. Row +0x50 is not a placement field.
-        static bool Read(PlacedPayload p) => p.Marker is StaticCollisionReader.CollisionMarker or CollisionSceneLoader.ShapeArrayMarker;
+        static bool Read(PlacedPayload p) => p.Marker is SStaticCollisionPayload.Class or TriggerShapeReference.Class;
         uint list = lists.First(tag => StaticCollisionReader.PlacedPayloads(catalog.ReadOriginal(tag), tag).Any(Read));
         byte[] listBytes = catalog.ReadOriginal(list).ToArray();
         int other = StaticCollisionReader.PlacedPayloads(listBytes, list).First(Read).Row;
@@ -124,13 +125,12 @@ internal static class LayerUpdateChecks
         {
             var owners = index.TableOwners(table);
             if (owners.Count != 1) continue;
-            var list = new NativeRows(catalog.ReadOriginal(owners[0].ListTag));
-            var placement = new QsTransform(list.V3(owners[0].Row + 0x20), list.Q4(owners[0].Row + 0x10), new Vector3(list.F32(owners[0].Row + 0x2C)));
-            var data = new NativeRows(catalog.ReadOriginal(table));
-            int[] offsets = data.Rows(0x40, 0x808071A3, 48);
+            var placement = TagRows.Placement(catalog.ReadOriginal(owners[0].ListTag), owners[0].Row);
+            byte[] data = catalog.ReadOriginal(table);
+            int[] offsets = TagRows.StaticInstances(data);
             for (int i = 0; i < offsets.Length; i++)
             {
-                var row = new QsTransform(data.V3(offsets[i] + 0x10), data.Q4(offsets[i]), new Vector3(data.F32(offsets[i] + 0x1C)));
+                var row = TagRows.StaticInstance(data, offsets[i]);
                 try
                 {
                     var matches = index.Find(StaticCollisionRule.Compose(placement, row));

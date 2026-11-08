@@ -1,4 +1,7 @@
 using System.Numerics;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Animation;
 
@@ -23,7 +26,7 @@ public sealed partial class ModelSkinReader
     /** Reads declaration-18 cloth weights; every weighted bone must match a Havok inverse bind. */
     private IReadOnlyList<ModelSkinBinding> ReadCloth(ClothModelReference source, SkeletonRig rig)
     {
-        if (!catalog.TryGetEntry(source.ModelTag, out var entry) || entry.Reference != 0x808073A5)
+        if (!catalog.TryGetEntry(source.ModelTag, out var entry) || entry.Reference != SEntityModel.Class)
             throw new InvalidDataException("Cloth model has an unexpected class.");
         const uint declarationTag = 0x80B35E23;
         VerifyClothDeclaration(declarationTag, 0x80B35E21);
@@ -31,19 +34,21 @@ public sealed partial class ModelSkinReader
         byte[] model = catalog.Read(source.ModelTag);
         var result = new List<ModelSkinBinding>();
         int meshIndex = 0;
-        foreach (int mesh in Rows(model, 0x10, 0x80807378, 0x88))
+        foreach (ref readonly var row in AnimationControlReader.Rows<SEntityModel, SEntityModelMesh>(model, 0,
+                     nameof(SEntityModel.Meshes), SEntityModelMesh.Class, ReadMessages.Skin))
         {
-            uint positionTag = U32(model, mesh), weightTag = U32(model, mesh + 8);
+            uint positionTag = row.VertexBuffer0[0].Unk0, weightTag = row.VertexBuffer0[2].Unk0;
             var (positions, _, positionStride) = ClothBuffer(positionTag);
             var (weights, weightPayload, weightStride) = ClothBuffer(weightTag);
             if (positionStride != 48 || weightStride != 8 || positions.Length / 48 != weights.Length / 8)
                 throw new NotSupportedException("Cloth input buffers do not match declaration 18.");
             bool active = false;
-            for (int stage = 0; stage < 23; stage++)
+            ReadOnlySpan<ushort> boundaries = row.StageIndexBoundaries;
+            for (int stage = 0; stage < boundaries.Length - 1; stage++)
             {
-                if (U16(model, mesh + 0x28 + stage * 2) == U16(model, mesh + 0x2A + stage * 2)) continue;
+                if (boundaries[stage] == boundaries[stage + 1]) continue;
                 active = true;
-                if (I16(model, mesh + 0x58 + stage * 2) != 18)
+                if (row.StageVertexDeclaration[stage] != 18)
                     throw new NotSupportedException("Cloth stage uses another vertex declaration.");
             }
             if (!active) throw new NotSupportedException("Cloth mesh has no active declared stage.");
@@ -60,7 +65,7 @@ public sealed partial class ModelSkinReader
                 influences[i] = value;
             }
             result.Add(new(source.ModelTag, meshIndex++, positionTag, positionStride,
-                Array.AsReadOnly(Rows(model, mesh + 0x18, 0x8080737E, 0x20)), Array.AsReadOnly(influences))
+                Array.AsReadOnly(Parts(model, in row)), Array.AsReadOnly(influences))
             {
                 PaletteKind = SkinPaletteKind.ClothInput,
                 WeightHeaderTag = weightTag,
@@ -79,9 +84,10 @@ public sealed partial class ModelSkinReader
             || !catalog.TryGetEntry(headerEntry.Reference, out var payload) || payload.Type != 40 || payload.SubType != 4)
             throw new InvalidDataException("Cloth stream has an unexpected package type.");
         byte[] header = catalog.Read(tag), bytes = catalog.Read(payload.TagHash);
-        int stride = U16(header, 4);
-        if (stride == 0 || U32(header, 0) != bytes.Length || bytes.Length % stride != 0
-            || U32(header, 8) != 0xDEADBEEF)
+        int stride = HeaderWord<ushort>(header, nameof(VertexBufferHeader.Stride));
+        if (stride == 0 || HeaderWord<uint>(header, nameof(VertexBufferHeader.ByteCount)) != bytes.Length
+            || bytes.Length % stride != 0
+            || HeaderWord<uint>(header, nameof(VertexBufferHeader.End)) != VertexBufferHeader.EndValue)
             throw new InvalidDataException("Cloth stream size or marker is invalid.");
         return (bytes, payload.TagHash, stride);
     }
@@ -89,26 +95,37 @@ public sealed partial class ModelSkinReader
     /** Declaration 18 puts four UNORM weights and four UINT indices in slot 2. */
     private void VerifyClothDeclaration(uint declarationTag, uint poolTag)
     {
-        if (!catalog.TryGetEntry(declarationTag, out var declaration) || declaration.Reference != 0x808072A9
-            || !catalog.TryGetEntry(poolTag, out var poolEntry) || poolEntry.Reference != 0x808072AD)
+        if (!catalog.TryGetEntry(declarationTag, out var declaration) || declaration.Reference != SClothDeclaration.Class
+            || !catalog.TryGetEntry(poolTag, out var poolEntry) || poolEntry.Reference != SClothPool.Class)
             throw new InvalidDataException("Cloth declaration tables have unexpected classes.");
-        var table = new AnimationControlReader.Data(catalog.Read(declarationTag));
-        var pool = new AnimationControlReader.Data(catalog.Read(poolTag));
-        int[] rows = table.Rows(8, 0x808072AC, 28).Where(row => table.U16(row) == 18).ToArray();
-        if (rows.Length != 1) throw new NotSupportedException("Cloth declaration 18 is absent or duplicated.");
-        int row = rows[0];
-        var groups = pool.Rows(8, 0x808072AF, 16);
+        byte[] table = catalog.Read(declarationTag), pool = catalog.Read(poolTag);
+        var declarations = AnimationControlReader.Rows<SClothDeclaration, SVertexDeclarationRow>(table, 0,
+            nameof(SClothDeclaration.Declarations), SVertexDeclarationRow.Class);
+        int found = -1, matches = 0;
+        for (int i = 0; i < declarations.Length; i++)
+        {
+            if (declarations[i].DeclarationId != 18) continue;
+            found = i;
+            matches++;
+        }
+        if (matches != 1) throw new NotSupportedException("Cloth declaration 18 is absent or duplicated.");
+        ref readonly var declarationRow = ref declarations[found];
+        var groups = AnimationControlReader.Rows<SClothPool, SVertexStreamGroup>(pool, 0, nameof(SClothPool.StreamGroups),
+            SVertexStreamGroup.Class);
         byte[][] expected = [[0, 0, 4, 3, 0, 4, 6, 0, 4], [5, 0, 10], [1, 0, 5, 2, 0, 6]];
         for (int slot = 0; slot < 4; slot++)
         {
-            int group = unchecked((int)table.U32(row + 8 + slot * 4));
-            if (table.U8(row + 2 + slot) != 0 || (slot == 3 && group != -1))
+            int group = declarationRow.SlotStreamGroup[slot];
+            if (declarationRow.SlotInstanceFlags[slot] != 0 || (slot == 3 && group != -1))
                 throw new NotSupportedException("Cloth declaration has unsupported instance data.");
             if (slot == 3) continue;
             if ((uint)group >= groups.Length) throw new InvalidDataException("Cloth declaration stream group is absent.");
-            var elements = pool.Rows(groups[group], 0x808072B2, 3)
-                .SelectMany(offset => new[] { pool.U8(offset), pool.U8(offset + 1), pool.U8(offset + 2) }).ToArray();
-            if (!elements.SequenceEqual(expected[slot]))
+            var elements = AnimationControlReader.Rows<SVertexElement>(pool, TagView.OffsetOf(pool, in groups[group].Elements),
+                SVertexElement.Class);
+            var codes = new List<byte>(elements.Length * 3);
+            foreach (ref readonly var element in elements)
+                codes.AddRange([element.SemanticCode, element.SemanticIndex, element.FormatCode]);
+            if (!codes.SequenceEqual(expected[slot]))
                 throw new NotSupportedException("Cloth declaration format differs from the verified input layout.");
         }
     }

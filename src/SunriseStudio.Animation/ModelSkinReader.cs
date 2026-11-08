@@ -1,7 +1,7 @@
-using System.Buffers.Binary;
-using System.Diagnostics;
 using System.Numerics;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Animation;
 
@@ -40,21 +40,22 @@ public sealed partial class ModelSkinReader(PackageCatalog catalog)
     /** Reads the weights packed in each mesh's position stream: 8, 12 or 16 bytes per vertex. */
     private IReadOnlyList<ModelSkinBinding> ReadModel(uint modelTag, SkeletonRig rig)
     {
-        if (!catalog.TryGetEntry(modelTag, out var modelEntry) || modelEntry.Reference != 0x808073A5)
+        if (!catalog.TryGetEntry(modelTag, out var modelEntry) || modelEntry.Reference != SEntityModel.Class)
             throw new NotSupportedException("Skin input is not a build-86657 entity model.");
         byte[] model = catalog.Read(modelTag);
         var result = new List<ModelSkinBinding>();
         int meshIndex = 0;
-        foreach (int mesh in Rows(model, 0x10, 0x80807378, 0x88))
+        foreach (ref readonly var row in AnimationControlReader.Rows<SEntityModel, SEntityModelMesh>(model, 0,
+                     nameof(SEntityModel.Meshes), SEntityModelMesh.Class, ReadMessages.Skin))
         {
-            uint headerTag = U32(model, mesh);
+            uint headerTag = row.VertexBuffer0[0].Unk0;
             if (!catalog.TryGetEntry(headerTag, out var headerEntry)
                 || headerEntry.Type != 32 || headerEntry.SubType != 4)
                 throw new InvalidDataException("Skin position stream header has an unexpected package type.");
             byte[] header = catalog.Read(headerTag);
-            int size = checked((int)U32(header, 0));
-            int stride = U16(header, 4);
-            uint separateWeights = U32(model, mesh + 8);
+            int size = checked((int)HeaderWord<uint>(header, nameof(VertexBufferHeader.ByteCount)));
+            int stride = HeaderWord<ushort>(header, nameof(VertexBufferHeader.Stride));
+            uint separateWeights = row.VertexBuffer0[2].Unk0;
             if (separateWeights is not (0 or uint.MaxValue))
                 throw new NotSupportedException("Separate skin-weight streams are not decoded.");
             if (stride is not (8 or 12 or 16) || size == 0 || size % stride != 0)
@@ -64,21 +65,11 @@ public sealed partial class ModelSkinReader(PackageCatalog catalog)
             var weights = new VertexSkinWeights[size / stride];
             for (int i = 0; i < weights.Length; i++)
             {
-                int offset = i * stride;
-                weights[i] = stride switch
-                {
-                    8 => new VertexSkinWeights(I16(positions, offset + 6), 0, 0, 0, new Vector4(1, 0, 0, 0)),
-                    12 => new VertexSkinWeights(positions[offset + 8], positions[offset + 9], 0, 0,
-                        new Vector4(positions[offset + 10], positions[offset + 11], 0, 0) / 255f),
-                    16 => new VertexSkinWeights(positions[offset + 12], positions[offset + 13],
-                        positions[offset + 14], positions[offset + 15], new Vector4(positions[offset + 8],
-                            positions[offset + 9], positions[offset + 10], positions[offset + 11]) / 255f),
-                    _ => throw new UnreachableException()
-                };
+                weights[i] = SkinPositionStream.Weights(positions, i, stride);
                 Validate(weights[i], rig.Bones.Count);
             }
             result.Add(new ModelSkinBinding(modelTag, meshIndex++, headerTag, stride,
-                Array.AsReadOnly(Rows(model, mesh + 0x18, 0x8080737E, 0x20)), Array.AsReadOnly(weights)));
+                Array.AsReadOnly(Parts(model, in row)), Array.AsReadOnly(weights)));
         }
         return result.AsReadOnly();
     }
@@ -100,28 +91,12 @@ public sealed partial class ModelSkinReader(PackageCatalog catalog)
             throw new InvalidDataException("Packed skin weights do not sum to 255.");
     }
 
-    private static ReadOnlySpan<byte> Slice(byte[] data, int offset, int length)
-    {
-        if (offset < 0 || length < 0 || offset > data.Length - length)
-            throw new InvalidDataException("Skin range exceeds its tag.");
-        return data.AsSpan(offset, length);
-    }
-    private static uint U32(byte[] data, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(Slice(data, offset, 4));
-    private static ushort U16(byte[] data, int offset) => BinaryPrimitives.ReadUInt16LittleEndian(Slice(data, offset, 2));
-    private static short I16(byte[] data, int offset) => BinaryPrimitives.ReadInt16LittleEndian(Slice(data, offset, 2));
+    /** @return Offset of each part row of `mesh`, a mesh row read in place in `model`. */
+    private static int[] Parts(byte[] model, ref readonly SEntityModelMesh mesh) => TagView.RowOffsets(model,
+        AnimationControlReader.Rows<SEntityModelPart>(model, TagView.OffsetOf(model, in mesh.Parts),
+            SEntityModelPart.Class, ReadMessages.Skin));
 
-    /** Mesh and part arrays carry distinct element classes and fixed strides. */
-    private static int[] Rows(byte[] data, int field, uint expectedClass, int stride)
-    {
-        long count = BinaryPrimitives.ReadInt64LittleEndian(Slice(data, field, 8));
-        if (count < 0 || count > 1_000_000) throw new InvalidDataException("Invalid skin array count.");
-        if (count == 0) return [];
-        long relative = BinaryPrimitives.ReadInt64LittleEndian(Slice(data, field + 8, 8));
-        int header = checked((int)(field + 8L + relative));
-        if (U32(data, header - 4) != 0x80809FBD || U32(data, header + 8) != expectedClass)
-            throw new InvalidDataException("Skin array has an unexpected element class.");
-        int start = checked(header + 16);
-        _ = Slice(data, start, checked((int)count * stride));
-        return Enumerable.Range(0, (int)count).Select(i => start + i * stride).ToArray();
-    }
+    /** A vertex buffer header member; only its own bytes must be present. */
+    private static T HeaderWord<T>(byte[] header, string member) where T : unmanaged =>
+        AnimationControlReader.Member<VertexBufferHeader, T>(header, 0, member, ReadMessages.Skin);
 }

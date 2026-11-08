@@ -4,6 +4,7 @@ using SunriseStudio.Authoring;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 using static Checks;
 
 /** Decorator instance edits on a sabre canopy: payload 0x80FAA33A, instance 42. */
@@ -57,14 +58,13 @@ internal static class DecoratorChecks
         Check(worst < 0.01f, "Re-quantizing moved another instance by more than a centimetre.");
         Pairs(block, outside.Assets[tags.Buffer]);
         // The canopy shrinks toward its origin at the ground; its own cell box follows it down.
-        var cells = new NativeRows(outside.Assets[tags.Cells]);
-        var installedCells = new NativeRows(catalog.ReadOriginal(tags.Cells));
-        int box = cells.Rows(0x08, 0x80809673, 48)[Canopy], installedBox = installedCells.Rows(0x08, 0x80809673, 48)[Canopy];
-        Vector3 low = cells.V3(box), high = cells.V3(box + 16);
+        byte[] cells = outside.Assets[tags.Cells], installedCells = catalog.ReadOriginal(tags.Cells);
+        int box = TagRows.Boxes(cells)[Canopy], installedBox = TagRows.Boxes(installedCells)[Canopy];
+        var (low, high) = TagRows.Box(cells, box);
         Matrix4x4.Invert(Value(installed, installedQuant, Canopy).Transform, out var inverse);
-        var moved = InstanceBoundsRule.TransformBox(installedCells.V3(installedBox), installedCells.V3(installedBox + 16),
-            inverse * value.Transform);
-        Check(low == moved.Min && high == moved.Max && high.Z < installedCells.V3(installedBox + 16).Z,
+        var (installedLow, installedHigh) = TagRows.Box(installedCells, installedBox);
+        var moved = BoxBounds.Transform(installedLow, installedHigh, inverse * value.Transform);
+        Check(low == moved.Min && high == moved.Max && high.Z < installedHigh.Z,
             "The canopy's own cell box did not shrink with it.");
         Check(outside.Edits.Single().Tags.Order().SequenceEqual(new[] { tags.Quantization, tags.Buffer, tags.Block, tags.Cells, tags.Payload }
             .Where(tag => outside.Assets.ContainsKey(tag)).Order()), "The edit lists the wrong tags.");
@@ -125,7 +125,8 @@ internal static class DecoratorChecks
         };
     }
 
-    private static int[] Rows(byte[] block) => new NativeRows(block).Rows(0x08, DecoratorTags.RecordClass, DecoratorRecords.Size);
+    private static int[] Rows(byte[] block) =>
+        TagRows.Offsets<SDecoratorBlock, SDecoratorRecord>(block, nameof(SDecoratorBlock.Records), DecoratorTags.RecordClass);
 
     private static DecoratorInstance Value(byte[] block, DecoratorQuantization quant, int index) =>
         DecoratorRecords.Decode(block.AsSpan(Rows(block)[index], DecoratorRecords.Size), quant);

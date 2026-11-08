@@ -1,9 +1,14 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using SunriseStudio.Animation;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -26,16 +31,25 @@ public static class WeaponPresentationAuthoring
     public const int ReloadSlot = 113, FireSlot = 114;
     private const uint WeaponConfig = 0x8152C7C4, SelectorConfig = 0x8152C7C9;
     private const uint AnimationConfig = 0x8152C7CD, StateConfig = 0x8161FA61;
-    private sealed record Profile(uint Tag, uint Class, string Hash, int Pairs = 0);
+    /** @param Pairs The reciprocal owner pairs a config holds for itself. */
+    private sealed record Profile(uint Tag, uint Class, int Pairs = 0);
     private static readonly Profile[] Profiles =
     [
-        new(GameplayTemplate, 0x80809C0F, "E1D2D5F8CFFB29AF8F3C5824F7824B580ED135AB09262D79D12D10B461EAF455"),
-        new(WeaponConfig, 0x80809C36, "0318F1E3DEEE0CDF12D2967202A50E7CBA398C139BEB7322F4E32B016A1D4E22", 13),
-        new(PresentationTemplate, 0x80809C0F, "1D3145D3D34DDE9D3BCDEB7F4A6D1118EDA6DF386A263DC9FC273640E2226439"),
-        new(SelectorConfig, 0x80809C36, "4883C50B1E8E8BD1E236F9913630AACC8FCABA0CDE12F1EC552CA0654692A1A5", 1),
-        new(AnimationConfig, 0x80809C36, "046FB98B9A9A45C03AE0B2CEFEF764FB9151F05D49D69A5D458AED0EA59702D5", 21),
-        new(StateConfig, 0x80809C36, "BA253B06617AC0E020916BF06BCAFDA6FE21B85FDA310DF9AB27396CBB6C4AAD", 58),
-        new(DefinitionTemplate, 0x808036F6, "0B4C828F69FE6C98FF87F8A66E5C5ECF61636022568C43A6092E6CA8E5660C0A")
+        new(GameplayTemplate, SEntity.Class),
+        new(WeaponConfig, SEntityConfig.Class, 13),
+        new(PresentationTemplate, SEntity.Class),
+        new(SelectorConfig, SEntityConfig.Class, 1),
+        new(AnimationConfig, SEntityConfig.Class, 21),
+        new(StateConfig, SEntityConfig.Class, 58),
+        new(DefinitionTemplate, SAnimationDefinition.Class)
+    ];
+    // The weapon component's two bound methods: class handle, owner pointer, slot.
+    private static readonly (string Handle, string SlotWord, string Method, uint Slot)[] BoundMethods =
+    [
+        (nameof(UnknownWeaponPrimaryComponent.Unk30), nameof(UnknownWeaponPrimaryComponent.BoundMethodSlot0),
+            nameof(UnknownWeaponPrimaryComponent.Unk38), 8),
+        (nameof(UnknownWeaponPrimaryComponent.Unk60), nameof(UnknownWeaponPrimaryComponent.BoundMethodSlot2),
+            nameof(UnknownWeaponPrimaryComponent.Unk68), 9)
     ];
 
     /** New clip tags must use the source branch's 75-control group layout. */
@@ -48,12 +62,11 @@ public static class WeaponPresentationAuthoring
         if (additionalClips.Count > 64 || additionalClips.Select(clip => clip.Name).Distinct(StringComparer.Ordinal).Count() != additionalClips.Count)
             throw new InvalidDataException("Additional weapon clips need unique names and at most 64 entries.");
         var profiles = Profiles.ToList();
-        if (additionalClips.Count != 0) profiles.Add(new(QueryTemplate, 0x80803465,
-            "4CFB65B2F602BD76BAD818BA3D84329655F0EB52C6A0EDE364B6108C520DFFA4"));
+        if (additionalClips.Count != 0) profiles.Add(new(QueryTemplate, SAnimationQueryTable.Class));
         if (!PackageWriter.IsNewPackageId(packageId) || catalog.ContainsInstalledPackage(packageId)
-            || firstEntry < 0 || firstEntry > 8192 - profiles.Count)
+            || firstEntry < 0 || firstEntry > TagHashes.EntriesPerPackage - profiles.Count)
             throw new InvalidDataException("Weapon presentation needs an unused package entry for each cloned asset.");
-        uint Tag(int index) => checked(0x80800000u + ((uint)packageId << 13) + (uint)(firstEntry + index));
+        uint Tag(int index) => TagHashes.Make(packageId, firstEntry + index);
         var tags = profiles.Select((profile, index) => (profile.Tag, NewTag: Tag(index)))
             .ToDictionary(pair => pair.Tag, pair => pair.NewTag);
         if (tags.Values.Any(catalog.ContainsTag) || tags.Values.Contains(newReloadClipTag)
@@ -61,7 +74,7 @@ public static class WeaponPresentationAuthoring
             throw new InvalidDataException("Weapon presentation destinations overlap another asset.");
         foreach (uint clip in new[] { newReloadClipTag, newFireClipTag }.Concat(additionalClips.Select(clip => clip.ClipTag)))
         {
-            if (clip < 0x80800000 || clip == uint.MaxValue || tags.Values.Contains(clip))
+            if (!TagHashes.IsTag(clip) || clip == uint.MaxValue || tags.Values.Contains(clip))
                 throw new InvalidDataException("Weapon animation needs a native clip tag.");
             if (catalog.ContainsTag(clip)) ValidateClip(catalog, clip);
         }
@@ -73,50 +86,58 @@ public static class WeaponPresentationAuthoring
             if (!catalog.TryGetEntry(profile.Tag, out var entry) || entry.Reference != profile.Class)
                 throw new NotSupportedException("The checked weapon presentation profile is missing.");
             byte[] source = catalog.Read(profile.Tag);
-            string hash = Convert.ToHexString(SHA256.HashData(source));
-            if (hash != profile.Hash)
-                throw new NotSupportedException("Weapon presentation needs the unchanged checked source profile.");
-            bytes[profile.Tag] = (byte[])source.Clone(); hashes[profile.Tag] = hash;
+            if (profile.Class == SEntityConfig.Class && !TagView.Fits<SEntityConfig>(source, 0))
+                throw new InvalidDataException($"Presentation config {profile.Tag:X8} is shorter than a config.");
+            bytes[profile.Tag] = (byte[])source.Clone(); hashes[profile.Tag] = Convert.ToHexString(SHA256.HashData(source));
         }
         ValidateClip(catalog, 0x81A6B4F0); ValidateClip(catalog, 0x81A6B4F1);
-        foreach (var profile in Profiles.Where(profile => profile.Class == 0x80809C36))
+        foreach (var profile in Profiles.Where(profile => profile.Class == SEntityConfig.Class))
             RetagConfig(bytes[profile.Tag], profile.Tag, tags[profile.Tag], profile.Pairs);
         bytes[GameplayTemplate] = WeaponConfigEdits.RetagRoot(bytes[GameplayTemplate], WeaponConfig, tags[WeaponConfig]);
         foreach (uint config in new[] { SelectorConfig, AnimationConfig, StateConfig })
             bytes[PresentationTemplate] = WeaponConfigEdits.RetagRoot(bytes[PresentationTemplate], config, tags[config]);
         byte[] weapon = bytes[WeaponConfig];
-        int resource = Pointer(weapon, 24);
-        if (U32(weapon, resource - 4) != 0x80804221)
+        int resource = TagView.TargetOrSelf(weapon, in TagView.At<SEntityConfig>(weapon).Definition);
+        if (TagView.ClassAt(weapon, resource) != SWeaponResource.Class)
             throw new InvalidDataException("The weapon presentation resource changed class.");
-        int[] variants = NativeRows.Rows(weapon, resource + 1416, 0x80803E72, 232);
-        int[] selected = variants.Where(row => U32(weapon, row) == 0x44A0B334).ToArray();
-        if (selected.Length != 1)
+        ref var weaponResource = ref TagView.Edit<SWeaponResource>(weapon, resource);
+        var variants = EditRows(weapon, in weaponResource.PresentationRows, SWeaponVariantRow.Class);
+        int selected = -1, matches = 0;
+        for (int row = 0; row < variants.Length; row++)
+            if (variants[row].GearSelectorKey0x44a0b334Base == 0x44A0B334 && matches++ == 0) selected = row;
+        if (matches != 1)
             throw new InvalidDataException("The weapon presentation selector is missing or ambiguous.");
-        Replace(weapon, resource + 1184 + 120, PresentationTemplate, tags[PresentationTemplate]);
-        Replace(weapon, selected[0] + 120, PresentationTemplate, tags[PresentationTemplate]);
-        Replace(bytes[SelectorConfig], 0x818, DefinitionTemplate, tags[DefinitionTemplate]);
-        Replace(bytes[AnimationConfig], 0x150, DefinitionTemplate, tags[DefinitionTemplate]);
-        Replace(bytes[StateConfig], 0x3640, DefinitionTemplate, tags[DefinitionTemplate]);
+        Replace(ref weaponResource.HDe30eaea.FirstPersonPresentationEntity, PresentationTemplate, tags[PresentationTemplate]);
+        Replace(ref variants[selected].FirstPersonPresentationEntity, PresentationTemplate, tags[PresentationTemplate]);
+        Replace(ref ConfigWord<SAnimationStandSelector>(bytes[SelectorConfig], true, SAnimationStandSelector.Class,
+            nameof(SAnimationStandSelector.AnimationDefinition)), DefinitionTemplate, tags[DefinitionTemplate]);
+        Replace(ref ConfigWord<SAnimationComponent>(bytes[AnimationConfig], false, SAnimationComponent.Class,
+            $"{nameof(SAnimationComponent.H624f85f9)}.{nameof(C808036f7.AnimationDefinition)}"), DefinitionTemplate, tags[DefinitionTemplate]);
+        Replace(ref ConfigWord<C80803640>(bytes[StateConfig], true, C80803640.Class, nameof(C80803640.Unk108)),
+            DefinitionTemplate, tags[DefinitionTemplate]);
         byte[] definition = bytes[DefinitionTemplate];
-        int[] clips = NativeRows.Rows(definition, 8, 0x80808F48, 4);
+        var clips = EditRows(definition, in TagView.Edit<SAnimationDefinition>(definition).Animations, SAnimationClipSlot.Class);
         if (clips.Length != 116) throw new InvalidDataException("The weapon clip list changed.");
-        Replace(definition, clips[ReloadSlot], 0x81A6B4F0, newReloadClipTag);
-        Replace(definition, clips[FireSlot], 0x81A6B4F1, newFireClipTag);
+        Replace(ref clips[ReloadSlot].Clip, 0x81A6B4F0, newReloadClipTag);
+        Replace(ref clips[FireSlot].Clip, 0x81A6B4F1, newFireClipTag);
         var addedIndices = new Dictionary<string, int>();
         var addedHashes = new Dictionary<string, uint>();
         foreach (var clip in additionalClips)
         {
             if (string.IsNullOrWhiteSpace(clip.Name) || clip.FrameCount is < 1 or > short.MaxValue)
                 throw new InvalidDataException("A named weapon clip needs a name and a valid native frame count.");
-            uint hash = InvestmentItemClone.Fnv1(clip.Name);
-            int index = NativeRows.Rows(bytes[DefinitionTemplate], 8, 0x80808F48, 4).Length;
-            int nameIndex = NativeRows.Rows(bytes[DefinitionTemplate], 104, 0x80809002, 32).Length;
+            uint hash = StringBankWriter.Hash(clip.Name);
+            byte[] current = bytes[DefinitionTemplate];
+            ref readonly var currentDefinition = ref TagView.Checked<SAnimationDefinition>(current, 0);
+            int index = Rows(current, in currentDefinition.Animations, SAnimationClipSlot.Class).Length;
+            int nameIndex = Rows(current, in currentDefinition.MotionDefinitions, SAnimationNameRow.Class).Length;
             bytes[DefinitionTemplate] = AppendClip(bytes[DefinitionTemplate], clip, hash);
             bytes[QueryTemplate] = AppendQuery(bytes[QueryTemplate], hash, nameIndex);
             addedIndices.Add(clip.Name, index); addedHashes.Add(clip.Name, hash);
         }
         if (additionalClips.Count != 0)
-            Replace(bytes[SelectorConfig], 0x824, QueryTemplate, tags[QueryTemplate]);
+            Replace(ref ConfigWord<SAnimationStandSelector>(bytes[SelectorConfig], true, SAnimationStandSelector.Class,
+                nameof(SAnimationStandSelector.QueryTable)), QueryTemplate, tags[QueryTemplate]);
         var assets = profiles.Select((profile, index) =>
         {
             catalog.TryGetEntry(profile.Tag, out var entry);
@@ -135,53 +156,71 @@ public static class WeaponPresentationAuthoring
     /** A clip, its parallel entry and its named-state row are appended as one native definition. */
     private static byte[] AppendClip(byte[] definition, WeaponPresentationClip clip, uint nameHash)
     {
-        int[] clips = NativeRows.Rows(definition, 8, 0x80808F48, 4);
-        int[] mirrors = NativeRows.Rows(definition, 24, 0x80800007, 4);
-        int[] names = NativeRows.Rows(definition, 104, 0x80809002, 32);
-        if (clips.Length != mirrors.Length || clips.Length >= short.MaxValue
-            || names.Any(row => U32(definition, row + 16) == nameHash))
+        ref readonly var root = ref TagView.Checked<SAnimationDefinition>(definition, 0);
+        var clips = Rows(definition, in root.Animations, SAnimationClipSlot.Class);
+        var mirrors = Rows(definition, in root.ClipMirrorParallel0xffffffff, SI32Element.Class);
+        var names = Rows(definition, in root.MotionDefinitions, SAnimationNameRow.Class);
+        bool duplicate = false;
+        foreach (ref readonly var row in names) duplicate |= row.NameHash == nameHash;
+        if (clips.Length != mirrors.Length || clips.Length >= short.MaxValue || duplicate)
             throw new InvalidDataException("The named animation is duplicate or its clip arrays disagree.");
-        foreach (int row in names)
-            if (I64(definition, row) != 0 || I64(definition, row + 8) != 0)
+        foreach (ref readonly var row in names)
+            if (row.UndecodedLinkAMustBe0.Count != 0 || row.UndecodedLinkAMustBe0.Relative != 0)
                 throw new NotSupportedException("Animation name rows with undecoded links cannot grow.");
-        byte[] tag = new byte[4]; Put32(tag, 0, clip.ClipTag);
-        byte[] output = InvestmentItemClone.AppendRow(definition, 8, 4, tag);
-        Put32(tag, 0, uint.MaxValue);
-        output = InvestmentItemClone.AppendRow(output, 24, 4, tag);
-        byte[] label = new byte[32]; Put32(label, 16, nameHash);
-        BinaryPrimitives.WriteSingleLittleEndian(label.AsSpan(20), (clip.FrameCount - 1) / 30f);
-        BinaryPrimitives.WriteInt16LittleEndian(label.AsSpan(24), checked((short)clips.Length));
-        label[26] = 1;
-        return InvestmentItemClone.AppendRow(output, 104, 32, label);
+        int clipField = TagView.OffsetOf(definition, in root.Animations);
+        int mirrorField = TagView.OffsetOf(definition, in root.ClipMirrorParallel0xffffffff);
+        int nameField = TagView.OffsetOf(definition, in root.MotionDefinitions);
+        int clipCount = clips.Length;
+        byte[] slot = new byte[Unsafe.SizeOf<SAnimationClipSlot>()];
+        TagView.Edit<SAnimationClipSlot>(slot).Clip = clip.ClipTag;
+        byte[] output = InvestmentItemClone.AppendRow(definition, clipField, Unsafe.SizeOf<SAnimationClipSlot>(), slot);
+        byte[] mirror = new byte[Unsafe.SizeOf<SI32Element>()];
+        TagView.Edit<SI32Element>(mirror).Value = -1;
+        output = InvestmentItemClone.AppendRow(output, mirrorField, Unsafe.SizeOf<SI32Element>(), mirror);
+        byte[] label = new byte[Unsafe.SizeOf<SAnimationNameRow>()];
+        ref var name = ref TagView.Edit<SAnimationNameRow>(label);
+        name.NameHash = nameHash;
+        name.DurationSeconds = (clip.FrameCount - 1) / 30f;
+        name.ClipSlot = checked((short)clipCount);
+        name.Kind = 1;
+        return InvestmentItemClone.AppendRow(output, nameField, Unsafe.SizeOf<SAnimationNameRow>(), label);
     }
 
     /** New names resolve directly to their definition row; existing query branches keep their targets. */
     private static byte[] AppendQuery(byte[] query, uint nameHash, int definitionRow)
     {
-        if (nameHash is 0 or uint.MaxValue or InvestmentItemClone.EmptyStringHash)
+        if (nameHash is 0 or uint.MaxValue or StringHash.Empty)
             throw new InvalidDataException("Animation name hashes cannot be empty.");
-        int[] map = NativeRows.Rows(query, 8, 0x8080342E, 8);
-        int[] selectors = NativeRows.Rows(query, 24, 0x8080342F, 16);
+        ref readonly var table = ref TagView.Checked<SAnimationQueryTable>(query, 0);
+        var map = Rows(query, in table.Keys, SAnimationQueryKey.Class);
+        int selectors = Rows(query, in table.Queries, SAnimationQuery.Class).Length;
         for (int i = 0; i < map.Length; i++)
-            if (U32(query, map[i]) == nameHash || i > 0 && U32(query, map[i - 1]) >= U32(query, map[i]))
+            if (map[i].QueryNameHash == nameHash || i > 0 && map[i - 1].QueryNameHash >= map[i].QueryNameHash)
                 throw new InvalidDataException("Animation query names must be unique and sorted.");
-        int payload = checked((query.Length + 19) & ~15);
-        byte[] output = new byte[checked(payload + 48)]; query.CopyTo(output, 0);
-        Put32(output, payload - 4, 0x80803434);
-        Put64(output, payload, 1); Put64(output, payload + 8, 16);
-        Put32(output, payload + 20, 0x80809FBD); Put64(output, payload + 24, 1);
-        Put32(output, payload + 32, 0x80803439); Put32(output, payload + 40, checked((uint)definitionRow));
-        BinaryPrimitives.WriteSingleLittleEndian(output.AsSpan(payload + 44), 1);
-        Put64(output, 0, output.Length);
-        byte[] selector = new byte[16]; selector[0] = 1; Put64(selector, 8, payload - 8);
-        output = InvestmentItemClone.AppendRow(output, 24, 16, selector, [0], 0);
-        byte[] key = new byte[8]; Put32(key, 0, nameHash); Put32(key, 4, checked((uint)selectors.Length));
-        output = InvestmentItemClone.AppendRow(output, 8, 8, key);
-        int[] moved = NativeRows.Rows(output, 8, 0x8080342E, 8);
-        var sorted = moved.Select(row => (Name: U32(output, row), Index: U32(output, row + 4)))
-            .OrderBy(row => row.Name).ToArray();
-        for (int i = 0; i < moved.Length; i++)
-        { Put32(output, moved[i], sorted[i].Name); Put32(output, moved[i] + 4, sorted[i].Index); }
+        int keyField = TagView.OffsetOf(query, in table.Keys), queryField = TagView.OffsetOf(query, in table.Queries);
+        byte[] output = query;
+        int payload = TagRelocator.AppendObject(ref output, SAnimationSingleQuery.Class, Unsafe.SizeOf<SAnimationSingleQuery>());
+        // The one-row array follows the object directly, its header on the next 8-byte boundary.
+        int first = TagRelocator.AppendArray(ref output,
+            TagView.OffsetOf(output, in TagView.At<SAnimationSingleQuery>(output, payload).H506e8443.Rows), SAnimationQueryRow.Class, 1,
+            Unsafe.SizeOf<SAnimationQueryRow>(), sizeof(long));
+        ref var queryRow = ref TagView.Edit<SAnimationQueryRow>(output, first);
+        queryRow.NameRow = checked((uint)definitionRow);
+        queryRow.Weight = 1;
+        TagView.Edit<SAnimationQueryTable>(output).TagByteLength = (ulong)output.Length;
+        byte[] selector = new byte[Unsafe.SizeOf<SAnimationQuery>()];
+        TagView.Edit<SAnimationQuery>(selector).Kind = 1;
+        // The row is built as if at offset 0; AppendRow rebases its pointer.
+        TagView.SetTarget(selector, in TagView.At<SAnimationQuery>(selector).Target, payload);
+        output = InvestmentItemClone.AppendRow(output, queryField, Unsafe.SizeOf<SAnimationQuery>(), selector, [0], 0);
+        byte[] key = new byte[Unsafe.SizeOf<SAnimationQueryKey>()];
+        ref var keyRow = ref TagView.Edit<SAnimationQueryKey>(key);
+        keyRow.QueryNameHash = nameHash;
+        keyRow.QueryIndex = checked((uint)selectors);
+        output = InvestmentItemClone.AppendRow(output, keyField, Unsafe.SizeOf<SAnimationQueryKey>(), key);
+        var moved = EditRows(output, in TagView.Edit<SAnimationQueryTable>(output).Keys, SAnimationQueryKey.Class);
+        var sorted = moved.ToArray().OrderBy(row => row.QueryNameHash).ToArray();
+        sorted.CopyTo(moved);
         return output;
     }
 
@@ -202,14 +241,17 @@ public static class WeaponPresentationAuthoring
         ValidateClip(catalog, clipTag);
         var clip = new AnimationControlReader(catalog).Read(clipTag);
         byte[] output = current.ToArray();
-        int[] clips = NativeRows.Rows(output, 8, 0x80808F48, 4);
-        int[] names = NativeRows.Rows(output, 104, 0x80809002, 32);
+        if (!TagView.FitsThrough<SAnimationDefinition>(output, 0, nameof(SAnimationDefinition.MotionDefinitions)))
+            throw new InvalidDataException("The animation definition is truncated.");
+        var clips = EditRows(output, in TagView.At<TagArray<SAnimationClipSlot>>(output,
+            TagView.FieldOffset<SAnimationDefinition>(nameof(SAnimationDefinition.Animations))), SAnimationClipSlot.Class);
+        var names = EditRows(output, in TagView.At<TagArray<SAnimationNameRow>>(output,
+            TagView.FieldOffset<SAnimationDefinition>(nameof(SAnimationDefinition.MotionDefinitions))), SAnimationNameRow.Class);
         if (slot < 0 || slot >= clips.Length)
             throw new InvalidDataException("The animation slot is outside this definition.");
-        Put32(output, clips[slot], clipTag);
-        foreach (int row in names)
-            if (BinaryPrimitives.ReadInt16LittleEndian(output.AsSpan(row + 24)) == slot)
-                BinaryPrimitives.WriteSingleLittleEndian(output.AsSpan(row + 20), clip.DurationSeconds);
+        clips[slot].Clip = clipTag;
+        foreach (ref var row in names)
+            if (row.ClipSlot == slot) row.DurationSeconds = clip.DurationSeconds;
         return output;
     }
 
@@ -218,42 +260,71 @@ public static class WeaponPresentationAuthoring
     {
         var owners = new HashSet<int>();
         int pairs = 0;
-        for (int at = 0; at + 16 <= bytes.Length; at += 4)
+        for (int at = 0; at + Unsafe.SizeOf<TagOffsetPointer>() <= bytes.Length; at += 4)
         {
-            if (U32(bytes, at) != source) continue;
-            long peerLong = I64(bytes, at + 8);
-            uint peerClass = U32(bytes, at + 4);
-            if (peerLong < 0 || peerLong > bytes.Length - 16 || peerClass < 0x80800000 || peerClass >= 0x84000000) continue;
+            if (TagRead.U32(bytes, at) != source) continue;
+            var owner = TagOffsetPointer.Read(bytes, at);
+            long peerLong = owner.Offset;
+            uint peerClass = owner.Word;
+            if (peerLong < 0 || peerLong > bytes.Length - Unsafe.SizeOf<TagOffsetPointer>() || peerClass < 0x80800000 || peerClass >= 0x84000000) continue;
             int peer = checked((int)peerLong);
-            if (U32(bytes, peer) != source || I64(bytes, peer + 8) != at) continue;
+            var back = TagOffsetPointer.Read(bytes, peer);
+            if (back.Tag != source || back.Offset != at) continue;
             owners.Add(at); owners.Add(peer);
             if (at < peer) pairs++;
         }
         if (pairs != pairCount) throw new InvalidDataException("A presentation owner pair changed.");
         if (source == WeaponConfig)
-            foreach (var (at, slot) in new[] { (0xB0, 8u), (0xE0, 9u) })
+        {
+            int component = TagView.TargetOrSelf(bytes, in TagView.At<SEntityConfig>(bytes).DefaultInstance);
+            foreach (var (handle, slotWord, method, slot) in BoundMethods)
             {
-                if (U32(bytes, at) != 0x80803E70 || U32(bytes, at + 4) != slot
-                    || U32(bytes, at + 8) != source || U32(bytes, at + 12) != 0x80803E70
-                    || I64(bytes, at + 16) != 0x80)
+                if (new[] { handle, slotWord, method }.Any(member => !TagView.FitsThrough<UnknownWeaponPrimaryComponent>(bytes, component, member)))
+                    throw new InvalidDataException("A weapon bound-method field runs past the weapon config.");
+                int at = component + TagView.FieldOffset<UnknownWeaponPrimaryComponent>(handle);
+                ref readonly var owner = ref TagView.At<TagOffsetPointer>(bytes,
+                    component + TagView.FieldOffset<UnknownWeaponPrimaryComponent>(method));
+                if (TagRead.U32(bytes, at) != UnknownWeaponPrimaryComponent.Class
+                    || TagRead.U32(bytes, component + TagView.FieldOffset<UnknownWeaponPrimaryComponent>(slotWord)) != slot
+                    || owner.Tag != source || owner.Word != UnknownWeaponPrimaryComponent.Class || owner.Offset != component)
                     throw new InvalidDataException("A weapon bound-method owner changed.");
-                owners.Add(at + 8);
+                owners.Add(TagView.OffsetOf(bytes, in owner));
             }
+        }
         for (int at = 0; at + 4 <= bytes.Length; at += 4)
-            if (U32(bytes, at) == source && !owners.Contains(at))
+            if (TagRead.U32(bytes, at) == source && !owners.Contains(at))
                 throw new NotSupportedException("An unclassified presentation owner cannot be cloned.");
         foreach (int at in owners) Put32(bytes, at, destination);
     }
 
-    private static void Replace(byte[] bytes, int at, uint expected, uint replacement)
+    /**
+     * A u32 member of the object a config's root pointer names, viewed alone and writable.
+     * @param definition True follows SEntityConfig.Definition, false SEntityConfig.DefaultInstance.
+     * @param classId The class the object must have; another class throws.
+     */
+    private static ref uint ConfigWord<T>(byte[] config, bool definition, uint classId, string member) where T : unmanaged
     {
-        if (U32(bytes, at) != expected) throw new InvalidDataException("A presentation reference changed.");
-        Put32(bytes, at, replacement);
+        ref readonly var root = ref TagView.At<SEntityConfig>(config);
+        int target = definition ? TagView.TargetOrSelf(config, in root.Definition) : TagView.TargetOrSelf(config, in root.DefaultInstance);
+        if (TagView.ClassAt(config, target) != classId) throw new InvalidDataException("A presentation reference changed.");
+        return ref TagView.Edit<uint>(config, target + TagView.FieldOffset<T>(member));
     }
 
-    private static int Pointer(byte[] bytes, int field) => checked(field + (int)I64(bytes, field));
-    private static uint U32(byte[] bytes, int at) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
-    private static long I64(byte[] bytes, int at) => BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(at));
+    private static void Replace(ref uint field, uint expected, uint replacement)
+    {
+        if (field != expected) throw new InvalidDataException("A presentation reference changed.");
+        field = replacement;
+    }
+
+    private static ReadOnlySpan<T> Rows<T>(byte[] bytes, ref readonly TagArray<T> array, uint elementClass) where T : unmanaged =>
+        TagView.CheckedRows(bytes, in array, elementClass, TagArray.MaximumReaderRows);
+
+    /** Checked rows of an array field read from `bytes`, writable. */
+    private static Span<T> EditRows<T>(byte[] bytes, ref readonly TagArray<T> array, uint elementClass) where T : unmanaged
+    {
+        var rows = Rows(bytes, in array, elementClass);
+        return rows.IsEmpty ? [] : MemoryMarshal.CreateSpan(ref Unsafe.AsRef(in rows[0]), rows.Length);
+    }
+
     private static void Put32(byte[] bytes, int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), value);
-    private static void Put64(byte[] bytes, int at, long value) => BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at), value);
 }

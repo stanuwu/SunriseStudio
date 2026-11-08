@@ -1,10 +1,11 @@
-using System.Buffers.Binary;
 using System.Numerics;
 using SunriseStudio.Animation;
 using SunriseStudio.Live;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
@@ -60,9 +61,8 @@ public sealed class LivePoseModelBinding
                 if (skin is null || skin.PaletteKind != SkinPaletteKind.Skeleton
                     || mesh.SourceVertexIndices.Length != mesh.Vertices.Length)
                     throw new NotSupportedException("A selected model part has no verified skeleton weight stream.");
-                if (mesh.Native is not { Kind: NativeMeshKind.Entity } native || native.SourceHeader.Length < 0x80
-                    || HeaderVector(native.SourceHeader, 0x60) != pose.FixedRows[0]
-                    || HeaderVector(native.SourceHeader, 0x70) != pose.FixedRows[1])
+                if (mesh.Native is not { Kind: NativeMeshKind.Entity } native || ModelRows(native.SourceHeader) is not { } model
+                    || model.Position != pose.FixedRows[0] || model.Uv != pose.FixedRows[1])
                     throw new NotSupportedException("Captured model constants differ from the loaded geometry.");
                 var vertices = new RenderVertex[mesh.Vertices.Length];
                 var minimum = new Vector3(float.PositiveInfinity); var maximum = new Vector3(float.NegativeInfinity);
@@ -128,9 +128,16 @@ public sealed class LivePoseModelBinding
             + 2 * (rotation.W * d - dual.W * q + Vector3.Cross(q, d));
     }
 
-    private static Vector4 HeaderVector(byte[] bytes, int offset) => new(
-        BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset)), BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset + 4)),
-        BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset + 8)), BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset + 12)));
+    /** The model's position offset and UV transform rows, as a draw's fixed rows 0 and 1; null when the header ends first. */
+    internal static (Vector4 Position, Vector4 Uv)? ModelRows(byte[] header)
+    {
+        if (!TagView.FitsThrough<SEntityModel>(header, 0, nameof(SEntityModel.UvOffsetV))) return null;
+        return (new(Member<Vector3>(header, nameof(SEntityModel.PositionOffset)), Member<float>(header, nameof(SEntityModel.PositionScaleW))),
+            new(Member<float>(header, nameof(SEntityModel.UvScaleU)), Member<float>(header, nameof(SEntityModel.UvScaleV)),
+                Member<float>(header, nameof(SEntityModel.UvOffsetU)), Member<float>(header, nameof(SEntityModel.UvOffsetV))));
+
+        static T Member<T>(byte[] header, string name) where T : unmanaged => TagView.At<T>(header, TagView.FieldOffset<SEntityModel>(name));
+    }
 
     private static void RebuildNormals(RenderVertex[] vertices, uint[] indices)
     {

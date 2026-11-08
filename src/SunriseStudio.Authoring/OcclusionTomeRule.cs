@@ -2,6 +2,7 @@ using System.Numerics;
 using SunriseStudio.Formats;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Authoring;
 
@@ -11,8 +12,6 @@ namespace SunriseStudio.Authoring;
  */
 internal sealed class OcclusionTomeRule : IObjectEditRule
 {
-    private const uint MapRootClass = 0x808091DE, BubbleClass = 0x80807DAE, ContainerClass = 0x80808A54,
-        ListClass = 0x808099D6, OwnerClass = 0x80806EF4, StaticClass = 0x808071A7, VisibilityMapClass = 0x80807320;
     // Blocked shares of installed meshes cluster near 0 and near 1; the middle splits them.
     private const double OccluderShare = 0.5;
     // World margin around the moved meshes; it covers two voxels of the coarsest tome.
@@ -21,6 +20,9 @@ internal sealed class OcclusionTomeRule : IObjectEditRule
     public ObjectEditLayout Layout => ObjectEditLayout.StaticInstance;
 
     public bool BuildOnly => true;
+
+    /** A removed row only opens its old place. */
+    public IReadOnlyCollection<ObjectEditKind> Kinds => [ObjectEditKind.PlacementTransform, ObjectEditKind.RemoveInstance];
 
     /** One edited row through one placement, at its installed and its edited pose. */
     private sealed record Moved(ObjectEdit Edit, BubbleGraph.Placement Placement, Vector3[] Removed, Vector3[] Added);
@@ -54,17 +56,26 @@ internal sealed class OcclusionTomeRule : IObjectEditRule
             var moved = new List<Moved>();
             foreach (var edit in edits)
                 foreach (var placement in scope.Placements.Where(placement => placement.Table == edit.Target.SourceTag))
-                    if (Move(context, edit, placement, meshes, models) is { } item) moved.Add(item);
+                    if (Move(context, graph.Tags, edit, placement, meshes, models) is { } item) moved.Add(item);
             if (moved.Count == 0) continue;
             var region = Bounds(moved.SelectMany(item => item.Removed.Concat(item.Added)));
             region = (region.Min - new Vector3(Margin), region.Max + new Vector3(Margin));
             var kept = Kept(context, bubble, region, editedRows, meshes);
             foreach (uint map in scope.Maps.Order())
             {
-                var data = new NativeRows(context.ReadLayer(map));
-                // The id map names its fine tome at +0x08 and its coarse tome at +0x0C.
-                foreach (uint tome in new[] { data.U32(0x08), data.U32(0x0C) })
+                byte[] data = graph.Tags.Read(map);
+                foreach (uint tome in new[]
+                         {
+                             ObjectRows.Field<SVisibilityTomeMap, uint>(data, 0, nameof(SVisibilityTomeMap.FineTome)),
+                             ObjectRows.Field<SVisibilityTomeMap, uint>(data, 0, nameof(SVisibilityTomeMap.CoarseTome))
+                         })
                 {
+                    // An object edit cannot rewrite a project entry; the project's own tome is its to rebake.
+                    if (graph.Tags.IsAdded(tome))
+                    {
+                        context.Note($"Occlusion tome {tome:X8} belongs to this project and was left unchanged.");
+                        continue;
+                    }
                     if (!context.Catalog.TryGetEntry(tome, out _)) continue;
                     if (!tomes.TryGetValue(tome, out var work)) tomes[tome] = work = new TomeWork();
                     work.Add(bubble, moved, kept);
@@ -88,7 +99,7 @@ internal sealed class OcclusionTomeRule : IObjectEditRule
             foreach (var item in work.Moved)
             {
                 edit.Removed.Add(item.Removed);
-                if (TomeEditor.BlockedShare(tome, item.Removed, work.Kept) >= OccluderShare) edit.Added.Add(item.Added);
+                if (item.Added.Length != 0 && TomeEditor.BlockedShare(tome, item.Removed, work.Kept) >= OccluderShare) edit.Added.Add(item.Added);
             }
             TomeEditor.Apply(tome, edit);
             byte[] written = TomeWriter.Write(tome);
@@ -103,37 +114,50 @@ internal sealed class OcclusionTomeRule : IObjectEditRule
     }
 
     /** The row's mesh at its installed pose and at its edited pose, through one placement of its table. */
-    private static Moved? Move(ObjectEditContext context, ObjectEdit edit, BubbleGraph.Placement placement,
+    private static Moved? Move(ObjectEditContext context, IsolationTags tags, ObjectEdit edit, BubbleGraph.Placement placement,
         Dictionary<uint, MeshData[]> meshes, Dictionary<uint, Vector3[]> models)
     {
         uint table = edit.Target.SourceTag;
         int index = edit.Target.Index;
-        var original = new NativeRows(context.Original(table));
-        var current = new NativeRows(context.Current(table));
-        int[] originalRows = original.Rows(0x40, 0x808071A3, 48), rows = current.Rows(0x40, 0x808071A3, 48);
+        byte[] original = context.Original(table), current = context.Current(table);
+        var originalRows = ObjectRows.Rows<SStaticMeshInstances, SStaticInstanceTransform>(original, 0, "Instances.Transforms",
+            SStaticInstanceTransform.Class);
+        var rows = ObjectRows.Rows<SStaticMeshInstances, SStaticInstanceTransform>(current, 0, "Instances.Transforms",
+            SStaticInstanceTransform.Class);
         if ((uint)index >= originalRows.Length || rows.Length != originalRows.Length)
             throw new InvalidDataException("The edited instance row is missing.");
-        if (Resource(current, index) is not { } resource || context.ClassOf(resource) != StaticClass) return null;
-        var originalList = new NativeRows(context.Original(placement.List));
-        var currentList = new NativeRows(context.ReadLayer(placement.List));
-        int[] listRows = originalList.Rows(8, 0x808099D8, 144);
+        if (Resource(current, index) is not { } resource || context.ClassOf(resource) != SStaticMesh.Class) return null;
+        // A project list has no installed original; object edits never change it.
+        byte[] originalList = tags.IsAdded(placement.List) ? tags.Read(placement.List) : context.Original(placement.List),
+            currentList = tags.Read(placement.List);
+        var listRows = ObjectRows.Rows<SMapPlacements, AuthoredPlacementEntry>(originalList, 0, nameof(SMapPlacements.Placements),
+            AuthoredPlacementEntry.Class);
         if ((uint)placement.Index >= listRows.Length) throw new InvalidDataException("The static placement row is missing.");
-        // The placement row holds its QTS at +0x10; it applies after the instance row's.
-        var before = Matrix(original, originalRows[index]) * Matrix(originalList, listRows[placement.Index] + 0x10);
-        var after = Matrix(current, rows[index]) * Matrix(currentList, placement.Row + 0x10);
-        if (before == after) return null;
+        // The placement row's transform applies after the instance row's.
+        var before = Matrix(originalRows[index].Scale, originalRows[index].Rotation, originalRows[index].Position)
+            * Matrix(listRows[placement.Index].UniformScale, listRows[placement.Index].Rotation, listRows[placement.Index].Position);
+        // The current list row is not checked against its array, so each field is checked alone.
+        int row = placement.Row;
+        var after = Matrix(rows[index].Scale, rows[index].Rotation, rows[index].Position)
+            * Matrix(ObjectRows.Field<AuthoredPlacementEntry, float>(currentList, row, nameof(AuthoredPlacementEntry.UniformScale)),
+                ObjectRows.Field<AuthoredPlacementEntry, Quaternion>(currentList, row, nameof(AuthoredPlacementEntry.Rotation)),
+                ObjectRows.Field<AuthoredPlacementEntry, Vector3>(currentList, row, nameof(AuthoredPlacementEntry.Position)));
+        bool removed = edit.Kind == ObjectEditKind.RemoveInstance;
+        if (before == after && !removed) return null;
         var model = Model(context, resource, meshes, models);
-        return model.Length == 0 ? null : new(edit, placement, Transform(model, before), Transform(model, after));
+        return model.Length == 0 ? null : new(edit, placement, Transform(model, before), removed ? [] : Transform(model, after));
     }
 
     /** The static resource that draws one row, from the table's ranges. */
-    private static uint? Resource(NativeRows table, int index)
+    private static uint? Resource(byte[] table, int index)
     {
-        int[] resources = table.Rows(0x58, 0x8080967D, 4);
-        foreach (int range in table.Rows(0x68, 0x80807190, 8))
+        var resources = ObjectRows.Rows<SStaticMeshInstances, SStaticInstanceResource>(table, 0, "Instances.Resources",
+            SStaticInstanceResource.Class);
+        foreach (ref readonly var range in ObjectRows.Rows<SStaticMeshInstances, SStaticMeshInstanceGroup>(table, 0, "Instances.Ranges",
+                     SStaticMeshInstanceGroup.Class))
         {
-            int count = table.U16(range), first = table.U16(range + 2), resource = table.U16(range + 4);
-            if (index >= first && index < first + count && resource < resources.Length) return table.U32(resources[resource]);
+            int count = range.Count, first = range.FirstInstance, resource = range.ResourceIndex;
+            if (index >= first && index < first + count && resource < resources.Length) return resources[resource].StaticMesh;
         }
         return null;
     }
@@ -184,9 +208,9 @@ internal sealed class OcclusionTomeRule : IObjectEditRule
         model.Select(point => Vector3.Transform(point, transform)).ToArray();
 
     /** Scale, then the normalized rotation, then the translation, as the scene decoder builds a placement. */
-    private static Matrix4x4 Matrix(NativeRows data, int offset) =>
-        Matrix4x4.CreateScale(data.F32(offset + 28)) * Matrix4x4.CreateFromQuaternion(data.Rotation(offset))
-            * Matrix4x4.CreateTranslation(data.V3(offset + 16));
+    private static Matrix4x4 Matrix(float scale, Quaternion rotation, Vector3 translation) =>
+        Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(ObjectRows.Rotation(rotation))
+            * Matrix4x4.CreateTranslation(translation);
 
     private static (Vector3 Min, Vector3 Max) Bounds(IEnumerable<Vector3> points)
     {
@@ -215,8 +239,10 @@ internal sealed class OcclusionTomeRule : IObjectEditRule
         {
             this.context = context;
             sources = new InstanceIsolationSources(context);
-            foreach (var root in sources.OfClass(MapRootClass)) Visit(root.Tag, 0, 0);
+            foreach (var root in sources.OfClass(SMapRoot.Class)) Visit(root.Tag, 0, 0);
         }
+
+        internal IsolationTags Tags => sources.Tags;
 
         private void Visit(uint tag, uint bubble, int depth)
         {
@@ -226,21 +252,21 @@ internal sealed class OcclusionTomeRule : IObjectEditRule
             if (!node.Valid) return;
             switch (node.Class)
             {
-                case MapRootClass:
+                case SMapRoot.Class:
                     foreach (var child in node.Children)
-                        if (child.Resolve(context.Catalog) is { } resolved) Visit(resolved, 0, depth + 1);
+                        if (child.Resolve(sources.Tags) is { } resolved) Visit(resolved, 0, depth + 1);
                     break;
-                case BubbleClass:
+                case SBubbleParent.Class:
                     Visit(node.Link, tag, depth + 1);
                     break;
-                case 0x808091E0 or 0x8080925E:
+                case SBubbleDefinition.Class or SScenarioTagSet.Class:
                     foreach (var child in node.Children)
-                        if (child.Resolve(context.Catalog) is { } resolved) Visit(resolved, bubble, depth + 1);
+                        if (child.Resolve(sources.Tags) is { } resolved) Visit(resolved, bubble, depth + 1);
                     break;
-                case 0x8080925B:
+                case SScenarioStateEntry.Class:
                     Visit(node.Link, bubble, depth + 1);
                     break;
-                case ContainerClass when bubble != 0:
+                case SMapContainer.Class when bubble != 0:
                     foreach (var child in node.Children) AddList(child.Tag, bubble);
                     break;
             }
@@ -248,14 +274,14 @@ internal sealed class OcclusionTomeRule : IObjectEditRule
 
         private void AddList(uint tag, uint bubble)
         {
-            if (!context.Catalog.TryGetEntry(tag, out var entry) || entry.Reference != ListClass || !lists.Add((tag, bubble))) return;
+            if (sources.Tags.ClassOf(tag) != SMapPlacements.Class || !lists.Add((tag, bubble))) return;
             var list = sources.Read(tag);
             if (!list.Valid) return;
             if (!Bubbles.TryGetValue(bubble, out var scope)) Bubbles[bubble] = scope = new Scope();
             foreach (uint map in list.Maps)
-                if (context.Catalog.TryGetEntry(map, out var mapEntry) && mapEntry.Reference == VisibilityMapClass) scope.Maps.Add(map);
+                if (sources.Tags.ClassOf(map) == SVisibilityTomeMap.Class) scope.Maps.Add(map);
             foreach (var placement in list.Placements)
-                if (sources.Read(placement.Owner) is { Valid: true, Class: OwnerClass } owner)
+                if (sources.Read(placement.Owner) is { Valid: true, Class: SMapResourceLink.Class } owner)
                     scope.Placements.Add(new(placement.List, placement.Row, placement.Index, owner.Link));
         }
     }

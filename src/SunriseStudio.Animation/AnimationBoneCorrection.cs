@@ -1,5 +1,7 @@
 using System.Numerics;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Animation;
 
@@ -35,40 +37,44 @@ internal sealed record AnimationBoneCorrection(int Target, int Parent, int Sourc
         var result = new List<AnimationBoneCorrection>();
         foreach (uint tag in owners)
         {
-            var data = new AnimationControlReader.Data(catalog.Read(tag));
-            int resource = data.Pointer(0x18);
-            if (data.U32(resource - 4) != 0x808036CF)
+            byte[] bytes = catalog.Read(tag);
+            ref readonly var definition = ref AnimationControlReader.Member<SEntityConfig, RelativePointer<Unknown>>(
+                bytes, 0, nameof(SEntityConfig.Definition));
+            if (TagView.TargetOffset(bytes, in definition) is not { } resource
+                || AnimationControlReader.ClassBefore(bytes, resource) != SAnimationCorrectionOwnerResource.Class)
                 throw new NotSupportedException("Animation component has an unsupported bone-correction owner.");
-            foreach (int row in data.Rows(resource + 0x208, 0x808096FF, 256))
+            foreach (ref readonly var row in AnimationControlReader.Rows<SAnimationBoneCorrection>(bytes,
+                resource + TagView.FieldOffset<SAnimationCorrectionOwnerResource>(nameof(SAnimationCorrectionOwnerResource.BoneCorrections)), SAnimationBoneCorrection.Class))
             {
-                if (data.U8(row) != 0)
+                if (row.CorrectionType != 0)
                     throw new NotSupportedException("Animation bone-correction type is not decoded.");
-                int target = data.U16(row + 2), parent = data.U16(row + 4);
-                int source = data.U16(row + 6), reference = data.U16(row + 8);
+                int target = row.TargetBone, parent = row.ParentBone;
+                int source = row.SourceBone, reference = row.ReferenceBone;
                 if (new[] { target, parent, source, reference }.Any(index => index >= boneCount))
                     throw new InvalidDataException("Bone correction refers outside its skeleton.");
-                var local = new BoneTransform(Q(data, row + 16), V3(data, row + 32), data.F32(row + 44));
+                var local = new BoneTransform(Q(row.LocalRotation), V3(row.LocalTranslation),
+                    AnimationControlReader.Finite(row.LocalScale));
                 SkeletonReader.CheckTransform(local);
-                float weight = data.F32(row + 12);
-                Vector3 axis = V3(data, row + 144);
+                float weight = AnimationControlReader.Finite(row.Weight);
+                Vector3 axis = V3(row.TwistAxis);
                 if (!float.IsFinite(weight) || weight < 0 || weight > 1
                     || !float.IsFinite(axis.LengthSquared()) || axis.LengthSquared() < 1e-8f)
                     throw new InvalidDataException("Bone correction has invalid axis or weight.");
                 result.Add(new(target, parent, source, reference, weight, local,
-                    Q(data, row + 48), Q(data, row + 80), Q(data, row + 112), axis));
+                    Q(row.FirstRotation), Q(row.SecondRotation), Q(row.ReferenceRotation), axis));
             }
         }
         return result.ToArray();
     }
 
-    private static Quaternion Q(AnimationControlReader.Data data, int offset)
+    private static Quaternion Q(Quaternion stored)
     {
-        var value = new Quaternion(data.F32(offset), data.F32(offset + 4),
-            data.F32(offset + 8), data.F32(offset + 12));
+        var value = new Quaternion(AnimationControlReader.Finite(stored.X), AnimationControlReader.Finite(stored.Y),
+            AnimationControlReader.Finite(stored.Z), AnimationControlReader.Finite(stored.W));
         SkeletonReader.CheckTransform(new(value, Vector3.Zero, 1));
         return Quaternion.Normalize(value);
     }
 
-    private static Vector3 V3(AnimationControlReader.Data data, int offset) => new(
-        data.F32(offset), data.F32(offset + 4), data.F32(offset + 8));
+    private static Vector3 V3(Vector3 stored) => new(
+        AnimationControlReader.Finite(stored.X), AnimationControlReader.Finite(stored.Y), AnimationControlReader.Finite(stored.Z));
 }

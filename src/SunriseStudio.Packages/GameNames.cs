@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Packages;
 
@@ -11,8 +13,8 @@ public sealed record ScenarioNames(uint Tag, string? DevName, uint StringsTag, u
 /** Readable names for tags, classes and hashes; installed tag data comes before any fallback. */
 public sealed partial class GameNames
 {
-    private const uint MapRootClass = 0x808091DE, LocationNamesClass = 0x80809962, ScenarioClass = 0x80809994;
-    private const uint StringsClass = 0x80809A88, InlineStringClass = 0x80800065, BubbleParentClass = 0x80807DAE;
+    private const uint MapRootClass = SMapRoot.Class, LocationNamesClass = SMapLocationNames.Class, ScenarioClass = SScenario.Class;
+    private const uint StringsClass = SLocalizedStrings.Class, BubbleParentClass = SBubbleParent.Class;
 
     private readonly PackageCatalog catalog;
     private readonly Func<uint, string?>? hashFallback;
@@ -21,7 +23,7 @@ public sealed partial class GameNames
     private readonly Dictionary<uint, string> mapTitles = [];
     private readonly Dictionary<string, uint[]> stringsByDevName = new(StringComparer.Ordinal);
     private readonly Dictionary<uint, string> tagTitles = [];
-    // Bubble parent tag -> bubble name hash at +0x18.
+    // Bubble parent tag -> its Metadata.BubbleNameHash.
     private readonly Dictionary<uint, uint> bubbleParents = [];
 
     public LocalizedStrings Strings { get; private set; }
@@ -54,7 +56,8 @@ public sealed partial class GameNames
                     tagTitles.TryAdd(map.NamesTag, $"{map.DevName} location names");
                 }
                 else if (entry.Reference == BubbleParentClass)
-                    bubbleParents.Add(entry.TagHash, U32(catalog.Read(entry.TagHash), 0x18));
+                    bubbleParents.Add(entry.TagHash, TagRead.U32(catalog.Read(entry.TagHash),
+                        TagView.FieldOffset<SBubbleParent>("Metadata.BubbleNameHash")));
             }
             catch (Exception error) when (error is InvalidDataException or ArgumentException
                                           or IndexOutOfRangeException or KeyNotFoundException or OverflowException)
@@ -169,7 +172,7 @@ public sealed partial class GameNames
         if (catalog.GetName(tag) is { } name) return name;
         if (bubbleParents.TryGetValue(tag, out var bubble) && BubbleName(bubble) is { } bubbleName)
             return $"bubble {bubbleName}";
-        if (components is { } index && entry.Reference == 0x80809C0F)
+        if (components is { } index && entry.Reference == SEntity.Class)
         {
             if (index.CombatantName(tag) is { } combatant) return $"{combatant} (combatant)";
             if (index.Prompt(tag) is { } prompt) return $"{prompt} (prompt)";
@@ -183,14 +186,14 @@ public sealed partial class GameNames
             return $"{(kind == "Other" ? "Entity" : kind)} -- {AssetCategories.PackageStems(entry.PackageName)[^1]}";
         }
         if (components?.Prompt(tag) is { } configPrompt) return $"{configPrompt} (prompt)";
-        if (entry.Reference == 0x80809802 && SoundName(tag) is { } eventName) return eventName;
+        if (entry.Reference == SWwiseEvent.Class && SoundName(tag) is { } eventName) return eventName;
         return $"{ClassNames.Describe(entry.Reference)} 0x{tag:X8}";
     }
 
     /**
      * Reads the name fields of one scenario.
      * @param catalog Installed packages.
-     * @param tag A class-0x80809994 scenario.
+     * @param tag An SScenario tag.
      * @param strings Optional table that turns the hashes into text.
      */
     public static ScenarioNames ReadScenario(PackageCatalog catalog, uint tag, LocalizedStrings? strings)
@@ -198,34 +201,36 @@ public sealed partial class GameNames
         if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != ScenarioClass)
             throw new InvalidDataException($"Tag 0x{tag:X8} is not a scenario.");
         var data = catalog.Read(tag);
-        var stringsTag = U32(data, 0x28);
+        var stringsTag = TagRead.U32(data, TagView.FieldOffset<SScenario>(nameof(SScenario.Strings)));
         if (!catalog.TryGetEntry(stringsTag, out var stringsEntry) || stringsEntry.Reference != StringsClass)
             stringsTag = 0;
-        var activity = U32(data, 0x08);
-        var destination = U32(data, 0x20);
+        var activity = TagRead.U32(data, TagView.FieldOffset<SScenario>(nameof(SScenario.ActivityNameHash)));
+        var destination = TagRead.U32(data, TagView.FieldOffset<SScenario>(nameof(SScenario.DestinationNameHash)));
         string? Text(uint hash) => strings == null ? null : strings.Get(stringsTag, hash) ?? strings.Get(hash);
-        return new ScenarioNames(tag, InlineString(data, 0x30), stringsTag, activity, Text(activity),
-            destination, Text(destination));
+        return new ScenarioNames(tag, InlineString(data, TagView.FieldOffset<SScenario>(nameof(SScenario.DevName))), stringsTag,
+            activity, Text(activity), destination, Text(destination));
     }
 
-    /** The map root's location-names tag holds the map dev name at +0x08. */
+    /** The map root's SMapLocationNames tag holds the map dev name in MapDevName. */
     private static (uint NamesTag, string DevName)? ReadMapDevName(PackageCatalog catalog, uint mapRootTag)
     {
         var root = catalog.Read(mapRootTag);
-        var names = U32(root, 0x08);
+        var names = TagRead.U32(root, TagView.FieldOffset<SMapRoot>(nameof(SMapRoot.MapDefinition)));
         if (!catalog.TryGetEntry(names, out var entry) || entry.Reference != LocationNamesClass) return null;
-        return InlineString(catalog.Read(names), 0x08) is { } dev ? (names, dev) : null;
+        return InlineString(catalog.Read(names), TagView.FieldOffset<SMapLocationNames>(nameof(SMapLocationNames.MapDevName)))
+            is { } dev ? (names, dev) : null;
     }
 
-    /** A string pointer targets text after a class-0x80800065 marker and its u64 length. */
+    /** A string pointer targets the payload of an SInlineString block. */
     private static string? InlineString(byte[] data, int field)
     {
         var relative = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(field));
         if (relative == 0) return null;
         var start = field + relative;
-        if (start < 12 || start >= data.Length || U32(data, (int)start - 12) != InlineStringClass)
+        if (start < TagBlock.HeaderSize || start >= data.Length
+            || TagBlock.AtPayload(data, (int)start) is not { Class: SInlineString.Class } block)
             throw new InvalidDataException($"String pointer at 0x{field:X} has no inline string block.");
-        var length = (long)BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan((int)start - 8));
+        var length = (long)block.Length;
         if (length <= 0 || start + length > data.Length)
             throw new InvalidDataException($"String block at 0x{start:X} runs past its tag.");
         var bytes = data.AsSpan((int)start, (int)length);
@@ -238,5 +243,4 @@ public sealed partial class GameNames
     private static bool IsPlaceholder(string name) =>
         name.Length == 0 || name.StartsWith("0x", StringComparison.Ordinal);
 
-    private static uint U32(byte[] data, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset));
 }

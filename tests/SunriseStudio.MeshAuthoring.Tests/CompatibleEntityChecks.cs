@@ -172,7 +172,7 @@ internal static class CompatibleEntityChecks
         var changed = project.Changes.ToDictionary(value => value.TagHash, value => project.ReadAsset(value.TagHash, catalog));
         catalog.ReadOverride = tag => bytes.GetValueOrDefault(tag) ?? changed.GetValueOrDefault(tag);
     }
-    private static uint Tag(NativeAssetMetadata value) => 0x80800000u + ((uint)value.PackageId << 13) + (uint)value.EntryIndex!.Value;
+    private static uint Tag(NativeAssetMetadata value) => TagHashes.Make(value.PackageId, value.EntryIndex!.Value);
     private static int Restore(byte[] bytes, uint from, uint to)
     {
         int count = 0;

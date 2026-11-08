@@ -1,5 +1,6 @@
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Editor;
 
@@ -144,7 +145,7 @@ public sealed partial class StudioWorkspace
             if (prior.AddedAssetId is { } id && project?.AddedAssets.FirstOrDefault(asset => asset.Id == id) is { } added)
                 document = ReadAddedDocument(project, added, prior.OpenContext);
             else if (prior.AddedAssetId is null && catalog.TryGetEntry(prior.Entry.TagHash, out var entry))
-                document = ReadDocument(catalog, entry, DisplayName(entry), entry.Reference is not (0x808091DE or 0x80809994),
+                document = ReadDocument(catalog, entry, DisplayName(entry), entry.Reference is not (SMapRoot.Class or SScenario.Class),
                     prior.OpenContext);
             return () =>
             {
@@ -181,7 +182,7 @@ public sealed partial class StudioWorkspace
                 && project.AddedAssets.FirstOrDefault(asset => asset.Id == id) is { } added)
                 document = ReadAddedDocument(project, added, priorDocument.OpenContext);
             else if (document is null && catalog.TryGetEntry(documentTag, out var entry))
-                document = ReadDocument(catalog, entry, DisplayName(entry), entry.Reference is not (0x808091DE or 0x80809994),
+                document = ReadDocument(catalog, entry, DisplayName(entry), entry.Reference is not (SMapRoot.Class or SScenario.Class),
                     priorDocument?.OpenContext);
             var native = PrepareScene(world.Scene, out string nativeError);
             var worlds = loader.BuildCatalog(OperationToken);

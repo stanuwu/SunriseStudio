@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Editor;
 
@@ -50,16 +51,15 @@ public sealed partial class StudioWorkspace
 
     private LocalizedStrings? investmentStrings;
     private string investmentStringStamp = "";
-    // String container and English data classes; an overlay edit to either can change item text.
-    private const uint StringContainerClass = 0x80809A88, StringDataClass = 0x80809A8A;
 
     /** A hash of the overlay's string records; an equal stamp means item text is unchanged. */
     private static string StringStamp(PackageCatalog catalog)
     {
         uint index = new InvestmentSources().StringBanks;
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        // An overlay edit to a string container or its data can change item text.
         foreach (uint tag in catalog.GetOverlayEntries().Select(row => row.Entry)
-            .Where(entry => entry.Reference is StringContainerClass or StringDataClass || entry.TagHash == index)
+            .Where(entry => entry.Reference is SLocalizedStrings.Class or SLocalizedStringsData.Class || entry.TagHash == index)
             .Select(entry => entry.TagHash).Order())
         {
             hash.AppendData(BitConverter.GetBytes(tag));

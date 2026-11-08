@@ -69,7 +69,7 @@ internal static class ImportChecks
     private static void MovedInstance(PackageCatalog catalog, CollisionScene baseline)
     {
         var context = new ObjectEditContext(catalog, catalog.ReadOriginal);
-        ushort package = (ushort)((LeviathanCompound - 0x80800000) >> 13);
+        ushort package = (ushort)TagHashes.Package(LeviathanCompound);
         var index = new StaticCollisionRule.CollisionIndex(context, package);
         ObjectEdit? staticEdit = null;
         int instance = -1;
@@ -78,13 +78,11 @@ internal static class ImportChecks
             var owners = index.TableOwners(table);
             if (owners.Count != 1) continue;
             byte[] bytes = catalog.ReadOriginal(table);
-            var data = new NativeRows(bytes);
-            var owner = new NativeRows(catalog.ReadOriginal(owners[0].ListTag));
-            var placement = new QsTransform(owner.V3(owners[0].Row + 0x20), owner.Q4(owners[0].Row + 0x10), new Vector3(owner.F32(owners[0].Row + 0x2C)));
-            int[] rows = data.Rows(0x40, 0x808071A3, 48);
+            var placement = TagRows.Placement(catalog.ReadOriginal(owners[0].ListTag), owners[0].Row);
+            int[] rows = TagRows.StaticInstances(bytes);
             for (int i = 0; i < rows.Length && staticEdit is null; i++)
             {
-                var row = new QsTransform(data.V3(rows[i] + 0x10), data.Q4(rows[i]), new Vector3(data.F32(rows[i] + 0x1C)));
+                var row = TagRows.StaticInstance(bytes, rows[i]);
                 IReadOnlyList<(StaticCollisionRule.Entity Entity, int Instance)> matches;
                 try { matches = index.Find(StaticCollisionRule.Compose(placement, row)); }
                 catch (Exception error) when (error is InvalidDataException or NotSupportedException) { continue; }
@@ -92,8 +90,8 @@ internal static class ImportChecks
                     || index.RowsCopying(matches[0].Entity, matches[0].Instance).Count != 1) continue;
                 instance = matches[0].Instance;
                 var rowTarget = new ObjectEditTarget(table, ObjectEditLayout.StaticInstance, rows[i], 48, i, 0, BinaryDelta.Hash(bytes.AsSpan(rows[i], 48)));
-                var turn = Quaternion.Normalize(Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.4f) * data.Q4(rows[i]));
-                var moved = data.V3(rows[i] + 0x10) + new Vector3(1.5f, -0.5f, 0.25f);
+                var turn = Quaternion.Normalize(Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.4f) * row.Rotation);
+                var moved = row.Translation + new Vector3(1.5f, -0.5f, 0.25f);
                 staticEdit = new ObjectEdit(ObjectEditKind.PlacementTransform, rowTarget, "Static", [moved.X, moved.Y, moved.Z],
                     [turn.X, turn.Y, turn.Z, turn.W], 1.25f);
             }

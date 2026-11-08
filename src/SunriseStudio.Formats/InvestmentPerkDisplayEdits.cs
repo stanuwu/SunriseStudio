@@ -1,14 +1,18 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Formats;
 
 /** Item display rows pair by index with the item's sandbox perk rows. */
 public static class InvestmentPerkDisplayEdits
 {
-    private const uint BlockClass = 0x80805D08, RowClass = 0x80805D0A;
-    // Every typed array header carries this class word; a row's +8 array holds unlock expression steps.
-    private const uint ArrayMarker = 0x80809FBD, ExpressionClass = 0x80807D31;
-    private const int BlockPointer = 96, Stride = 32;
+    private static readonly int SizeField = TagView.FieldOffset<ItemDisplayStrings>(nameof(ItemDisplayStrings.TagSize)),
+        BlockPointer = TagView.FieldOffset<ItemDisplayStrings>("StatsItemBlock"),
+        Stride = Unsafe.SizeOf<SItemPerkDisplayRow>();
 
     public static int ReadCount(ReadOnlyMemory<byte> display) => Read(display).Count;
 
@@ -24,45 +28,46 @@ public static class InvestmentPerkDisplayEdits
             throw new NotSupportedException("The item needs an existing native perk display block.");
         }
         byte[] empty = new byte[Stride];
-        BinaryPrimitives.WriteUInt16LittleEndian(empty, ushort.MaxValue);
-        BinaryPrimitives.WriteUInt32LittleEndian(empty.AsSpan(4), InvestmentItemClone.EmptyStringHash);
+        ref var fresh = ref TagView.Edit<SItemPerkDisplayRow>(empty);
+        fresh.Unknown0 = ushort.MaxValue;
+        fresh.TextOverrideHash = StringHash.Empty;
         if (rows.Count == perkCount && Enumerable.Range(0, rows.Count)
             .All(index => display.Span.Slice(rows.Data + index * Stride, Stride).SequenceEqual(empty)))
             return display.ToArray();
         if (perkCount == 0)
         {
             byte[] cleared = display.ToArray();
-            cleared.AsSpan(rows.Field, 16).Clear();
+            cleared.AsSpan(rows.Field, Unsafe.SizeOf<TagArray<SItemPerkDisplayRow>>()).Clear();
             return cleared;
         }
-        int header = checked((display.Length + 19) & ~15);
-        byte[] output = new byte[checked(header + 16 + perkCount * Stride)];
-        display.Span.CopyTo(output);
-        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(header - 4), ArrayMarker);
-        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(header), perkCount);
-        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(header + 8), RowClass);
-        for (int index = 0; index < perkCount; index++) empty.CopyTo(output, header + 16 + index * Stride);
-        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(rows.Field), perkCount);
-        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(rows.Field + 8), header - rows.Field - 8L);
-        BinaryPrimitives.WriteInt64LittleEndian(output, output.Length);
+        byte[] output = display.ToArray();
+        int first = TagRelocator.AppendArray(ref output, rows.Field, SItemPerkDisplayRow.Class, perkCount, checked(perkCount * Stride));
+        for (int index = 0; index < perkCount; index++) empty.CopyTo(output, first + index * Stride);
+        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(SizeField), output.Length);
         return output;
     }
 
-    /** The native display block owns a typed 32-byte row array at +8. */
+    /** The native display block owns a typed 32-byte row array. */
     private static (int Field, int Count, int Data) Read(ReadOnlyMemory<byte> display)
     {
-        var reader = new TagReader(display);
-        if (display.Length < InvestmentItemClone.DisplayLength || reader.U64(0) != (ulong)display.Length)
+        var span = display.Span;
+        if (display.Length < InvestmentItemClone.DisplayLength || TagRead.U64(span, SizeField) != (ulong)display.Length)
             throw new InvalidDataException("The item display size is invalid.");
-        int block = reader.Relative(BlockPointer);
+        int block = TagPointer.Checked(span, BlockPointer);
         if (block < 0) return (-1, 0, 0);
-        if (block < 4 || !reader.Has(block, 24) || reader.U32(block - 4) != BlockClass)
+        if (block < 4 || !TagView.Fits<SItemPerkDisplayBlock>(span, block)
+            || new TagPointer(span, BlockPointer).TargetClass != SItemPerkDisplayBlock.Class)
             throw new InvalidDataException("The item perk display block has an unsupported layout.");
-        var rows = reader.Array(block + 8, RowClass, Stride);
-        if (rows.Count == 0 && reader.I64(block + 16) != 0)
+        int field = TagView.OffsetOf(span, in TagView.At<SItemPerkDisplayBlock>(span, block).ItemPerks);
+        var rows = TagArray.Checked(span, field, SItemPerkDisplayRow.Class, Stride);
+        if (rows.Count == 0 && new TagArray(span, field).HasHeader)
             throw new InvalidDataException("The empty perk display array has an unsupported pointer.");
         for (int index = 0; index < rows.Count; index++)
-            reader.Array(rows.Data + index * Stride + 8, ExpressionClass, 8);
-        return (block + 8, rows.Count, rows.Data);
+        {
+            ref readonly var row = ref TagView.At<SItemPerkDisplayRow>(span, rows.Data + index * Stride);
+            TagArray.Checked(span, TagView.OffsetOf(span, in row.HD61b5e99.ExpressionSteps), InvestmentExpressionRow.Class,
+                Unsafe.SizeOf<InvestmentExpressionRow>());
+        }
+        return (field, rows.Count, rows.Data);
     }
 }

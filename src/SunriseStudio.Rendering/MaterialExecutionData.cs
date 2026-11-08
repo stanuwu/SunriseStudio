@@ -1,5 +1,9 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using Vortice.Direct3D11;
 
 namespace SunriseStudio.Rendering;
@@ -21,47 +25,47 @@ public sealed partial class GameMaterialReader
         var material = Read(tag);
         byte[] bytes = catalog.Read(tag);
         return new(material,
-            ReadStageData(bytes, GameShaderStage.Vertex, material.VertexShader, 0x48),
-            ReadStageData(bytes, GameShaderStage.Pixel, material.PixelShader, 0x2C8),
-            ReadStageData(bytes, GameShaderStage.Compute, material.ComputeShader, 0x368));
+            ReadRuntimeStage(bytes, GameShaderStage.Vertex, material.VertexShader,
+                in Technique<ShaderStageConstants>(bytes, "VertexShader.State.DynamicConstants")),
+            ReadRuntimeStage(bytes, GameShaderStage.Pixel, material.PixelShader,
+                in Technique<ShaderStageConstants>(bytes, "PixelShader.State.DynamicConstants")),
+            ReadRuntimeStage(bytes, GameShaderStage.Compute, material.ComputeShader,
+                in Technique<ShaderStageConstants>(bytes, "ComputeShader.State.DynamicConstants")));
     }
 
     public byte[] ReadShaderBytecode(GameShaderInfo shader) => catalog.Read(shader.BytecodeTag);
 
     /** An external constant-buffer entry takes precedence over inline vectors. */
-    private MaterialStageData ReadStageData(byte[] bytes, GameShaderStage stage,
-        GameShaderInfo? shader, int start) => ReadRuntimeStage(bytes, stage, shader,
-            start + 0x20, start + 0x30, start + 0x40, start + 0x50, start + 0x84);
-
-    /** Material and scope records share typed arrays but use different field offsets. */
     private MaterialStageData ReadRuntimeStage(byte[] bytes, GameShaderStage stage,
-        GameShaderInfo? shader, int tfxField, int expressionField, int samplerField,
-        int templateField, int containerField)
+        GameShaderInfo? shader, in ShaderStageConstants source)
     {
-        byte[] bytecode = ReadTypedArray(bytes, tfxField, 0x80800009, 1);
-        var expressionConstants = ReadVectors(bytes, expressionField);
-        byte[] samplerRows = ReadTypedArray(bytes, samplerField, 0x808073F3, 16);
+        byte[] bytecode = ReadTypedArray(bytes, in source.Bytecode, ExpressionCode.Class);
+        var expressionConstants = ReadVectors(bytes, in source.ConstantBuffer);
+        byte[] samplerRows = ReadTypedArray(bytes, in source.HandleBuffer, SSamplerReference.Class);
         var samplers = new List<MaterialSampler>();
-        for (int offset = 0; offset < samplerRows.Length; offset += 16)
-            samplers.Add(ReadSampler(U32(samplerRows, offset)));
-        uint container = U32(bytes, containerField);
+        foreach (var row in MemoryMarshal.Cast<byte, SSamplerReference>(samplerRows))
+            samplers.Add(ReadSampler(row.SamplerHeader));
+        uint container = source.CbContainer;
         Vector4[] constants;
         if (container is not (0 or uint.MaxValue))
         {
             if (!catalog.TryGetEntry(container, out var entry) || entry.Type != 32 || entry.SubType != 7)
                 throw new InvalidDataException("Material constant source is not a constant-buffer header.");
             byte[] header = catalog.Read(container);
-            if (header.Length < 4 || !catalog.TryGetEntry(entry.Reference, out var payload)
-                || payload.Type != 40 || payload.SubType != 7)
+            // Only ByteCount must be present, not the whole ConstantBufferHeader.
+            if (!TagView.FitsThrough<ConstantBufferHeader>(header, 0, nameof(ConstantBufferHeader.ByteCount))
+                || !catalog.TryGetEntry(entry.Reference, out var payload) || payload.Type != 40 || payload.SubType != 7)
                 throw new InvalidDataException("Material constant-buffer payload type is invalid.");
             byte[] data = catalog.Read(entry.Reference);
-            if (U32(header, 0) != data.Length || data.Length % 16 != 0)
+            uint byteCount = TagView.At<uint>(header,
+                TagView.FieldOffset<ConstantBufferHeader>(nameof(ConstantBufferHeader.ByteCount)));
+            if (byteCount != data.Length || data.Length % 16 != 0)
                 throw new InvalidDataException("Material constant-buffer length is invalid.");
             constants = MemoryMarshal.Cast<byte, Vector4>(data).ToArray();
         }
         else
         {
-            constants = ReadVectors(bytes, templateField);
+            constants = ReadVectors(bytes, in source.CbTemplate);
             container = 0;
         }
         return new(stage, shader, bytecode, expressionConstants, constants, container, samplers);
@@ -87,20 +91,12 @@ public sealed partial class GameMaterialReader
         return new(tag, payload.TagHash, description);
     }
 
-    private static Vector4[] ReadVectors(byte[] bytes, int field) =>
-        MemoryMarshal.Cast<byte, Vector4>(ReadTypedArray(bytes, field, 0x80800090, 16)).ToArray();
+    private static Vector4[] ReadVectors(byte[] bytes, ref readonly TagArray<ExpressionConstant> array) =>
+        MemoryMarshal.Cast<byte, Vector4>(ReadTypedArray(bytes, in array, ExpressionConstant.Class)).ToArray();
 
-    /** Array data must fit both the class marker and the repeated element count. */
-    private static byte[] ReadTypedArray(byte[] bytes, int field, uint elementClass, int stride)
-    {
-        long count = (long)U64(bytes, field), relative = (long)U64(bytes, field + 8);
-        if (count == 0 && relative == 0) return [];
-        if (count is < 0 or > 1_000_000) throw new InvalidDataException("Material array count is invalid.");
-        long header = checked(field + 8 + relative);
-        if (header < 4 || header > bytes.Length - 16 || U32(bytes, (int)header - 4) != 0x80809FBD
-            || U64(bytes, (int)header) != (ulong)count || U32(bytes, (int)header + 8) != elementClass
-            || U32(bytes, (int)header + 12) != 0 || count * stride > bytes.Length - header - 16)
-            throw new InvalidDataException($"Material array 0x{field:X} has an invalid header.");
-        return bytes.AsSpan((int)header + 16, checked((int)count * stride)).ToArray();
-    }
+    private static byte[] ReadTypedArray<T>(byte[] bytes, ref readonly TagArray<T> array, uint elementClass)
+        where T : unmanaged =>
+        CheckedArray(bytes, in array, elementClass, Unsafe.SizeOf<T>(), TagArray.MaximumReaderRows, "Material array count is invalid.",
+            $"Material array 0x{TagView.OffsetOf(bytes, in array):X} has an invalid header.").ToArray();
+
 }

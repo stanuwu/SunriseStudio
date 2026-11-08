@@ -1,6 +1,8 @@
-using System.Buffers.Binary;
 using System.Collections;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -40,54 +42,107 @@ public sealed class PerkCensus(IReadOnlyList<PerkInstalledKind> kinds) : IReadOn
 public static class PerkBehaviorCensus
 {
     /** Spawn effects create objects of this class. */
-    public const uint ObjectDefinitionClass = 0x80809C0F;
+    public const uint ObjectDefinitionClass = SEntity.Class;
     // Behavior scripts and component configs are the other tag classes effects reference.
-    private const uint BehaviorClass = 0x8080941E, ConfigClass = 0x80809C36;
-    // Rows {u32 key, u8 mask, u32 object definition} at +64; transmat effects select one by key.
-    private const uint TransmatTableTag = 0x80B9E5C4, TransmatRowClass = 0x808064A2;
-    private const uint EmptyHash = InvestmentItemClone.EmptyStringHash;
-    private const uint CounterClass = 0x80803E30, GatedClass = 0x80803DCC, AllGroupsClass = 0x80803E04;
-    private const uint ExtendTimersClass = 0x80803E3B, TransmatClass = 0x80803E2E, ScaleClass = 0x808029F2;
+    private const uint BehaviorClass = ObjectBehaviorRoot.Class, ConfigClass = SEntityConfig.Class;
+    // Transmat effects select one row of this table by key.
+    private const uint TransmatTableTag = 0x80B9E5C4, TransmatRowClass = C808064a2.Class;
+    private const uint CounterClass = PerkCounter.Class, GatedClass = PerkStateGated.Class, AllGroupsClass = PerkAllGroups.Class;
+    private const uint ExtendTimersClass = PerkExtendTimers.Class, TransmatClass = PerkTransmat.Class, ScaleClass = PerkStatScale.Class;
+    private static readonly int ConditionRowSize = Unsafe.SizeOf<C808040ba>(), EffectRowSize = Unsafe.SizeOf<C808040ac>();
 
     /** Payload fields whose installed values feed a picker: (class, offset, picker). */
     private static readonly (uint Class, int Offset, string Picker)[] Sources =
     [
-        (0x80803DEB, 8, "event"), (0x80803DEC, 8, "event29"), (0x80803DEA, 8, "incident"), (0x80803DEA, 12, "role"),
-        (0x80802D02, 8, "tracked"), (0x80802D01, 8, "tracked"), (0x80802D0D, 4, "tracked"), (0x80802D00, 8, "message"),
-        (0x80803E1D, 4, "modifier"), (0x80803E1E, 4, "sim"), (0x808029F1, 4, "stat"), (0x80803E1C, 4, "channel"),
-        (TransmatClass, 4, "transmat"),
-        (0x80803E45, 16, "definitions"), (0x80803E44, 16, "definitions"), (0x80803E43, 16, "definitions"),
-        (0x80803E42, 24, "definitions"), (0x80803E47, 16, "definitions"), (0x80803E12, 16, "definitions"),
-        (0x80803DFF, 16, "definitions"), (0x80803DFE, 16, "definitions"), (0x80803DE4, 16, "definitions"),
-        (0x80802D0A, 16, "behaviors"), (0x80803E46, 16, "configs")
+        (PerkEvent.Class, TagView.FieldOffset<PerkEvent>(nameof(PerkEvent.EventHash)), "event"),
+        (PerkEvent2.Class, TagView.FieldOffset<PerkEvent2>(nameof(PerkEvent2.Event)), "event29"),
+        (PerkIncident.Class, TagView.FieldOffset<PerkIncident>(nameof(PerkIncident.Incident)), "incident"),
+        (PerkIncident.Class, TagView.FieldOffset<PerkIncident>(nameof(PerkIncident.Role)), "role"),
+        (PerkTrackedTimer.Class, TagView.FieldOffset<PerkTrackedTimer>(nameof(PerkTrackedTimer.Name)), "tracked"),
+        (PerkTrackedGone.Class, TagView.FieldOffset<PerkTrackedGone>(nameof(PerkTrackedGone.Name)), "tracked"),
+        (PerkRegisterTarget.Class, TagView.FieldOffset<PerkRegisterTarget>(nameof(PerkRegisterTarget.Name)),
+            "tracked"),
+        (PerkMessage.Class, TagView.FieldOffset<PerkMessage>(nameof(PerkMessage.Hash)), "message"),
+        (PerkAbilityKey.Class, TagView.FieldOffset<PerkAbilityKey>(nameof(PerkAbilityKey.Key)), "modifier"),
+        (PerkSimObject.Class, TagView.FieldOffset<PerkSimObject>(nameof(PerkSimObject.Hash)), "sim"),
+        (PerkTeamStat.Class, TagView.FieldOffset<PerkTeamStat>(nameof(PerkTeamStat.Stat)), "stat"),
+        (PerkChannelHash.Class, TagView.FieldOffset<PerkChannelHash>(nameof(PerkChannelHash.Hash)), "channel"),
+        (TransmatClass, TagView.FieldOffset<PerkTransmat>(nameof(PerkTransmat.EffectKey)), "transmat"),
+        (PerkSpawn.Class, TagView.FieldOffset<PerkSpawn>(nameof(PerkSpawn.Definition)), "definitions"),
+        (PerkDrivenSpawn.Class, TagView.FieldOffset<PerkDrivenSpawn>(nameof(PerkDrivenSpawn.Definition)),
+            "definitions"),
+        (PerkSpawnOnce.Class, TagView.FieldOffset<PerkSpawnOnce>(nameof(PerkSpawnOnce.Definition)),
+            "definitions"),
+        (PerkOrbs.Class, TagView.FieldOffset<PerkOrbs>(nameof(PerkOrbs.Definition)), "definitions"),
+        (PerkAmmoCrate.Class, TagView.FieldOffset<PerkAmmoCrate>(nameof(PerkAmmoCrate.Attached)),
+            "definitions"),
+        (PerkProjectile.Class, TagView.FieldOffset<PerkProjectile>(nameof(PerkProjectile.Definition)),
+            "definitions"),
+        (PerkAbilityGained.Class, TagView.FieldOffset<PerkAbilityGained>(nameof(PerkAbilityGained.Definition)),
+            "definitions"),
+        (PerkAbilityLost.Class, TagView.FieldOffset<PerkAbilityLost>(nameof(PerkAbilityLost.Definition)),
+            "definitions"),
+        (PerkPickup.Class, TagView.FieldOffset<PerkPickup>(nameof(PerkPickup.Definition)), "definitions"),
+        (PerkScript.Class, TagView.FieldOffset<PerkScript>(nameof(PerkScript.Root)), "behaviors"),
+        (PerkComponent.Class, TagView.FieldOffset<PerkComponent>(nameof(PerkComponent.Config)), "configs")
     ];
+
+    // Root and stack-branch condition arrays: activation, deactivation, cooldown.
+    private static readonly int[] RootConditions =
+    [
+        TagView.FieldOffset<SSandboxPerkProgram>("HB38b5954.ActivationConditions"),
+        TagView.FieldOffset<SSandboxPerkProgram>("HB38b5954.DeactivationConditions"),
+        TagView.FieldOffset<SSandboxPerkProgram>("HB38b5954.CooldownConditions")
+    ];
+    private static readonly int[] BranchConditions =
+    [
+        TagView.FieldOffset<C8080407d>(nameof(C8080407d.ActivationConditions)),
+        TagView.FieldOffset<C8080407d>(nameof(C8080407d.DeactivationConditions)),
+        TagView.FieldOffset<C8080407d>(nameof(C8080407d.CooldownConditions))
+    ];
+    private static readonly int RootEffects =
+        TagView.FieldOffset<SSandboxPerkProgram>("HB38b5954.Effects");
+    private static readonly int RootStack =
+        TagView.FieldOffset<SSandboxPerkProgram>(nameof(SSandboxPerkProgram.StackBranches));
+    private static readonly int BranchEffects = TagView.FieldOffset<C8080407d>(nameof(C8080407d.Effects));
+    private static readonly int TimerConditions =
+        TagView.FieldOffset<PerkExtendTimers>(nameof(PerkExtendTimers.Conditions));
+    private static readonly int CounterRows = TagView.FieldOffset<PerkCounter>(nameof(PerkCounter.Rows));
+    private static readonly int GatedInner =
+        TagView.FieldOffset<PerkStateGated>(nameof(PerkStateGated.InnerCondition));
+    private static readonly int AllGroupsGroups = TagView.FieldOffset<PerkAllGroups>(nameof(PerkAllGroups.Groups));
+    private static readonly int GroupMembers =
+        TagView.FieldOffset<PerkConditionGroup>(nameof(PerkConditionGroup.Members));
+    private static readonly int ScaleNames =
+        TagView.FieldOffset<PerkStatScale>(nameof(PerkStatScale.ComponentNames));
+    private static readonly int TransmatRows = TagView.FieldOffset<C80806493>(nameof(C80806493.H09a0f1b0));
 
     public static PerkCensus Read(PackageCatalog catalog, CancellationToken token = default)
     {
         var nodes = new Dictionary<(PerkBehaviorNodeKind, uint, byte), (int Nodes, HashSet<uint> Programs)>();
         var uses = Sources.Select(source => source.Picker).Append("scaled").Distinct()
             .ToDictionary(name => name, _ => new Dictionary<uint, HashSet<uint>>());
-        foreach (uint tag in catalog.Entries.Where(entry => entry.Reference == NativePerkBehavior.Class && entry.Type is 8 or 16)
+        foreach (uint tag in catalog.Entries.Where(entry => entry.Reference == NativePerkBehavior.Class && AssetCategories.IsStructured(entry))
             .Select(entry => entry.TagHash).Distinct())
         {
             token.ThrowIfCancellationRequested();
             byte[] bytes;
             try { bytes = catalog.Read(tag); } catch (Exception error) when (error is IOException or InvalidDataException) { continue; }
-            foreach (var (node, kind) in Walk(bytes))
+            foreach (var (node, type, kind) in Walk(bytes))
             {
-                uint type = U32(bytes, node - 4);
-                var key = (kind, type, bytes[node + (kind == PerkBehaviorNodeKind.Condition ? 5 : 0)]);
+                var key = (kind, type, bytes[node + (kind == PerkBehaviorNodeKind.Condition ? NativePerkBehavior.ConditionOpcode : NativePerkBehavior.EffectOpcode)]);
                 if (!nodes.TryGetValue(key, out var row)) nodes[key] = row = (0, []);
                 row.Programs.Add(tag);
                 nodes[key] = (row.Nodes + 1, row.Programs);
-                var found = Sources.Where(source => source.Class == type && node + source.Offset + 4 <= bytes.Length)
-                    .Select(source => (source.Picker, Value: U32(bytes, node + source.Offset)));
-                // Component scale effects hold their names in a u32 array at +8.
-                if (type == ScaleClass && node + 24 <= bytes.Length)
-                    found = found.Concat(Rows(bytes, node + 8, 4).Select(row => ("scaled", U32(bytes, row))));
+                var found = Sources.Where(source => source.Class == type && node + source.Offset + sizeof(uint) <= bytes.Length)
+                    .Select(source => (source.Picker, Value: TagRead.U32(bytes, node + source.Offset)));
+                // Component scale effects hold their names in a u32 array.
+                if (type == ScaleClass && TagView.FitsThrough<PerkStatScale>(bytes, node, nameof(PerkStatScale.ComponentNames)))
+                    found = found.Concat(Rows(bytes, node + ScaleNames, Unsafe.SizeOf<SU32HashElement>())
+                        .Select(row => ("scaled", TagView.At<SU32HashElement>(bytes, row).KeyHash)));
                 foreach (var (picker, value) in found)
                 {
-                    if (value is EmptyHash or uint.MaxValue) continue;
+                    if (value is StringHash.Empty or uint.MaxValue) continue;
                     var users = uses[picker];
                     if (!users.TryGetValue(value, out var programs)) users[value] = programs = [];
                     programs.Add(tag);
@@ -139,59 +194,62 @@ public static class PerkBehaviorCensus
         if (!catalog.ContainsTag(TransmatTableTag)) return [];
         byte[] bytes;
         try { bytes = catalog.Read(TransmatTableTag); } catch (Exception error) when (error is IOException or InvalidDataException) { return []; }
-        var data = new TagReader(bytes);
-        if (!data.TryArray(64, TransmatRowClass, 12, out var rows)) return [];
-        return [.. Enumerable.Range(0, rows.Count).Select(index => rows.Data + index * 12)
-            .Select(row => (Key: data.U32(row), Definition: data.U32(row + 8)))
+        if (!TagArray.TryChecked(bytes, TransmatRows, TransmatRowClass, Unsafe.SizeOf<C808064a2>(), out var rows)) return [];
+        return [.. Enumerable.Range(0, rows.Count).Select(index => rows.Data + index * Unsafe.SizeOf<C808064a2>())
+            .Select(row => TagView.At<C808064a2>(bytes, row))
+            .Select(row => (Key: row.Unk0, Definition: row.Unk8))
             .Select(row => new PerkBehaviorChoice(row.Key, $"0x{row.Key:X8} -> {Label(catalog, row.Definition)}"
                 + (users.TryGetValue(row.Key, out var programs) ? $" ({Perks(programs.Count)})" : "")))];
     }
 
-    /** Every node offset in a program: phases, stack branches, rows, groups, inners and timer conditions. */
-    private static IEnumerable<(int Node, PerkBehaviorNodeKind Kind)> Walk(byte[] bytes)
+    /** Each node and its class, from phases, stack branches, rows, groups, inners and timers. */
+    private static IEnumerable<(int Node, uint Class, PerkBehaviorNodeKind Kind)> Walk(byte[] bytes)
     {
-        var found = new List<(int, PerkBehaviorNodeKind)>();
+        var found = new List<(int, uint, PerkBehaviorNodeKind)>();
         var seen = new HashSet<int>();
-        foreach (int field in new[] { 32, 72, 88 })
-            foreach (int node in Nodes(bytes, field, 8)) Condition(node, 0);
-        foreach (int node in Nodes(bytes, 56, 8)) Effect(node);
-        if (bytes.Length >= 120 && BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(104)) is > 0 and < 4096)
+        foreach (int field in RootConditions)
+            foreach (var (node, type) in Nodes(bytes, field, ConditionRowSize)) Condition(node, type, 0);
+        foreach (var (node, type) in Nodes(bytes, RootEffects, EffectRowSize)) Effect(node, type);
+        if (TagView.Fits<TagArray<C8080407d>>(bytes, RootStack) && new TagArray(bytes, RootStack).Count is > 0 and < 4096)
         {
-            long count = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(104));
-            long rows = 112 + BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(112)) + 16;
-            for (int i = 0; i < count && rows + i * 72 + 72 <= bytes.Length; i++)
+            var stack = new TagArray(bytes, RootStack);
+            long count = stack.Count, rows = stack.Header.Offset + TagArray.HeaderSize;
+            int size = Unsafe.SizeOf<C8080407d>();
+            for (int i = 0; i < count && rows + i * size + size <= bytes.Length; i++)
             {
-                int row = (int)(rows + i * 72);
-                foreach (int offset in new[] { 0, 40, 56 })
-                    foreach (int node in Nodes(bytes, row + offset, 8)) Condition(node, 0);
-                foreach (int node in Nodes(bytes, row + 24, 8)) Effect(node);
+                int row = (int)(rows + i * size);
+                foreach (int offset in BranchConditions)
+                    foreach (var (node, type) in Nodes(bytes, row + offset, ConditionRowSize)) Condition(node, type, 0);
+                foreach (var (node, type) in Nodes(bytes, row + BranchEffects, EffectRowSize)) Effect(node, type);
             }
         }
         return found;
 
-        void Effect(int node)
+        void Effect(int node, uint type)
         {
             if (!seen.Add(node)) return;
-            found.Add((node, PerkBehaviorNodeKind.Effect));
-            if (node + 40 <= bytes.Length && U32(bytes, node - 4) == ExtendTimersClass)
-                foreach (int child in Nodes(bytes, node + 16, 8)) Condition(child, 1);
+            found.Add((node, type, PerkBehaviorNodeKind.Effect));
+            if (TagView.Fits<PerkExtendTimers>(bytes, node) && type == ExtendTimersClass)
+                foreach (var (child, childType) in Nodes(bytes, node + TimerConditions, ConditionRowSize))
+                    Condition(child, childType, 1);
         }
 
-        void Condition(int node, int depth)
+        void Condition(int node, uint type, int depth)
         {
-            if (depth > 8 || node + 8 > bytes.Length || !seen.Add(node)) return;
-            found.Add((node, PerkBehaviorNodeKind.Condition));
-            uint type = U32(bytes, node - 4);
-            if (type == CounterClass && node + 56 <= bytes.Length)
-                foreach (int child in Nodes(bytes, node + 8, 32)) Condition(child, depth + 1);
-            if (type == GatedClass && node + 264 <= bytes.Length)
+            if (depth > 8 || node + Unsafe.SizeOf<PerkAlways>() > bytes.Length || !seen.Add(node)) return;
+            found.Add((node, type, PerkBehaviorNodeKind.Condition));
+            if (type == CounterClass && TagView.Fits<PerkCounter>(bytes, node))
+                foreach (var (child, childType) in Nodes(bytes, node + CounterRows, Unsafe.SizeOf<PerkCounterRow>()))
+                    Condition(child, childType, depth + 1);
+            if (type == GatedClass && TagView.Fits<PerkStateGated>(bytes, node))
             {
-                long inner = node + 256 + BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(node + 256));
-                if (inner >= 4 && inner < bytes.Length) Condition((int)inner, depth + 1);
+                int inner = TagPointer.TryChecked(bytes, node + GatedInner);
+                if (inner >= TagView.ClassWordSize) Condition(inner, TagView.ClassAt(bytes, inner) ?? 0, depth + 1);
             }
-            if (type == AllGroupsClass && node + 24 <= bytes.Length)
-                foreach (int group in Rows(bytes, node + 8, 32))
-                    foreach (int child in Nodes(bytes, group + 8, 8)) Condition(child, depth + 1);
+            if (type == AllGroupsClass && TagView.Fits<PerkAllGroups>(bytes, node))
+                foreach (int group in Rows(bytes, node + AllGroupsGroups, Unsafe.SizeOf<PerkConditionGroup>()))
+                    foreach (var (child, childType) in Nodes(bytes, group + GroupMembers, ConditionRowSize))
+                        Condition(child, childType, depth + 1);
         }
     }
 
@@ -200,25 +258,23 @@ public static class PerkBehaviorCensus
 
     private static string Perks(int count) => count == 1 ? "1 perk" : $"{count} perks";
 
-    private static uint U32(byte[] bytes, int at) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
-
     /** Row offsets of one typed array; a malformed array yields none. */
     private static IEnumerable<int> Rows(byte[] bytes, int field, int stride)
     {
-        if (field + 16 > bytes.Length) yield break;
-        long count = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(field));
-        long header = field + 8 + BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(field + 8));
-        if (count is <= 0 or > 4096 || header < 4 || header + 16 + count * stride > bytes.Length) yield break;
-        for (int index = 0; index < count; index++) yield return (int)(header + 16 + index * stride);
+        if (!TagView.Fits<TagArray<Unknown>>(bytes, field)) yield break;
+        var array = new TagArray(bytes, field);
+        long count = array.Count, header = array.Header.Offset;
+        if (count is <= 0 or > 4096 || header < TagView.ClassWordSize || header + TagArray.HeaderSize + count * stride > bytes.Length) yield break;
+        for (int index = 0; index < count; index++) yield return (int)(header + TagArray.HeaderSize + index * stride);
     }
 
-    /** Node offsets of one pointer array; a malformed array yields none. */
-    private static IEnumerable<int> Nodes(byte[] bytes, int field, int stride)
+    /** Node offsets and classes of one pointer array; a malformed array yields none. */
+    private static IEnumerable<(int Node, uint Class)> Nodes(byte[] bytes, int field, int stride)
     {
         foreach (int at in Rows(bytes, field, stride))
         {
-            long node = at + BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(at));
-            if (node >= 4 && node < bytes.Length) yield return (int)node;
+            long node = at + TagRead.I64(bytes, at);
+            if (node >= TagView.ClassWordSize && node < bytes.Length) yield return ((int)node, TagView.ClassAt(bytes, (int)node) ?? 0);
         }
     }
 }

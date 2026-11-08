@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 using SunriseStudio.Packages;
@@ -51,7 +50,7 @@ internal static class CollisionAdditions
             {
                 if (input.NewShape is null) { target.Copy(input); copies++; continue; }
                 if (package is null) throw new NotSupportedException("New collision shapes need a project package for their packfiles.");
-                uint tag = checked(0x80800000u + ((uint)package.PackageId << 13) + (uint)entry);
+                uint tag = TagHashes.Make(package.PackageId, entry);
                 var native = new NativeAssetMetadata(package.PackageId, target.Template.Reference, target.Template.TypeInfo, null, entry++);
                 result.Add(new(tag, FileName(input.NewShape.Name), native, target.AddShape(input, tag)));
                 shapes++;
@@ -130,14 +129,14 @@ internal static class CollisionAdditions
             Owner = CollisionOwnerRows.Read(ownerBytes);
             if (Owner.Compound != compound || Owner.RunStarts.Count != Owner.Shapes.Count)
                 throw new NotSupportedException($"Owner {OwnerTag:X8} does not hold one run start per shape.");
-            keyBits = Math.Max(0, (int)(sbyte)file.U8(file.RootOffset + 0x30));
+            keyBits = Math.Max(0, (int)CollisionCompoundWriter.ChildKeyBits(file));
         }
 
         /** The one owner in the compound's package that names it; the scene's entity names it when it can. */
         private static uint OwnerOf(PackageCatalog catalog, CollisionEntity entity, uint compound, ushort package)
         {
             var owners = catalog.Entries.Where(entry => entry.PackageId == package && entry.Reference == StaticCollisionReader.OwnerClass
-                && catalog.Read(entry.TagHash) is { Length: >= 0x5C } owner && BinaryPrimitives.ReadUInt32LittleEndian(owner.AsSpan(0x58)) == compound).Select(entry => entry.TagHash).ToArray();
+                && CollisionOwnerRows.CompoundOf(catalog.Read(entry.TagHash)) == compound).Select(entry => entry.TagHash).ToArray();
             if (owners.Length != 1)
                 throw new NotSupportedException($"{owners.Length} owners name compound {compound:X8}; a new instance needs exactly one.");
             if (entity.Source == CollisionSource.StaticEntity && entity.Tag != owners[0])
@@ -268,12 +267,8 @@ internal static class CollisionAdditions
             return (short)(Owner.Materials.Count - 1);
         }
 
-        private static void Write(CompoundInstanceRow row, uint filter, uint mask, int shapeIndex)
-        {
-            BinaryPrimitives.WriteUInt32LittleEndian(row.Bytes.AsSpan(0x38), filter);
-            BinaryPrimitives.WriteUInt32LittleEndian(row.Bytes.AsSpan(0x3C), mask);
-            BinaryPrimitives.WriteUInt64LittleEndian(row.Bytes.AsSpan(0x40), ShapeUserData | (uint)shapeIndex);
-        }
+        private static void Write(CompoundInstanceRow row, uint filter, uint mask, int shapeIndex) =>
+            row.SetPaletteData(filter, mask, ShapeUserData | (uint)shapeIndex);
 
         /**
          * The instance transform of a new shape: the local transform when it is rigid with one scale,
@@ -306,7 +301,7 @@ internal static class CollisionAdditions
         {
             CollisionCompoundWriter.RequireKeyCapacity(rows.Count, keyBits);
             var (nodes, domainMin, domainMax) = CompoundTree.Build(leaves);
-            sbyte stored = (sbyte)shape.File.U8(shape.File.RootOffset + 0x30);
+            sbyte stored = CollisionCompoundWriter.ChildKeyBits(shape.File);
             byte[] bytes = CollisionCompoundWriter.Write(shape, rows, nodes, domainMin, domainMax, keyBits != stored ? (sbyte)keyBits : null);
             var written = StaticCompoundShape.Parse(HavokPackfile.Parse(bytes));
             var decoded = written.LeafBoxes();
@@ -381,7 +376,7 @@ internal static class CollisionAdditions
             if (leafValues.TryGetValue(piece, out var cached)) return cached;
             var (tag, offset, shape) = (baseline.Pieces[piece].Tag, baseline.Pieces[piece].Offset, baseline.Pieces[piece].Shape);
             var file = HavokPackfile.Parse(catalog.Read(tag));
-            int userData = file.I32(offset + 0x18);
+            int userData = CollisionCompoundWriter.ShapeUserData(file, offset);
             (int, uint)[]? result;
             if (shape.Class != CollisionShapes.CompressedMesh)
                 result = Enumerable.Repeat((userData, 0u), shape.TriangleCount).ToArray();

@@ -16,6 +16,11 @@ internal static partial class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // One dummy key export serves the temporary installs.
+        string keyExport = Path.Combine(Path.GetTempPath(), "sunrise-live-binding-keys-" + Guid.NewGuid().ToString("N") + ".bin");
+        TestFixtures.WriteDummyKeyExport(keyExport);
+        StudioWorkspace.TestKeySource = install => install.StartsWith(Path.GetFullPath(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase)
+            ? keyExport : null;
         try
         {
             using var renderer = new Dx11Renderer(IntPtr.Zero, 320, 240, true);
@@ -46,6 +51,7 @@ internal static partial class Program
         }
         catch (Exception error)
         { Console.Error.WriteLine(error); return 1; }
+        finally { File.Delete(keyExport); }
     }
 
     /** Two placements of one mesh asset must keep independent native identities. */

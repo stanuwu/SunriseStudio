@@ -11,7 +11,7 @@ public sealed partial class AssetSceneLoader
     private static readonly ConditionalWeakTable<PackageCatalog, Dictionary<uint, (string Name, uint Tag)?>> DefinitionNames = new();
 
     /** Every NUL-separated string of a class-0x80800065 block enters the name bank; the source is the block. */
-    private void CollectInlineNames(uint tag, TagData data)
+    private void CollectInlineNames(uint tag, byte[] data)
     {
         foreach (var (offset, hash, name) in InlineNames(data))
         {
@@ -22,9 +22,9 @@ public sealed partial class AssetSceneLoader
     }
 
     /** Names in the tag's class-0x80800065 blocks; each carries its block's offset. */
-    internal static List<(int Offset, uint Hash, string Name)> InlineNames(TagData data) =>
+    internal static List<(int Offset, uint Hash, string Name)> InlineNames(byte[] data) =>
         InlineStringBlocks.Strings(data).Select(item =>
-            (item.Block, StringBankWriter.Hash(data.Bytes.AsSpan(item.Start, item.Length)), item.Text)).ToList();
+            (item.Block, StringBankWriter.Hash(data.AsSpan(item.Start, item.Length)), item.Text)).ToList();
 
     /** External preimages keep their candidate label even when the hash matches. */
     private (string Name, SceneNameEvidence Evidence, uint SourceTag, int SourceOffset) ResolveHashName(uint hash)
@@ -69,7 +69,7 @@ public sealed partial class AssetSceneLoader
         {
             var hash = marker.NameHash;
             if (marker.Slot != null && slotNames.TryGetValue(marker.Slot, out var slotHash)) hash = slotHash;
-            if (hash is 0 or uint.MaxValue or 0x811C9DC5) continue;
+            if (hash is 0 or uint.MaxValue or StringHash.Empty) continue;
             var resolved = ResolveHashName(hash);
             if (resolved.Evidence == SceneNameEvidence.Unknown) continue;
             marker.Name = resolved.Name;

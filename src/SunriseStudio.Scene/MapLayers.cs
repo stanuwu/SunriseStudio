@@ -1,4 +1,6 @@
 using System.Numerics;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -22,75 +24,85 @@ public sealed partial class AssetSceneLoader
     /** Layer ordinals and name hashes come from the map definition's typed cells array. */
     public IReadOnlyList<MapLayerInfo> DescribeMapLayers(uint mapRootTag)
     {
-        if (Class(mapRootTag) != 0x808091DE)
-            throw new ArgumentException("Layer metadata requires a map root.");
-        var root = Read(mapRootTag);
-        var definitionTag = root.U32(8);
-        if (Class(definitionTag) != 0x80809962)
-            throw new InvalidDataException("Map layer definition has the wrong class.");
-        var definition = Read(definitionTag);
-        var rows = definition.Rows(16, 0x808098C4, 24);
-        if (rows.Length > 256) throw new InvalidDataException("Map layers exceed the container mask.");
-        return rows.Select((row, index) =>
+        var (definitionTag, definition) = MapDefinition(mapRootTag, "Layer metadata requires a map root.");
+        ref readonly var map = ref TagView.Checked<SMapLocationNames>(definition, 0);
+        var cells = TagView.Rows(definition, in map.Slices, MapCell.Class);
+        if (cells.Length > MaximumMapLayers) throw new InvalidDataException("Map layers exceed the container mask.");
+        var layers = new MapLayerInfo[cells.Length];
+        for (int index = 0; index < cells.Length; index++)
         {
-            var hash = definition.U32(row + 8);
+            uint hash = cells[index].LayerNameHash;
             var resolved = ResolveHashName(hash);
-            return new MapLayerInfo(index, hash, resolved.Name, resolved.Evidence,
-                definitionTag, row, []);
-        }).ToArray();
+            layers[index] = new MapLayerInfo(index, hash, resolved.Name, resolved.Evidence, definitionTag,
+                TagView.OffsetOf(definition, in cells[index]), []);
+        }
+        return layers;
     }
 
     /** A mission loads each bubble's state layers and every layer in that bubble's row mask. */
     public IReadOnlySet<int> GetScenarioMapIndices(uint mapRootTag, uint scenarioTag)
     {
-        if (Class(mapRootTag) != 0x808091DE)
-            throw new ArgumentException("Scenario layer presets require a map root.");
-        var definitionTag = Read(mapRootTag).U32(8);
-        if (Class(definitionTag) != 0x80809962)
-            throw new InvalidDataException("Map layer definition has the wrong class.");
-        var definition = Read(definitionTag);
-        var cells = definition.Rows(16, 0x808098C4, 24);
-        var bubbles = definition.Rows(32, 0x808098C2, 80);
+        var (_, definition) = MapDefinition(mapRootTag, "Scenario layer presets require a map root.");
+        ref readonly var map = ref TagView.Checked<SMapLocationNames>(definition, 0);
+        var cells = TagView.Rows(definition, in map.Slices, MapCell.Class);
+        var bubbles = TagView.Rows(definition, in map.SliceSets, MapBubble.Class);
         var scenario = DescribeScenario(scenarioTag);
-        if (!bubbles.Select(r => definition.U32(r)).SequenceEqual(scenario.Bubbles.Select(b => b.NameHash)))
-            throw new ArgumentException("Scenario bubble identities do not match the selected map.");
+        bool sameBubbles = bubbles.Length == scenario.Bubbles.Count;
+        for (int index = 0; sameBubbles && index < bubbles.Length; index++) sameBubbles = bubbles[index].BubbleNameHash == scenario.Bubbles[index].NameHash;
+        if (!sameBubbles) throw new ArgumentException("Scenario bubble identities do not match the selected map.");
         var indices = new HashSet<int>();
         for (var ordinal = 0; ordinal < bubbles.Length; ++ordinal)
         {
-            if (definition.U32(bubbles[ordinal] + 72) != ordinal)
+            if (bubbles[ordinal].BubbleOrdinal != ordinal)
                 throw new InvalidDataException("Map bubble ordinal does not match its array position.");
             foreach (var state in scenario.Bubbles[ordinal].States)
             {
                 var index = checked((int)state.MapBubbleIndex);
-                if ((uint)index >= cells.Length || index >= 256)
+                if ((uint)index >= cells.Length || index >= MaximumMapLayers)
                     throw new ArgumentException("Scenario layer index is absent from the selected map.");
-                var owner = definition.U32(cells[index] + 16);
+                var owner = cells[index].OwnerBubble;
                 if (owner == uint.MaxValue)
                 {
-                    var owners = Enumerable.Range(0, bubbles.Length).Where(i =>
-                        (definition.U8(bubbles[i] + 40 + index / 8) & (1 << (index % 8))) != 0).ToArray();
-                    if (owners.Length != 1)
+                    int owners = 0;
+                    for (int candidate = 0; candidate < bubbles.Length; candidate++)
+                        if (InMask(bubbles[candidate].CellMask, index)) { owners++; owner = (uint)candidate; }
+                    if (owners != 1)
                         throw new ArgumentException("Scenario layer has ambiguous map bubble ownership.");
-                    owner = (uint)owners[0];
                 }
                 if (owner != ordinal)
                     throw new ArgumentException("Scenario layer owner does not match the selected map.");
                 indices.Add(index);
             }
-            // The game loads every container that meets the bubble row's mask at +40, which also holds the
+            // The game loads every container that meets the bubble row's cell mask, which also holds the
             // bubble's shared and environment layers (atmosphere, time of day); 0x7FF7420E2CF0 reads it.
             if (scenario.Bubbles[ordinal].States.Count == 0) continue;
-            for (var index = 0; index < cells.Length && index < 256; ++index)
-                if ((definition.U8(bubbles[ordinal] + 40 + index / 8) & (1 << (index % 8))) != 0) indices.Add(index);
+            for (var index = 0; index < cells.Length && index < MaximumMapLayers; ++index)
+                if (InMask(bubbles[ordinal].CellMask, index)) indices.Add(index);
         }
         return indices;
     }
 
-    /** Explicit selections use mask intersection; a null selection keeps every container. */
-    private void VisitMapContainer(uint tag, TagData data, uint bubble, Matrix4x4 transform, int depth)
+    /** A cell mask holds one bit per map layer, the 256 layers a container mask can name. */
+    private const int MaximumMapLayers = 256;
+
+    private static bool InMask(in Inline32<byte> mask, int index) => (mask[index / 8] & (1 << (index % 8))) != 0;
+
+    /** @return The definition a map root names, checked to be one. */
+    private (uint Tag, byte[] Bytes) MapDefinition(uint mapRootTag, string notRoot)
     {
-        var mask = data.Bytes.AsMemory(8, 32).ToArray();
-        var indices = Enumerable.Range(0, 256).Where(i => (mask[i / 8] & (1 << (i % 8))) != 0).ToArray();
+        if (Class(mapRootTag) != SMapRoot.Class) throw new ArgumentException(notRoot);
+        uint definitionTag = TagView.Checked<SMapRoot>(ReadBytes(mapRootTag), 0).MapDefinition;
+        if (Class(definitionTag) != SMapLocationNames.Class)
+            throw new InvalidDataException("Map layer definition has the wrong class.");
+        return (definitionTag, ReadBytes(definitionTag));
+    }
+
+    /** Explicit selections use mask intersection; a null selection keeps every container. */
+    private void VisitMapContainer(uint tag, byte[] data, uint bubble, Matrix4x4 transform, int depth)
+    {
+        ref readonly var stored = ref TagView.Checked<SMapContainer>(data, 0);
+        byte[] mask = ((ReadOnlySpan<byte>)stored.BubbleMask).ToArray();
+        var indices = Enumerable.Range(0, MaximumMapLayers).Where(i => (mask[i / 8] & (1 << (i % 8))) != 0).ToArray();
         var container = scene.MapContainers.FirstOrDefault(c => c.TagHash == tag);
         if (container == null)
         {
@@ -98,31 +110,33 @@ public sealed partial class AssetSceneLoader
             scene.MapContainers.Add(container);
         }
         mapContainerVisits[activeMapVisit!.Value] = container;
-        var members = data.Rows(0x28, 0x80808BB0, 4);
+        var members = TagView.Rows(data, in stored.Contents, ContainerMember.Class);
         if (options.MapGlobalIndices != null && !indices.Any(options.MapGlobalIndices.Contains))
         {
-            foreach (var member in members) ReadUnselectedOcclusionOwner(data.U32(member), bubble);
+            foreach (var member in members) ReadUnselectedOcclusionOwner(member.MemberTag, bubble);
             return;
         }
         foreach (var member in members)
-            Visit(data.U32(member), bubble, transform, depth + 1);
+            Visit(member.MemberTag, bubble, transform, depth + 1);
     }
 
     /** AO dependencies remain available even when their container's geometry is filtered out. */
     private void ReadUnselectedOcclusionOwner(uint tag, uint bubble)
     {
-        if (Class(tag) != 0x808099D6) return;
-        var data = Read(tag);
-        foreach (var row in data.Rows(8, 0x808099D8, 0x90))
+        if (Class(tag) != SMapPlacements.Class) return;
+        byte[] data = ReadBytes(tag);
+        ref readonly var placements = ref TagView.Checked<SMapPlacements>(data, 0);
+        var rows = TagView.Rows(data, in placements.Placements, AuthoredPlacementEntry.Class);
+        for (int index = 0; index < rows.Length; index++)
         {
-            var field = row + 0x78;
-            if (data.I64(field) == 0) continue;
-            var auxiliary = data.Relative(field);
-            if (!data.Has(auxiliary - 4, 0x18) || data.U32(auxiliary - 4) != 0x80806F38) continue;
-            var map = data.U32(auxiliary + 0x10);
-            if (Class(map) != 0x80807268)
+            ref readonly var row = ref rows[index];
+            if (TagView.TargetOffset(data, in row.Payload) is not { } auxiliary
+                || !TagView.Fits<SAmbientOcclusionPayload>(data, auxiliary)
+                || TagView.TargetClass(data, in row.Payload) != SAmbientOcclusionPayload.Class) continue;
+            uint map = TagView.At<SAmbientOcclusionPayload>(data, auxiliary).OcclusionMap;
+            if (Class(map) != SOcclusionMap.Class)
                 throw new InvalidDataException("Placed AO dependency has the wrong map class.");
-            scene.OcclusionOwners.Add(new NativeOcclusionOwner(bubble, tag, row, map));
+            scene.OcclusionOwners.Add(new NativeOcclusionOwner(bubble, tag, TagView.OffsetOf(data, in row), map));
         }
     }
 

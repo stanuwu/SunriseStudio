@@ -21,6 +21,7 @@ static int Run(string[] args)
 {
 if (args is ["--audit-live-library"]) { LiveAuditChecks.Run().GetAwaiter().GetResult(); return 0; }
 LiveAuditChecks.Run().GetAwaiter().GetResult();
+CommandChecks.Run();
 WorldScaleChecks.Run();
 CuiChecks.Run();
 var frame = new byte[128];

@@ -1,0 +1,30 @@
+{
+  "schema_version": 0,
+  "name": "bubble_c",
+  "kind": "interior",
+  "bounds": {
+    "min": [
+      -12,
+      -12,
+      -2008
+    ],
+    "max": [
+      12,
+      12,
+      -1992
+    ]
+  },
+  "neighbours": [],
+  "statics": [],
+  "spawn_points": [
+    {
+      "name": "interior_entry",
+      "position": [
+        0,
+        0,
+        -2000
+      ],
+      "facing": 90
+    }
+  ]
+}

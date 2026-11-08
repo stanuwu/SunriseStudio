@@ -38,6 +38,9 @@ public sealed record TfxEvaluation(Vector4[] Constants,
         ReadOnlyDictionary<NativeBindingKey, TfxResource>.Empty;
     /** Output lanes that depend on a FloatTerms input, keyed by vector * 4 + lane. */
     public IReadOnlyDictionary<int, TfxTerm> Terms { get; init; } = ReadOnlyDictionary<int, TfxTerm>.Empty;
+    /** Output rows the program writes; every other row keeps its constant template value. */
+    public IReadOnlySet<int> WrittenRows { get; init; } = NoRows;
+    internal static readonly IReadOnlySet<int> NoRows = new HashSet<int>();
     public bool IsComplete => MissingRequirements.Count == 0;
 
     public void RequireComplete()
@@ -91,6 +94,7 @@ public static class TfxEvaluator
         spareSamplers?.Clear();
         // Term rows, samplers and resources are allocated on their first write.
         TfxTerm[]?[]? outputTerms = null;
+        HashSet<int>? written = null;
         Dictionary<NativeBindingKey, MaterialSampler>? samplers = null;
         Dictionary<NativeBindingKey, TfxResource>? resources = null;
         var scratch = threadScratch ?? new Scratch();
@@ -384,9 +388,10 @@ public static class TfxEvaluator
                         byte destination = Operand();
                         if (destination >= output.Length)
                             throw new InvalidDataException("TFX output vector leaves its constant buffer.");
-                        var written = Pop(ValueKind.Vector);
-                        output[destination] = written.Vector;
-                        StoreTerms(destination, written.Terms);
+                        var stored = Pop(ValueKind.Vector);
+                        output[destination] = stored.Vector;
+                        StoreTerms(destination, stored.Terms);
+                        (written ??= []).Add(destination);
                         break;
                     case 0x42:
                         byte readOutput = Operand();
@@ -416,6 +421,7 @@ public static class TfxEvaluator
                             var matrixRow = Pop(ValueKind.Vector);
                             output[matrixDestination + row] = matrixRow.Vector;
                             StoreTerms(matrixDestination + row, matrixRow.Terms);
+                            (written ??= []).Add(matrixDestination + row);
                         }
                         break;
                     case 0x4C:
@@ -469,14 +475,14 @@ public static class TfxEvaluator
             if (count != 0) throw new InvalidDataException("TFX leaves values on the stack.");
             return new(output, samplers ?? NoSamplers, [])
             {
-                ResourceBindings = resources ?? NoResources, Terms = OutputTerms(outputTerms)
+                ResourceBindings = resources ?? NoResources, Terms = OutputTerms(outputTerms), WrittenRows = written ?? TfxEvaluation.NoRows
             };
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException)
         {
             return new(output, samplers ?? NoSamplers, [error.Message])
             {
-                ResourceBindings = resources ?? NoResources, Terms = OutputTerms(outputTerms)
+                ResourceBindings = resources ?? NoResources, Terms = OutputTerms(outputTerms), WrittenRows = written ?? TfxEvaluation.NoRows
             };
         }
         finally

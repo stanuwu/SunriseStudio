@@ -1,0 +1,2 @@
+# Generated files are compared byte for byte; keep their LF line ends on checkout.
+bundle/** -text

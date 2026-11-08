@@ -1,3 +1,4 @@
+using SunriseStudio.Tags.Generated;
 using System.Numerics;
 
 namespace SunriseStudio.Scene;
@@ -9,7 +10,7 @@ public sealed partial class AssetSceneLoader
 
     private void QueuePlacedClassModels(SceneMarker marker, Matrix4x4 transform)
     {
-        if (Class(marker.TagHash) == 0x80809C0F) placedModels.Add((marker, transform));
+        if (Class(marker.TagHash) == SEntity.Class) placedModels.Add((marker, transform));
     }
 
     /** Direct model components use each authored owner transform without choosing runtime state. */

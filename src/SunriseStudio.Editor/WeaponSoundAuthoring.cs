@@ -1,10 +1,16 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Animation;
 using SunriseStudio.Audio;
 using SunriseStudio.Authoring;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Packages.Registry;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Editor;
 
@@ -21,9 +27,8 @@ public sealed record PreparedWeaponSounds(IReadOnlyList<ProjectAssetAddition> As
 /** A weapon sound is replaced by a new bank and event; the records naming the old event are copied. */
 public static class WeaponSoundAuthoring
 {
-    private const uint EntityClass = 0x80809C0F, ConfigClass = 0x80809C36, WrapperClass = 0x8080744A, TableClass = 0x8080902D;
-    // Event tag: +8 event ID, +12 paired event ID, +20 bank tag, +24 media count, +32 media array pointer.
-    private const int EventId = 8, RelatedId = 12, BankTag = 20, MediaCount = 24, MediaArray = 32;
+    private const uint EntityClass = SEntity.Class, ConfigClass = SEntityConfig.Class, WrapperClass = SArtWrapper.Class,
+        TableClass = SAudioEventTable.Class;
     private static readonly HashSet<uint> Followed = [EntityClass, ConfigClass, WrapperClass, TableClass];
 
     /**
@@ -50,16 +55,17 @@ public static class WeaponSoundAuthoring
             if (!catalog.TryGetEntry(holder, out var entry) || !Followed.Contains(entry.Reference)) continue;
             byte[] bytes = catalog.Read(holder);
             var seen = new HashSet<uint>();
-            var foreign = ForeignRows(bytes, gearKey);
+            var foreign = entry.Reference == ConfigClass ? ForeignRows(bytes, gearKey) : [];
             int next = 0;
-            for (int at = 0; at + 4 <= bytes.Length; at += 4)
+            foreach (var reference in TagReferences(bytes, entry.Reference).OrderBy(reference => reference.Offset))
             {
+                int at = reference.Offset;
                 while (next < foreign.Count && foreign[next].End <= at) next++;
                 if (next < foreign.Count && at >= foreign[next].Start) continue;
-                uint value = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
-                if (value < 0x80800000 || !seen.Add(value) || !catalog.TryGetEntry(value, out var target)) continue;
+                uint value = (uint)reference.Value;
+                if (!TagHashes.IsTag(value) || !seen.Add(value) || !catalog.TryGetEntry(value, out var target)) continue;
                 if (target.Reference == AudioCatalog.EventClass)
-                    slots.Add(new(value, Label(catalog, bytes, holder, at) ?? "", paths[holder], owned.Contains(value),
+                    slots.Add(new(value, (entry.Reference == TableClass ? Label(bytes, value) : null) ?? "", paths[holder], owned.Contains(value),
                         $"{holder:X8} +0x{at:X} event {value:X8}"));
                 else if (!paths.ContainsKey(value) && Followed.Contains(target.Reference)
                     && (owned.Contains(value) || target.PackageId == template.PackageId))
@@ -81,48 +87,65 @@ public static class WeaponSoundAuthoring
     }
 
     /**
-     * Rows of a presentation or HUD selector config that another gear key selects, sorted by start.
+     * Rows of an entity config's weapon or HUD resource that another gear key selects, sorted by start.
      * A config with no row for the key falls back to its default row, so nothing is excluded then.
      */
     private static List<(int Start, int End)> ForeignRows(byte[] bytes, uint key)
     {
         var result = new List<(int, int)>();
-        void Rows(int field, uint rowClass, int stride, int keyOffset)
+        void Rows<T>(int field, uint rowClass, Func<int, uint> rowKey) where T : unmanaged
         {
-            if (field < 0 || field > bytes.Length - 16) return;
-            long count = I64(bytes, field), header = field + 8 + I64(bytes, field + 8);
-            if (count is <= 0 or > 1024 || header < 4 || header > bytes.Length - 16 || U32(bytes, (int)header + 8) != rowClass) return;
-            int data = (int)header + 16;
-            if (data + count * stride > bytes.Length) return;
+            if (!TagView.Fits<TagArray<T>>(bytes, field)) return;
+            var view = new TagArray(bytes, field);
+            // The header is read even when the relative word is zero.
+            var header = view.Header;
+            long count = view.Count;
+            if (count is <= 0 or > 1024 || header.Offset < 4 || header.Offset > bytes.Length - TagArray.HeaderSize
+                || header.ElementClass != rowClass) return;
+            int data = (int)header.DataOffset, stride = Unsafe.SizeOf<T>();
+            if (!view.RowsFit(stride)) return;
             var rows = Enumerable.Range(0, (int)count).Select(index => data + index * stride).ToArray();
-            if (!rows.Any(row => U32(bytes, row + keyOffset) == key)) return;
-            result.AddRange(rows.Where(row => U32(bytes, row + keyOffset) != key).Select(row => (row, row + stride)));
+            if (!rows.Any(row => rowKey(row) == key)) return;
+            result.AddRange(rows.Where(row => rowKey(row) != key).Select(row => (row, row + stride)));
         }
-        // Presentation config: rows at secondary +1416, the secondary at +0x598.
-        Rows(0x598 + 1416, PresentationRowClass, 232, 0);
-        // HUD config: rows at resource +0x240, the resource named at +24.
-        if (bytes.Length >= 32 && 24 + I64(bytes, 24) is var resource and >= 4 and < int.MaxValue && resource <= bytes.Length - 4
-            && U32(bytes, (int)resource - 4) == HudResourceClass)
-            Rows((int)resource + 0x240, HudRowClass, 448, 16);
+        // The rows hang off the resource the config's definition pointer names.
+        if (!TagView.FitsThrough<SEntityConfig>(bytes, 0, nameof(SEntityConfig.Definition))) return result;
+        ref readonly var pointer = ref TagView.At<RelativePointer<Unknown>>(bytes,
+            TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition)));
+        long resource = TagView.OffsetOf(bytes, in pointer) + pointer.Relative;
+        if (pointer.IsNull || resource is < 4 or >= int.MaxValue || resource > bytes.Length - 4) return result;
+        uint? resourceClass = TagView.ClassAt(bytes, (int)resource);
+        if (resourceClass == SWeaponResource.Class)
+            Rows<SWeaponVariantRow>((int)resource + TagView.FieldOffset<SWeaponResource>(nameof(SWeaponResource.PresentationRows)),
+                SWeaponVariantRow.Class, row => TagView.At<SWeaponVariantRow>(bytes, row).GearSelectorKey0x44a0b334Base);
+        else if (resourceClass == SWeaponHudConfigResource.Class)
+            Rows<SWeaponFiringRow>((int)resource + TagView.FieldOffset<SWeaponHudConfigResource>(nameof(SWeaponHudConfigResource.FiringRows448Byte)),
+                SWeaponFiringRow.Class, row => TagView.At<SWeaponFiringRow>(bytes, row).GearKey);
         result.Sort();
         return result;
     }
 
-    private const uint PresentationRowClass = 0x80803E72, HudResourceClass = 0x80803AC9, HudRowClass = 0x80803ACF;
-
-    /** A table row's event path names the sound; null when the holder has no path. */
-    private static string? Label(PackageCatalog catalog, byte[] holder, uint holderTag, int at)
+    /** The sound's name: the audio path of the table's first frame event that targets `eventTag`; null when none has one. */
+    private static string? Label(byte[] table, uint eventTag)
     {
-        if (catalog.TryGetEntry(holderTag, out var entry) && entry.Reference == TableClass && at >= 8)
+        int stride = Unsafe.SizeOf<AnimationTagEvent>();
+        if (!TagView.FitsThrough<SAudioEventTable>(table, 0, nameof(SAudioEventTable.SharedEvents))
+            || !TagArray.TryChecked(table, TagView.FieldOffset<SAudioEventTable>(nameof(SAudioEventTable.SharedEvents)),
+                C8080902f.Class, Unsafe.SizeOf<C8080902f>(), out var shared)) return null;
+        for (int index = 0; index < shared.Count; index++)
         {
-            long relative = BinaryPrimitives.ReadInt64LittleEndian(holder.AsSpan(at - 8));
-            long start = at - 8 + relative;
-            if (relative != 0 && start >= 0 && start < holder.Length)
+            int frames = shared.Data + index * Unsafe.SizeOf<C8080902f>() + TagView.FieldOffset<C8080902f>(nameof(C8080902f.FrameEvents));
+            if (!TagArray.TryChecked(table, frames, AnimationTagEvent.Class, stride, out var events)) continue;
+            for (int row = 0; row < events.Count; row++)
             {
-                int end = Array.IndexOf(holder, (byte)0, (int)start);
+                ref readonly var frameEvent = ref TagView.At<AnimationTagEvent>(table, events.Data + row * stride);
+                if (frameEvent.EventTarget != eventTag || frameEvent.AudioPath.IsNull) continue;
+                long start = TagView.OffsetOf(table, in frameEvent.AudioPath) + frameEvent.AudioPath.Relative;
+                if (start < 0 || start >= table.Length) continue;
+                int end = Array.IndexOf(table, (byte)0, (int)start);
                 if (end > start && end - start < 400)
                 {
-                    string path = System.Text.Encoding.ASCII.GetString(holder, (int)start, end - (int)start);
+                    string path = System.Text.Encoding.ASCII.GetString(table, (int)start, end - (int)start);
                     return Path.GetFileNameWithoutExtension(path.Replace('\\', '/'));
                 }
             }
@@ -150,12 +173,11 @@ public static class WeaponSoundAuthoring
         int cursor = firstEntry;
         uint Next()
         {
-            uint tag = ProjectTags.Tag(packageId, cursor);
-            if (cursor > 8191 || catalog.ContainsTag(tag)) throw new InvalidDataException("The weapon sounds need free package entries.");
-            cursor++;
-            return tag;
+            if (cursor >= TagHashes.EntriesPerPackage || catalog.ContainsTag(TagHashes.Make(packageId, cursor)))
+                throw new InvalidDataException("The weapon sounds need free package entries.");
+            return TagHashes.Make(packageId, cursor++);
         }
-        int Entry(uint tag) => (int)(tag - 0x80800000u - ((uint)packageId << 13));
+        int Entry(uint tag) => TagHashes.Split(tag).EntryIndex;
         byte[] Read(uint tag) => changes.TryGetValue(tag, out var bytes) ? bytes
             : assets.FirstOrDefault(asset => asset.Native is { } native && native.Tag() == tag)?.Data ?? catalog.Read(tag);
         void Write(uint tag, byte[] bytes)
@@ -168,17 +190,19 @@ public static class WeaponSoundAuthoring
         // Only this weapon's own records and clips switch to a copy; other weapons keep theirs.
         var candidates = slots.SelectMany(slot => slot.Path).Where(owned.Contains)
             .Concat(WeaponClips(catalog, weaponTag).Where(owned.Contains)).Distinct().ToList();
+        uint ClassOf(uint tag) => catalog.TryGetEntry(tag, out var entry) ? entry.Reference
+            : assets.FirstOrDefault(asset => asset.Native is { } native && native.Tag() == tag)?.Native!.Reference
+                ?? throw new InvalidDataException($"{tag:X8} has no class.");
         void Retarget(uint from, uint to)
         {
             bool constructed = catalog.TryGetEntry(from, out var fromEntry) && fromEntry.Reference == ConfigClass;
             foreach (uint tag in candidates.Concat(clones.Values).Distinct())
             {
                 byte[] bytes = Read(tag);
-                if (Count(bytes, from) == 0) continue;
-                bool entity = catalog.TryGetEntry(tag, out var entry) ? entry.Reference == EntityClass
-                    : assets.Any(asset => asset.Native is { } native && native.Tag() == tag && native.Reference == EntityClass);
-                Write(tag, constructed && entity && WeaponConfigEdits.ConstructionConfigs(bytes).Contains(from)
-                    ? WeaponConfigEdits.RetagRoot(bytes, from, to) : Replace(bytes, from, to));
+                uint classId = ClassOf(tag);
+                if (Count(bytes, classId, from) == 0) continue;
+                Write(tag, constructed && classId == EntityClass && WeaponConfigEdits.ConstructionConfigs(bytes).Contains(from)
+                    ? WeaponConfigEdits.RetagRoot(bytes, from, to) : Replace(bytes, classId, from, to));
                 summary.Add($"retargeted {tag:X8}: {from:X8} -> {to:X8}");
             }
         }
@@ -189,19 +213,20 @@ public static class WeaponSoundAuthoring
         {
             byte[] template = catalog.Read(source);
             if (!catalog.TryGetEntry(source, out var eventEntry) || eventEntry.Reference != AudioCatalog.EventClass
-                || template.Length < 40 || BinaryPrimitives.ReadUInt64LittleEndian(template) != (ulong)template.Length)
+                || !TagView.FitsThrough<SWwiseEvent>(template, 0, nameof(SWwiseEvent.StreamHandles))
+                || EventField<ulong>(template, nameof(SWwiseEvent.TagByteLength)) != (ulong)template.Length)
                 throw new InvalidDataException($"{source:X8} is not an audio event.");
-            uint bankSource = U32(template, BankTag);
+            uint bankSource = EventField<uint>(template, nameof(SWwiseEvent.SoundBank));
             if (!catalog.TryGetEntry(bankSource, out var bankEntry)) throw new InvalidDataException("The event's bank is missing.");
             var bank = AudioCatalog.ReadBank(bankSource, catalog.Read(bankSource));
-            var built = WwiseSoundBank.Build(bank, U32(template, EventId), U32(template, RelatedId), $"{name}/{source:x8}", wave, release);
+            var built = WwiseSoundBank.Build(bank, EventField<uint>(template, nameof(SWwiseEvent.WwiseEventId)),
+                EventField<uint>(template, nameof(SWwiseEvent.RelatedEventId)), $"{name}/{source:x8}", wave, release);
             byte[] authored = template.ToArray();
-            Put(authored, EventId, built.EventId);
-            Put(authored, RelatedId, built.RelatedEventId);
-            Put(authored, BankTag, bankTag);
+            EditEventField<uint>(authored, nameof(SWwiseEvent.WwiseEventId)) = built.EventId;
+            EditEventField<uint>(authored, nameof(SWwiseEvent.RelatedEventId)) = built.RelatedEventId;
+            EditEventField<uint>(authored, nameof(SWwiseEvent.SoundBank)) = bankTag;
             // The new media sits inside the bank, so the event lists no streamed media.
-            BinaryPrimitives.WriteInt64LittleEndian(authored.AsSpan(MediaCount), 0);
-            BinaryPrimitives.WriteInt64LittleEndian(authored.AsSpan(MediaArray), 0);
+            EditEventField<TagArray<TagReferenceElement>>(authored, nameof(SWwiseEvent.StreamHandles)) = default;
             return (authored, built, bankSource, bankEntry, eventEntry);
         }
 
@@ -214,7 +239,7 @@ public static class WeaponSoundAuthoring
             var previous = replaced.FirstOrDefault(asset => asset.Native!.Tag() == source);
             if (previous is not null)
             {
-                uint ownedEvent = previous.Native!.Tag(), ownedBank = U32(catalog.Read(ownedEvent), BankTag);
+                uint ownedEvent = previous.Native!.Tag(), ownedBank = EventField<uint>(catalog.Read(ownedEvent), nameof(SWwiseEvent.SoundBank));
                 var bankAsset = project.AddedAssets.FirstOrDefault(asset => asset.Native is { } native && native.Tag() == ownedBank)
                     ?? throw new InvalidDataException($"{ownedEvent:X8} does not name a bank of this project.");
                 var rebuilt = Author(previous.BaseTagHash!.Value, wave, release, ownedBank);
@@ -243,7 +268,7 @@ public static class WeaponSoundAuthoring
                     catalog.TryGetEntry(record, out var recordEntry);
                     byte[] bytes = catalog.Read(record);
                     bytes = recordEntry.Reference == ConfigClass ? WeaponConfigEdits.RetagConfig(bytes, record, copy).Bytes : bytes.ToArray();
-                    if (recordEntry.Reference != ConfigClass && Count(bytes, record) != 0)
+                    if (recordEntry.Reference != ConfigClass && Count(bytes, recordEntry.Reference, record) != 0)
                         throw new InvalidDataException($"{record:X8} names itself and has no checked copy rule.");
                     assets.Add(new($"{name}.{record:X8}", bytes, new(packageId, recordEntry.Reference, recordEntry.TypeInfo, null, Entry(copy)), record));
                     clones[record] = copy;
@@ -266,22 +291,35 @@ public static class WeaponSoundAuthoring
     private static HashSet<uint> OwnedTags(StudioProject project) =>
         project.AddedAssets.Where(asset => asset.Native is not null).Select(asset => asset.Native!.Tag()).ToHashSet();
 
-    private static int Count(byte[] bytes, uint value)
+    /** The tagref fields and tagptr tags of a record; a record the registry cannot parse is refused. */
+    private static IEnumerable<TagReference> TagReferences(byte[] bytes, uint classId)
     {
-        int hits = 0;
-        for (int at = 0; at + 4 <= bytes.Length; at += 4) if (U32(bytes, at) == value) hits++;
-        return hits;
+        var document = TagDocument.Parse(bytes, classId, StudioRegistry.Index);
+        if (document.Problems.Count > 0) throw new InvalidDataException($"A 0x{classId:X8} record does not parse: {document.Problems[0]}");
+        return document.References.Where(reference => reference.Kind != TagReferenceKind.WideRef);
     }
 
-    private static byte[] Replace(byte[] bytes, uint from, uint to)
+    /** Offsets of the tagref fields and tagptr tags that name `value`. */
+    private static List<int> References(byte[] bytes, uint classId, uint value) =>
+        TagReferences(bytes, classId).Where(reference => reference.Value == value).Select(reference => reference.Offset).ToList();
+
+    private static int Count(byte[] bytes, uint classId, uint value) => References(bytes, classId, value).Count;
+
+    private static byte[] Replace(byte[] bytes, uint classId, uint from, uint to)
     {
-        if (Count(bytes, from) == 0) throw new InvalidDataException($"No reference to {from:X8} to replace.");
+        var sites = References(bytes, classId, from);
+        if (sites.Count == 0) throw new InvalidDataException($"No reference to {from:X8} to replace.");
         byte[] output = bytes.ToArray();
-        for (int at = 0; at + 4 <= output.Length; at += 4) if (U32(output, at) == from) Put(output, at, to);
+        foreach (int at in sites) Put(output, at, to);
         return output;
     }
 
-    private static uint U32(byte[] bytes, int at) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
-    private static long I64(byte[] bytes, int at) => BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(at));
+    /** An event member read in place; the event only has to reach the member's end. */
+    private static T EventField<T>(byte[] bytes, string member) where T : unmanaged =>
+        TagView.At<T>(bytes, TagView.FieldOffset<SWwiseEvent>(member));
+
+    private static ref T EditEventField<T>(byte[] bytes, string member) where T : unmanaged =>
+        ref TagView.Edit<T>(bytes, TagView.FieldOffset<SWwiseEvent>(member));
+
     private static void Put(byte[] bytes, int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), value);
 }

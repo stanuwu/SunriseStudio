@@ -1,6 +1,10 @@
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -55,25 +59,28 @@ public sealed class CuiDocument
     public IEnumerable<CuiComponent> Components => Objects.SelectMany(value => value.Components);
     public IEnumerable<CuiProperty> Properties => Components.SelectMany(value => value.Properties);
 
-    public static bool Supports(uint classHash) => classHash is 0x80804825 or 0x8080496A;
+    public static bool Supports(uint classHash) => classHash is CuiResource.Class or SCuiHierarchy.Class;
 
     /** Hierarchy IDs are stored values; their array positions are unrelated. */
     public static CuiDocument Read(uint tagHash, uint classHash, ReadOnlyMemory<byte> bytes,
         Func<uint, string?>? resolveHash = null, CuiTypeRegistry? nativeTypes = null)
     {
-        var r = new TagReader(bytes);
-        if (classHash == 0x8080496A)
+        var tag = bytes.Span;
+        if (classHash == SCuiHierarchy.Class)
         {
-            if (!r.Has(0, 40)) throw new InvalidDataException("Truncated CUI hierarchy.");
-            var rows = r.Array(8, 0x80804616, 4);
+            if (!TagView.Fits<SCuiHierarchy>(tag, 0)) throw new InvalidDataException("Truncated CUI hierarchy.");
+            ref readonly var program = ref TagView.At<SCuiHierarchy>(tag, 0);
+            int edgeStride = Unsafe.SizeOf<SCuiHierarchyEdge>();
+            var rows = TagArray.Checked(tag, TagView.OffsetOf(tag, in program.Edges), SCuiHierarchyEdge.Class, edgeStride);
             List<CuiHierarchyNode> hierarchy = [];
             HashSet<ushort> ids = [];
             for (int i = 0; i < rows.Count; i++)
             {
-                int p = rows.Data + i * 4;
-                ushort id = r.U16(p + 2);
+                int p = rows.Data + i * edgeStride;
+                ref readonly var edge = ref TagView.At<SCuiHierarchyEdge>(tag, p);
+                ushort id = edge.Child;
                 if (!ids.Add(id)) throw new InvalidDataException("Duplicate CUI hierarchy node.");
-                hierarchy.Add(new(id, r.U16(p), p));
+                hierarchy.Add(new(id, edge.Parent, p));
             }
             foreach (var node in hierarchy)
                 if (node.Parent != 0x7FFF && !ids.Contains(node.Parent))
@@ -91,67 +98,83 @@ public sealed class CuiDocument
                 }
                 resolved.UnionWith(path);
             }
-            return new() { TagHash = tagHash, ClassHash = classHash, RootResource = r.U32(28), Hierarchy = hierarchy,
+            return new() { TagHash = tagHash, ClassHash = classHash, RootResource = program.CuiResource, Hierarchy = hierarchy,
                 NativeTypes = nativeTypes ?? CuiTypeRegistry.Core, Data = bytes,
                 SourceSha256 = Convert.ToHexString(SHA256.HashData(bytes.Span)) };
         }
-        if (classHash != 0x80804825) throw new NotSupportedException("This asset is not a CUI resource.");
-        if (!r.Has(0, 344)) throw new InvalidDataException("Truncated CUI resource.");
+        if (classHash != CuiResource.Class) throw new NotSupportedException("This asset is not a CUI resource.");
+        if (!TagView.Fits<CuiResource>(tag, 0)) throw new InvalidDataException("Truncated CUI resource.");
+        ref readonly var resource = ref TagView.At<CuiResource>(tag, 0);
         List<CuiImport> imports = [];
-        var imported = r.Array(8, 0x80804607, 12);
+        int importStride = Unsafe.SizeOf<SCuiImport>();
+        var imported = TagArray.Checked(tag, TagView.OffsetOf(tag, in resource.TemplateReferences), SCuiImport.Class, importStride);
         for (int i = 0; i < imported.Count; i++)
         {
-            int p = imported.Data + i * 12;
-            imports.Add(new(r.U32(p), r.U16(p + 4), r.U16(p + 6), p));
+            int p = imported.Data + i * importStride;
+            ref readonly var import = ref TagView.At<SCuiImport>(tag, p);
+            imports.Add(new(import.Resource, import.FirstNode, import.NodeCount, p));
         }
-        var names = r.Array(24, 0x80804618, 4);
-        var types = r.Array(56, 0x80804622, 16);
+        int nameStride = Unsafe.SizeOf<SCuiNodeName>(), typeStride = Unsafe.SizeOf<CuiTypeRow>();
+        var names = TagArray.Checked(tag, TagView.OffsetOf(tag, in resource.Objects), SCuiNodeName.Class, nameStride);
+        var types = TagArray.Checked(tag, TagView.OffsetOf(tag, in resource.Components), CuiTypeRow.Class, typeStride);
         List<CuiNode> nodes = [];
         for (int i = 0; i < types.Count; i++)
         {
-            int p = types.Data + i * 16;
-            ushort id = r.U16(p + 10);
-            uint name = i < names.Count ? r.U32(names.Data + i * 4) : 0;
-            nodes.Add(new(id, name, r.U32(p), r.U32(p + 4), resolveHash?.Invoke(name) ?? $"Node {id}", p));
+            int p = types.Data + i * typeStride;
+            ref readonly var type = ref TagView.At<CuiTypeRow>(tag, p);
+            ushort id = type.NodeId;
+            uint name = i < names.Count ? TagView.At<SCuiNodeName>(tag, names.Data + i * nameStride).NameHash : 0;
+            // The u64 type key splits into its low and high words.
+            nodes.Add(new(id, name, (uint)type.TypeHash, (uint)(type.TypeHash >> 32), resolveHash?.Invoke(name) ?? $"Node {id}", p));
         }
         List<CuiValuePool> pools = [];
         foreach (var schema in PoolSchemas)
         {
-            var array = r.Array(schema.Offset, schema.Class, schema.Stride);
+            var array = TagArray.Checked(tag, schema.Offset, schema.Class, schema.Stride);
             if (array.Count > 0) pools.Add(new(schema.Offset, array.Data, array.Count,
                 schema.Stride, schema.Class, schema.Name));
         }
-        var objects = r.Array(72, 0x8080462A, 64);
+        int objectStride = Unsafe.SizeOf<CuiObjectRow>(), componentStride = Unsafe.SizeOf<CuiComponentRow>();
+        int propertyStride = Unsafe.SizeOf<CuiPropertyRow>(), selectorStride = Unsafe.SizeOf<CuiPathSelector>();
+        var objects = TagArray.Checked(tag, TagView.OffsetOf(tag, in resource.Overlays), CuiObjectRow.Class, objectStride);
         List<CuiObject> objectRows = [];
         for (int i = 0; i < objects.Count; i++)
         {
-            int p = objects.Data + i * 64;
-            var components = r.Array(p + 32, 0x808046D4, 24);
+            int p = objects.Data + i * objectStride;
+            ref readonly var objectRow = ref TagView.At<CuiObjectRow>(tag, p);
+            var components = TagArray.Checked(tag, TagView.OffsetOf(tag, in objectRow.Components), CuiComponentRow.Class, componentStride);
             List<CuiComponent> componentRows = [];
             for (int j = 0; j < components.Count; j++)
             {
-                int c = components.Data + j * 24;
-                var references = r.Array(c + 8, 0x80804858, 24);
+                int c = components.Data + j * componentStride;
+                ref readonly var component = ref TagView.At<CuiComponentRow>(tag, c);
+                var references = TagArray.Checked(tag, TagView.OffsetOf(tag, in component.Properties), CuiPropertyRow.Class, propertyStride);
                 List<CuiProperty> properties = [];
                 for (int k = 0; k < references.Count; k++)
                 {
-                    int e = references.Data + k * 24;
-                    int slot = r.Relative(e), value = r.Relative(e + 16);
+                    int e = references.Data + k * propertyStride;
+                    ref readonly var reference = ref TagView.At<CuiPropertyRow>(tag, e);
+                    int slot = TagPointer.Checked(tag, TagView.OffsetOf(tag, in reference.PathSlot));
+                    int value = TagPointer.Checked(tag, TagView.OffsetOf(tag, in reference.Value));
                     var pool = pools.FirstOrDefault(pool => value >= pool.DataOffset
                         && value < pool.DataOffset + pool.Count * pool.Stride
                         && (value - pool.DataOffset) % pool.Stride == 0);
                     if (pool is null) throw new InvalidDataException("CUI property leaves its typed value pool.");
-                    var path = r.Array(slot, 0x80804949, 4);
-                    ulong selector = r.U64(e + 8);
+                    // The slot pointer names the selector array field of a path slot.
+                    var path = TagArray.Checked(tag, slot, CuiPathSelector.Class, selectorStride);
+                    ulong selector = reference.Selector;
+                    var words = new uint[path.Count + 1];
+                    for (int index = 0; index < path.Count; index++)
+                        words[index] = TagView.At<CuiPathSelector>(tag, path.Data + index * selectorStride).Selector;
+                    words[^1] = (uint)selector;
                     properties.Add(new(selector, e, value, pool.ClassHash, pool.DescriptorOffset, path.Count == 0,
-                        Fields(r, pool, value, selector))
-                    { Path = [.. Enumerable.Range(0, path.Count).Select(index => r.U32(path.Data + index * 4)), (uint)selector] });
+                        Fields(tag, pool, value, selector))
+                    { Path = [.. words] });
                 }
-                componentRows.Add(new(r.U64(c), c, properties));
+                componentRows.Add(new(component.NodeKey, c, properties));
             }
-            objectRows.Add(new(i, p, componentRows)
-            { IsDefaultProfile = r.U64(p) == 0x701CFA3E7F9B89AF && r.U64(p + 8) == 0xECBABAE340FB9D24
-                && r.U64(p + 16) == 0xAD52C0B9 && r.U64(p + 24) == 0xB93A719D });
+            ReadOnlySpan<byte> profile = objectRow.ProfileKey;
+            objectRows.Add(new(i, p, componentRows) { IsDefaultProfile = profile.SequenceEqual(DefaultProfileKey) });
         }
         return new() { TagHash = tagHash, ClassHash = classHash, Data = bytes,
             NativeTypes = nativeTypes ?? CuiTypeRegistry.Core,
@@ -159,15 +182,34 @@ public sealed class CuiDocument
             Objects = objectRows, Pools = pools };
     }
 
-    private static readonly (int Offset, uint Class, int Stride, string Name)[] PoolSchemas =
+    // A default profile's object row starts with this 32-byte key.
+    private static readonly byte[] DefaultProfileKey =
+        MemoryMarshal.AsBytes<ulong>([0x701CFA3E7F9B89AF, 0xECBABAE340FB9D24, 0xAD52C0B9, 0xB93A719D]).ToArray();
+
+    private static readonly (int Offset, uint Class, int Stride, string Name)[] PoolSchemas = ReadPoolSchemas();
+
+    /** Value pool descriptors are absolute offsets; the resource root sits at offset 0. */
+    private static (int Offset, uint Class, int Stride, string Name)[] ReadPoolSchemas() =>
     [
-        (136, 0x8080468D, 1, "Bytes"), (152, 0x80804696, 4, "Integers"),
-        (168, 0x80804695, 8, "Pairs"), (184, 0x80804694, 4, "Floats A"),
-        (200, 0x80804694, 4, "Floats B"), (216, 0x80804693, 16, "Vectors"),
-        (232, 0x80804692, 4, "String hashes"), (264, 0x80804690, 4, "Hashes"),
-        (280, 0x8080468B, 2, "Shorts"), (312, 0x8080468F, 4, "Words"),
-        (328, 0x80804688, 16, "Records")
+        (Pool("BoolValues"), SCuiBoolValue.Class, Unsafe.SizeOf<SCuiBoolValue>(), "Bytes"),
+        (Pool("PoolIntegers"), CuiIntegerValue.Class, Unsafe.SizeOf<CuiIntegerValue>(), "Integers"),
+        (Pool("PoolPairs"), C80804695.Class, Unsafe.SizeOf<C80804695>(), "Pairs"),
+        (Pool("PoolFloatsA"), SCuiFloatValue.Class, Unsafe.SizeOf<SCuiFloatValue>(), "Floats A"),
+        (Pool("PoolFloatsBNormalized"), SCuiFloatValue.Class, Unsafe.SizeOf<SCuiFloatValue>(), "Floats B"),
+        (Pool("PoolVectors"), C80804693.Class, Unsafe.SizeOf<C80804693>(), "Vectors"),
+        (Pool("PoolStringHashes"), C80804692.Class, Unsafe.SizeOf<C80804692>(), "String hashes"),
+        (Pool("HandleValues"), C80804690.Class, Unsafe.SizeOf<C80804690>(), "Hashes"),
+        (Pool("ComponentValues"), CuiShortValue.Class, Unsafe.SizeOf<CuiShortValue>(), "Shorts"),
+        (Pool("PoolWords"), C8080468f.Class, Unsafe.SizeOf<C8080468f>(), "Words"),
+        (Pool("PoolRecords"), C80804688.Class, Unsafe.SizeOf<C80804688>(), "Records")
     ];
+
+    private static int Pool(string member) => TagView.FieldOffset<CuiResource>($"ValuePool.{member}");
+
+    /** Value pool descriptors; FloatsB stores values over the reference height. */
+    public static readonly int FloatsA = Pool("PoolFloatsA"), FloatsB = Pool("PoolFloatsBNormalized");
+    public static readonly int Bools = Pool("BoolValues"), Integers = Pool("PoolIntegers"), Vectors = Pool("PoolVectors"),
+        StringHashes = Pool("PoolStringHashes"), Handles = Pool("HandleValues");
 
     internal static (uint Class, int Stride) PoolSchema(int descriptor)
     {
@@ -182,16 +224,26 @@ public sealed class CuiDocument
     } : $"Property {selector:X}";
 
     /** Unknown record classes stay read-only; only known scalar storage becomes editable. */
-    private static IReadOnlyList<AssetProperty> Fields(TagReader r, CuiValuePool pool, int p, ulong selector)
+    private static IReadOnlyList<AssetProperty> Fields(ReadOnlySpan<byte> tag, CuiValuePool pool, int p, ulong selector)
     {
         string name = PropertyName(selector);
+        if (pool.ClassHash == C80804693.Class)
+        {
+            ref readonly var vector = ref TagView.At<C80804693>(tag, p);
+            return [ViewProperty.Of(tag, $"{name} X", in vector.Unk0, true), ViewProperty.Of(tag, $"{name} Y", in vector.Unk4, true),
+                ViewProperty.Of(tag, $"{name} Z", in vector.Unk8, true), ViewProperty.Of(tag, $"{name} W", in vector.UnkC, true)];
+        }
         return pool.ClassHash switch
         {
-            0x8080468D => [r.Byte(name, p, true)],
-            0x8080468B => [r.UShort(name, p, true)],
-            0x80804694 => [r.Float(name, p, true)],
-            0x80804693 => Enumerable.Range(0, 4).Select(i => r.Float($"{name} {"XYZW"[i]}", p + i * 4, true)).ToArray(),
-            0x80804696 or 0x80804692 or 0x80804690 or 0x8080468F => [r.UInt(name, p, true, true)],
+            SCuiBoolValue.Class => [ViewProperty.Of(tag, name, in TagView.At<SCuiBoolValue>(tag, p).ValueAutoWidthSelector0x41a, true)],
+            CuiShortValue.Class => [ViewProperty.Of(tag, name, in TagView.At<CuiShortValue>(tag, p).Value, true)],
+            SCuiFloatValue.Class => [ViewProperty.Of(tag, name, in TagView.At<SCuiFloatValue>(tag, p).ValueLayoutSelectors0x2060x209, true)],
+            // Integer pool values show as unsigned hex words, like the other word pools.
+            CuiIntegerValue.Class => [ViewProperty.Of(tag, name,
+                in Unsafe.As<int, uint>(ref Unsafe.AsRef(in TagView.At<CuiIntegerValue>(tag, p).Value)), true, true)],
+            C80804692.Class => [ViewProperty.Of(tag, name, in TagView.At<C80804692>(tag, p).Unk0, true, true)],
+            C80804690.Class => [ViewProperty.Of(tag, name, in TagView.At<C80804690>(tag, p).Unk0, true, true)],
+            C8080468f.Class => [ViewProperty.Of(tag, name, in TagView.At<C8080468f>(tag, p).Unk0, true, true)],
             _ => [new(name, $"{pool.Name} {p:X}", p)]
         };
     }
@@ -218,14 +270,14 @@ public static class CuiLayout
             for (int axis = 0; axis < 4; axis++)
             {
                 ulong selector = (ulong)(0x206 + axis);
-                var property = component.Properties.LastOrDefault(p => p.Direct && p.ValueClass == 0x80804694
+                var property = component.Properties.LastOrDefault(p => p.Direct && p.ValueClass == SCuiFloatValue.Class
                     && (p.Selector == selector || container && axis >= 2 && p.Selector == (ulong)(0x600 + axis - 2)));
                 if (property is not null) fields.Add(property);
                 else if (defaults)
                 {
                     var size = document.NativeTypes.DefaultSize!.Value;
                     float value = axis == 2 ? size.X : axis == 3 ? size.Y : 0;
-                    fields.Add(new(selector, -1, -1, 0x80804694, 184, true,
+                    fields.Add(new(selector, -1, -1, SCuiFloatValue.Class, CuiDocument.FloatsA, true,
                         [new(CuiDocument.PropertyName(selector, true), value.ToString("R", CultureInfo.InvariantCulture))]));
                 }
             }
@@ -234,7 +286,7 @@ public static class CuiLayout
             var values = properties.Select(p => float.Parse(p.Fields[0].Value, CultureInfo.InvariantCulture)).ToArray();
             if (values.Any(value => !float.IsFinite(value) || Math.Abs(value) > 10000)) continue;
             for (int i = 0; i < values.Length; i++)
-                if (properties[i].PoolDescriptor == 200) values[i] = MathF.Round(values[i] * ReferenceHeight);
+                if (properties[i].PoolDescriptor == CuiDocument.FloatsB) values[i] = MathF.Round(values[i] * ReferenceHeight);
             result.Add(new(node, component, new(values[0], values[1], values[2], values[3]), properties));
         }
         return result;
@@ -258,9 +310,9 @@ public static class CuiLayout
                 throw new InvalidDataException("Enter finite coordinates and nonnegative dimensions.");
             if (values[i] == previous[i]) continue;
             var property = rectangle.Properties[i];
-            if (property.RecordOffset >= 0 && !all.Contains(property) || property.ValueClass != 0x80804694)
+            if (property.RecordOffset >= 0 && !all.Contains(property) || property.ValueClass != SCuiFloatValue.Class)
                 throw new InvalidDataException("The layout field does not belong to this resource.");
-            float value = property.PoolDescriptor == 200 ? values[i] / ReferenceHeight : values[i];
+            float value = property.PoolDescriptor == CuiDocument.FloatsB ? values[i] / ReferenceHeight : values[i];
             replacements.Add(new(property.Selector, property.PoolDescriptor, BitConverter.GetBytes(value)));
         }
         return CuiPropertyEdits.Upsert(bytes, document, rectangle.Component, replacements);

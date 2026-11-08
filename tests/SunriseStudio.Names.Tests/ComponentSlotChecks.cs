@@ -92,9 +92,9 @@ internal static class ComponentSlotChecks
 
         PackageOverlayEntry Overlay(uint tag, uint reference)
         {
-            ushort package = checked((ushort)((tag - 0x80800000U) >> 13));
+            ushort package = checked((ushort)TagHashes.Package(tag));
             return new(new(tag, reference, 8, 0, bytes[tag].Length,
-                $"w64_roles_added_{package:x4}_0", package, (int)(tag & 8191)) { TypeInfo = 8 << 9 });
+                $"w64_roles_added_{package:x4}_0", package, TagHashes.Entry(tag)) { TypeInfo = 8 << 9 });
         }
         void Refusal(Action<byte[]> change, string reason)
         {
@@ -138,7 +138,7 @@ internal static class ComponentSlotChecks
     {
         byte[] bytes = new byte[256]; Q(bytes, 16, 64); U(bytes, 76, Class); U(bytes, 80, tag);
         S(bytes, 52, 13);
-        U(bytes, 128, tag); U(bytes, 132, Class); U(bytes, 136, 0x70); U(bytes, 176, key);
+        Q(bytes, 24, 128 - 24); U(bytes, 128, tag); U(bytes, 132, Class); U(bytes, 136, 80); U(bytes, 176, key);
         S(bytes, 180, type); S(bytes, 182, 1); U(bytes, 184, 42);
         U(bytes, 196, uint.MaxValue); U(bytes, 200, 0x80806001);
         return bytes;

@@ -31,7 +31,7 @@ internal static class CubemapChecks
             }
             catch (NotSupportedException) { rejected = true; }
             Check(rejected, "Cubemap row QTS edit was accepted without its embedded matrices.");
-            Check(cube.SourceData.Length == 0x1A0 && cube.ResourceData.Length == 0x1C0,
+            Check(cube.ResourceData.Length == 0x1C0,
                 "Cubemap payload extent changed.");
             Check(cube.Extents == new Vector3(2, 3, 4)
                 && cube.SourceMatrixF0.Translation == new Vector3(7, 8, 9)
@@ -40,7 +40,7 @@ internal static class CubemapChecks
             Check(cube.ResolutionX == 0 && cube.ResolutionY == 6 && cube.ResolutionZ == 3,
                 "Native zero grid dimension was rewritten.");
             Check(cube.VisibilityBinding == 0x1122334455667788UL
-                && cube.SourceData.Span.SequenceEqual(good.AsSpan(0xE0, 0x1A0)),
+                && cube.ResourceData.Span.SequenceEqual(good.AsSpan(0xD0, 0x1C0)),
                 "Cubemap source fields changed during decode.");
             var containers = new[] { new MapContainerInfo(123, new byte[32], [4]) };
             placed.OwnerMarker.MapContainers = containers;

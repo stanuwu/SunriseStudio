@@ -10,9 +10,11 @@ internal static class Program
     {
         try
         {
+            if (args.Length > 0 && args[0] == "tft") return TftCommand.Run(args[1..]);
             if (args.Contains("--help"))
             {
                 Console.WriteLine("Sunrise Studio [--game PATH] [--project PATH] [--tag HEX] [--keys PATH] [--warp]");
+                Console.WriteLine("Loose tags: " + TftCommand.Usage);
                 Console.WriteLine("Keys: automatic from the installation; --keys accepts a Sunrise key export or unpacked executable.");
                 Console.WriteLine("Open: --map HEX --mission HEX --script PATH --mission-view");
                 Console.WriteLine("Preview: --native --animation HEX --category NAME --page NAME");

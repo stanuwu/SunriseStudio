@@ -1,7 +1,8 @@
-using System.Buffers.Binary;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Editor.Creation;
 
@@ -54,7 +55,7 @@ public sealed partial class VendorWorkflow
                 && native.PackageId == packageId && native.Reference == StringBankWriter.ContainerClass))
             {
                 byte[] container = Read(TagOf(asset.Native!.PackageId, asset.Native.EntryIndex ?? -1));
-                Read(BinaryPrimitives.ReadUInt32LittleEndian(container.AsSpan(24)));
+                Read(TagView.At<uint>(container, TagView.FieldOffset<SLocalizedStrings>(nameof(SLocalizedStrings.LanguageData))));
             }
             var bank = ProjectStringBank.Plan(catalog, currentProject, packageId, next, Texts(), BankCandidates(), sources);
             additions.AddRange(bank.Additions); expected.AddRange(bank.AddedTags);
@@ -70,7 +71,7 @@ public sealed partial class VendorWorkflow
             var pair = InvestmentVendorAuthoring.ReadText(text, selected.Hash, InvestmentVendorAuthoring.SubtitleOffset);
             int bank = pair.Bank <= short.MaxValue ? pair.Bank : 0;
             text = InvestmentVendorAuthoring.SetText(text, selected.Hash, InvestmentVendorAuthoring.SubtitleOffset,
-                bank, InvestmentItemClone.EmptyStringHash);
+                bank, StringHash.Empty);
         }
         if (icon.Tag is { } iconTag)
         {
@@ -84,7 +85,7 @@ public sealed partial class VendorWorkflow
             byte[] index = Read(sources.Vendors), displayIndex = Read(sources.VendorDisplays);
             var used = InvestmentItemClone.ReadIndexRows(index).Select(row => row.Hash)
                 .Concat(InvestmentItemClone.ReadIndexRows(displayIndex).Select(row => row.Hash)).ToHashSet();
-            hash = InvestmentItemClone.NewDefinitionHash($"sunrise:vendor:{currentProject.Name}:{packageId:X4}:{first}:{title}", used);
+            hash = StringHash.NewDefinitionHash($"sunrise:vendor:{currentProject.Name}:{packageId:X4}:{first}:{title}", used);
             (game, text) = InvestmentVendorAuthoring.Derive(game, text, selected.Hash, hash);
             var (newIndex, position) = InvestmentItemClone.AppendIndexRow(index, hash, gameTag);
             var (newDisplayIndex, otherPosition) = InvestmentItemClone.AppendIndexRow(displayIndex, hash, textTag);
@@ -118,7 +119,7 @@ public sealed partial class VendorWorkflow
                 var fresh = InvestmentVendorAuthoring.ReadBudget(catalog, sources);
                 InvestmentVendorAuthoring.ValidateBudget(fresh, clone ? 1 : 0,
                     sales.Count - (clone ? 0 : detail!.Sales.Count),
-                    clone ? checked((int)BinaryPrimitives.ReadInt64LittleEndian(definition.AsSpan(32))) : 0);
+                    clone ? BaseCategoryCount() : 0);
                 Unchanged(transactionGeneration);
                 if (allocated.Count != expected.Count || allocated.Where((asset, i) => asset.Native is not { } native
                     || TagOf(native.PackageId, native.EntryIndex ?? -1) != expected[i]).Any())

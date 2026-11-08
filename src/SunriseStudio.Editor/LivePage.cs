@@ -2,11 +2,12 @@ using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Live;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
-/** The live connection reads diagnostic frames and never changes the running game. */
+/** The live connection only reads diagnostic frames; updates to the game go through the command link. */
 public sealed partial class LivePage : IDisposable
 {
     private LiveConnection? connection;
@@ -92,6 +93,7 @@ public sealed partial class LivePage : IDisposable
     /** Once a frame: reads the game, syncs the world and screen, and applies placements, spawned rows and poses. */
     public void Poll(StudioWorkspace workspace, AssetViewport viewport)
     {
+        PollUpdates(workspace);
         if (connection is null) return;
         try
         {
@@ -189,6 +191,7 @@ public sealed partial class LivePage : IDisposable
         if (root != catalog.GameRoot)
         { Disconnect(); root = catalog.GameRoot; Refresh(); }
         DrawToolbar(workspace, viewport);
+        DrawUpdates(workspace);
         if (connection is null)
         {
             ImGui.TextDisabled("Attach needs studio_attach");
@@ -366,7 +369,7 @@ public sealed partial class LivePage : IDisposable
         if (map?.DefinitionTag != loaded.MapDefinitionTag) map = mapRoots.GetValueOrDefault(loaded.MapDefinitionTag);
         if (map is null) { syncStatus = "Map unavailable"; return; }
         uint scenario = workspace.Catalog?.TryGetEntry(loaded.ScenarioTag, out var entry) == true
-            && entry.Reference == 0x80809994 ? loaded.ScenarioTag : 0;
+            && entry.Reference == SScenario.Class ? loaded.ScenarioTag : 0;
         if (scenario == 0 && loaded.ScenarioTag is not (0 or uint.MaxValue)) syncStatus = "Scenario unavailable";
         // A map whose bubble list could not be read opens whole.
         HashSet<uint>? bubbles = map.BubbleHashes.Count == 0 ? null

@@ -67,7 +67,7 @@ internal static class ItemWorkflowChecks
         Check(workflow.Problems(workspace).Count == 0, string.Join("; ", workflow.Problems(workspace)));
         workflow.Create(workspace); Wait(workspace);
         Check(InvestmentItemClone.ReadDisplayString(workspace.Catalog!.Read(first + 3), InvestmentItemClone.DisplayFlavor)
-            == (0u, InvestmentItemClone.EmptyStringHash), "Clearing the description retained its native string reference.");
+            == (0u, StringHash.Empty), "Clearing the description retained its native string reference.");
         Check(workspace.Project!.AddedAssets.Count == 0 && workspace.Project.Changes.Count == 1,
             "Clearing the description created a bank or changed unrelated assets.");
         workspace.Undo(); Wait(workspace);

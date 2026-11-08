@@ -4,6 +4,8 @@ using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Viewport;
 
@@ -24,7 +26,7 @@ public sealed record NativeGearMaterial(IReadOnlyList<NativeGearScope> Scopes, I
 
 /**
  * Dye records for gear_dye_0 to gear_dye_decal, and where they came from.
- * DecalMode is dye byte +0x14 of a real gear_dye_decal dye; null when slot 3 is the global default.
+ * DecalMode is the DecalMode byte of a real gear_dye_decal dye; null when slot 3 is the global default.
  * Kind is the gear kind of the item the dyes came from; null when no item gave one.
  */
 public sealed record NativeGearDyes(IReadOnlyList<uint> Records, string Source, byte? DecalMode = null, int? Kind = null);
@@ -35,25 +37,18 @@ public sealed record NativeGearDyes(IReadOnlyList<uint> Records, string Source, 
  */
 public static class NativeGearPlating
 {
-    // Material scope-mask word; bit 25 reads the plate textures and bits 26 to 29 the dye scopes.
-    private const int MaterialMaskOffset = 0x18;
+    // Scope-mask bit 25 reads the plate textures and bits 26 to 29 the dye scopes.
     private const int PlateScopeBit = 25, FirstDyeScope = 26, DyeSlots = 4;
     // Global default records the draw uses for a slot with no dye; dword_7FF744B21010 holds them.
     public static readonly IReadOnlyList<uint> DefaultRecords = [0x80B35715, 0x80B35718, 0x80B3571B, 0x80B3571E];
     public static readonly NativeGearDyes Undyed = new(DefaultRecords, "global default dye records");
     // Stages whose draw runs dye scopes 26 to 28 (mask 0x104C7), 29 (0x144E) and plate scope 25 (0x114CF).
     private const uint DyeStages = 0x104C7, DecalStages = 0x144E, PlateStages = 0x114CF;
-    // Model and cloth component resources name the gear-plated record at +0x248.
-    private const int RecordField = 0x248;
-    private const uint RecordClass = 0x808072D2;
-    internal const uint DescriptorClass = 0x80809EBB, DescriptorRowClass = 0x80809EBD;
-    private const uint ResourceClass = 0x808072BD, ClothResourceClass = 0x80807286, ScopeClass = 0x808071F3, DyeClass = 0x808071CD;
+    internal const uint DescriptorClass = STextureDescriptor.Class, DescriptorRowClass = UnknownTextureDescriptorRow.Class;
+    private const uint ResourceClass = SModelComponent.Class, ClothResourceClass = SClothModelComponent.Class, ScopeClass = SScope.Class,
+        DyeClass = UnknownDye.Class;
     // The cloth draw 0x7FF742E78D60 runs only gear_dye_1 (scope 27), with no dye pair check.
     private const int ClothDyeSlot = 1;
-    // Dye +0x14 picks the forced decal blend; that the game reads it as dye object +20 is inferred.
-    private const int DecalModeOffset = 0x14;
-    // Item definition +184 is the bucket.
-    private const int ItemBucketField = 184;
     /** Placeholder tag for extern 1 resource 20; the frame writer leaves it null, so it reads zero. */
     public const uint FrameDyeTexture = 0;
     public static readonly TfxResource FrameDyeResource = new("extern 1 resource 20",
@@ -79,14 +74,14 @@ public static class NativeGearPlating
     /** Material scope-mask bits 25 to 29; zero when the material reads no gear scope. */
     public static uint GearBits(PackageCatalog catalog, uint material)
     {
-        if (!catalog.TryGetEntry(material, out var entry) || entry.Reference != 0x808071E8) return 0;
+        if (!catalog.TryGetEntry(material, out var entry) || entry.Reference != STechnique.Class) return 0;
         byte[] bytes = catalog.Read(material);
-        return bytes.Length < MaterialMaskOffset + 4 ? 0
-            : BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(MaterialMaskOffset)) & (0x1Fu << PlateScopeBit);
+        return !TagView.FitsThrough<STechnique>(bytes, 0, nameof(STechnique.ScopeMask)) ? 0
+            : TagView.Member<STechnique, uint>(bytes, 0, nameof(STechnique.ScopeMask)) & (0x1Fu << PlateScopeBit);
     }
 
     /**
-     * Item dyes with no plugs: art block +0x38 rows, then +0x48 rows replace rows of the same i8 key.
+     * Item dyes with no plugs: MaterialOverrides1 rows, then MaterialOverrides2 rows replace rows of the same i8 key.
      * Rows are {i8 key, i8 pad, u16 dye index}; 0x7FF742200F30 owns the order.
      * @return The records by slot, the default record where the item names none; null when unreadable.
      */
@@ -95,11 +90,18 @@ public static class NativeGearPlating
         error = null;
         try
         {
-            int art = Relative(item, 136);
+            int art = Relative(item, in TagView.Member<ItemDefinition, RelativePointer<ItemTranslationBlock>>(item, 0,
+                nameof(ItemDefinition.TranslationItemBlock)));
+            int stride = Unsafe.SizeOf<ItemMaterialOverride>();
+            int[] first = Rows(item, art + TagView.FieldOffset<ItemTranslationBlock>(nameof(ItemTranslationBlock.MaterialOverrides1)),
+                ItemMaterialOverride.Class, stride);
+            int[] second = Rows(item, art + TagView.FieldOffset<ItemTranslationBlock>(nameof(ItemTranslationBlock.MaterialOverrides2)),
+                ItemMaterialOverride.Class, stride);
             var rows = new List<(sbyte Key, int Dye)>();
-            foreach (int row in Rows(item, art + 0x38, 0x808077B3, 4).Concat(Rows(item, art + 0x48, 0x808077B3, 4)))
+            foreach (int row in first.Concat(second))
             {
-                (sbyte Key, int Dye) value = ((sbyte)item[row], BinaryPrimitives.ReadUInt16LittleEndian(item.AsSpan(row + 2)));
+                ref readonly var entry = ref TagView.At<ItemMaterialOverride>(item, row);
+                (sbyte Key, int Dye) value = (entry.Key, entry.Value);
                 int same = rows.FindIndex(other => other.Key == value.Key);
                 if (same < 0) rows.Add(value);
                 else rows[same] = value;
@@ -115,8 +117,10 @@ public static class NativeGearPlating
     }
 
     /** The gear kind of an item definition's bucket; null when the bucket has no measured kind. */
-    public static int? ItemKind(byte[] item) =>
-        item.Length > ItemBucketField ? NativePlateAtlases.KindForBucket(item[ItemBucketField]) : null;
+    public static int? ItemKind(byte[] item) => TagView.FitsThrough<ItemDefinition>(item, 0, BucketMember)
+        ? NativePlateAtlases.KindForBucket(TagView.Member<ItemDefinition, byte>(item, 0, BucketMember)) : null;
+
+    private const string BucketMember = "InventoryItemBlock.InventoryBucket";
 
     /**
      * Marks the gear object an instance belongs to; each gear object gets its own plate atlases.
@@ -162,9 +166,9 @@ public static class NativeGearPlating
     }
 
     /**
-     * Dye index -> table 0x81613D24 hash -> map 0x80EC3F60 wrapper -> wrapper +0x10 dye -> dye +0x0C scope record.
+     * Dye index -> table 0x81613D24 hash -> map 0x80EC3F60 wrapper -> wrapper ArtTag dye -> dye DyeScope record.
      * The record's scope index 26 to 29 picks its slot; a later index wins a shared slot.
-     * @return The records by slot, and byte +0x14 of the dye that fills slot 3, if any.
+     * @return The records by slot, and the DecalMode byte of the dye that fills slot 3, if any.
      */
     private static (uint[] Records, byte? DecalMode) ScopeRecords(PackageCatalog catalog, IEnumerable<int> indices)
     {
@@ -176,12 +180,14 @@ public static class NativeGearPlating
             if (index < 0 || index >= lookup.DyeHashes.Length) throw new InvalidDataException($"Dye index {index} is outside its table.");
             uint hash = lookup.DyeHashes[index];
             if (!lookup.Wrappers.TryGetValue(hash, out uint wrapper)) throw new InvalidDataException($"Dye hash 0x{hash:X8} does not resolve.");
-            byte[] dye = Require(catalog, U32(Require(catalog, wrapper, 0x8080744A), 0x10), DyeClass);
-            uint scope = U32(dye, 0x0C);
-            int slot = checked((int)U32(Require(catalog, scope, ScopeClass), 0x10)) - FirstDyeScope;
+            byte[] art = Require(catalog, wrapper, SArtWrapper.Class);
+            byte[] dye = Require(catalog, TagView.Member<SArtWrapper, uint>(art, 0, nameof(SArtWrapper.ArtTag)), DyeClass);
+            uint scope = TagView.Member<UnknownDye, uint>(dye, 0, nameof(UnknownDye.DyeScope));
+            int slot = checked((int)TagView.Member<SScope, uint>(Require(catalog, scope, ScopeClass), 0, "Common.ScopeIndex")) - FirstDyeScope;
             if (slot is < 0 or >= DyeSlots) throw new InvalidDataException($"Dye scope 0x{scope:X8} is not a gear dye scope.");
             records[slot] = scope;
-            if (slot == 3) decalMode = dye[DecalModeOffset];
+            // Inferred: the decal mode picks the forced decal blend.
+            if (slot == 3) decalMode = dye[TagView.FieldOffset<UnknownDye>(nameof(UnknownDye.DecalMode))];
         }
         return (records, decalMode);
     }
@@ -201,8 +207,10 @@ public static class NativeGearPlating
         long generation = catalog.ReadGeneration;
         if (DyeLookups.TryGetValue(catalog, out var held) && held.Generation == generation) return held;
         byte[] dyeTable = catalog.Read(0x81613D24);
-        uint[] hashes = [.. Rows(dyeTable, 8, 0x80805DEC, 8).Select(row => U32(dyeTable, row + 4))];
-        var lookup = new DyeLookup(generation, hashes, PackageHashMap.Read(catalog, 0x80EC3F60, 0x80809252));
+        int[] rows = Rows(dyeTable, TagView.FieldOffset<DyeTable>(nameof(DyeTable.Table)), UnknownDyeTableRow.Class,
+            Unsafe.SizeOf<UnknownDyeTableRow>());
+        uint[] hashes = [.. rows.Select(row => TagView.At<UnknownDyeTableRow>(dyeTable, row).DyeHash)];
+        var lookup = new DyeLookup(generation, hashes, PackageHashMap.Read(catalog, 0x80EC3F60, SRuntimeNameRow.Class));
         DyeLookups.AddOrUpdate(catalog, lookup);
         return lookup;
     }
@@ -227,8 +235,9 @@ public static class NativeGearPlating
         int stage = native.RenderStage;
         bool cloth = instance.RequiresClothSimulation;
         // 0x7FF742E71450 runs the dye scopes only when the part's pair index is below the record count plus one.
-        int pair = (native.SourceHeader.Length > instance.Mesh.PartIndex + 0x1A ? native.SourceHeader[instance.Mesh.PartIndex + 0x1A] : 0) >> 1;
-        int count = (int)Math.Min(4, U32(record, 24));
+        int dyeSlot = instance.Mesh.PartIndex + TagView.FieldOffset<SEntityModelPart>(nameof(SEntityModelPart.DyeSlot));
+        int pair = (native.SourceHeader.Length > dyeSlot ? native.SourceHeader[dyeSlot] : 0) >> 1;
+        int count = (int)Math.Min(4, TagView.Member<SPlatedTextureSet, uint>(record, 0, nameof(SPlatedTextureSet.DyeCount)));
         var scopes = new List<NativeGearScope>();
         byte? forced = null;
         for (int slot = 0; slot < DyeSlots; slot++)
@@ -245,7 +254,7 @@ public static class NativeGearPlating
         var plates = new Dictionary<uint, uint>();
         if ((gearBits & (1u << PlateScopeBit)) != 0)
         {
-            if (record[21] == 0 || (PlateStages & (1u << stage)) == 0)
+            if (!BindsPlates(record) || (PlateStages & (1u << stage)) == 0)
             { error = "The gear record binds no plate textures in this stage"; return null; }
             if (!atlases.TagsFor(record, plates, out error)) return null;
             foreach (uint slot in plates.Keys.ToArray()) plates[slot] += atlasTagOffset;
@@ -281,13 +290,18 @@ public static class NativeGearPlating
     {
         try
         {
-            byte[] config = Require(catalog, configTag, 0x80809C36);
-            int resource = Relative(config, 0x18);
-            if (resource < 4 || U32(config, resource - 4) is not (ResourceClass or ClothResourceClass))
+            byte[] config = Require(catalog, configTag, SEntityConfig.Class);
+            int resource = Relative(config, in TagView.Member<SEntityConfig, RelativePointer<Unknown>>(config, 0, nameof(SEntityConfig.Definition)));
+            uint resourceClass = resource < TagView.ClassWordSize ? 0
+                : TagView.ClassAt(config, resource)
+                    ?? throw new ArgumentOutOfRangeException(nameof(resource), "The model component is outside the config.");
+            if (resourceClass is not (ResourceClass or ClothResourceClass))
                 return (null, "The part's model component is not a gear-plated model");
-            uint recordTag = U32(config, resource + RecordField);
+            uint recordTag = resourceClass == ResourceClass
+                ? TagView.Member<SModelComponent, uint>(config, resource, nameof(SModelComponent.GearPlatedRecord))
+                : TagView.Member<SClothModelComponent, uint>(config, resource, nameof(SClothModelComponent.GearPlatedRecord));
             if (recordTag == uint.MaxValue) return (null, "The part's model has no gear-plated record");
-            return (Require(catalog, recordTag, RecordClass), null);
+            return (Require(catalog, recordTag, SPlatedTextureSet.Class), null);
         }
         catch (Exception exception) when (exception is InvalidDataException or KeyNotFoundException or ArgumentException
             or OverflowException or IndexOutOfRangeException)
@@ -304,7 +318,7 @@ public static class NativeGearPlating
             .Select(instance => instance.ModelSourceConfigTag).Distinct())
         {
             if (!records.TryGetValue(config, out var found)) records.Add(config, found = ReadRecord(catalog, config));
-            if (found.Record is { } record && record[21] != 0) yield return record;
+            if (found.Record is { } record && BindsPlates(record)) yield return record;
         }
     }
 
@@ -315,25 +329,25 @@ public static class NativeGearPlating
         return catalog.Read(tag);
     }
 
-    internal static uint U32(byte[] data, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset, 4));
 
-    private static int Relative(byte[] data, int offset)
-    {
-        long relative = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(offset, 8));
-        if (relative == 0) throw new InvalidDataException("A required pointer is empty.");
-        return checked((int)(offset + relative));
-    }
+    private static bool BindsPlates(byte[] record) => record[TagView.FieldOffset<SPlatedTextureSet>(nameof(SPlatedTextureSet.BindsPlates))] != 0;
 
-    /** Row offsets of a typed array; the header sits behind the 0x80809FBD marker. */
+    private static int Relative<T>(byte[] data, ref readonly RelativePointer<T> pointer) where T : unmanaged =>
+        TagView.TargetOffset(data, in pointer) ?? throw new InvalidDataException("A required pointer is empty.");
+
+    /** Row offsets of a typed array; the header follows the marker, repeats the count and ends in a zero word. */
     internal static int[] Rows(byte[] data, int field, uint type, int stride)
     {
-        long count = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(field, 8));
+        var array = new TagArray(data, field);
+        long count = array.Count;
         if (count == 0) return [];
-        if (count is < 0 or > 1_000_000) throw new InvalidDataException("A gear array count is invalid.");
-        int header = Relative(data, field + 8);
-        if (header < 4 || U32(data, header - 4) != 0x80809FBD || U32(data, header + 8) != type)
+        if (count is < 0 or > TagArray.MaximumReaderRows) throw new InvalidDataException("A gear array count is invalid.");
+        if (!array.HasHeader) throw new InvalidDataException("A required pointer is empty.");
+        int header = array.HeaderOffset;
+        if (!TagArray.MarkerAt(data, header) || array.ElementClass != type)
             throw new InvalidDataException($"A gear array is not class 0x{type:X8}.");
-        int start = checked(header + 16);
+        if (!array.IsWellFormed) throw new InvalidDataException("A gear array header is malformed.");
+        int start = checked(header + TagArray.HeaderSize);
         _ = data.AsSpan(start, checked((int)count * stride));
         return Enumerable.Range(0, (int)count).Select(index => start + index * stride).ToArray();
     }

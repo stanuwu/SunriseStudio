@@ -4,7 +4,7 @@ using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
-/** Interface and Audio categories; rows split by type from the entry fields alone. */
+/** Interface and Audio categories; rows split by the type in their registry category or package type. */
 public static partial class StudioCategories
 {
     /** Category keys; creation types and shortcuts look them up. */
@@ -22,24 +22,17 @@ public static partial class StudioCategories
     private static readonly HashSet<string> ListOnlyKinds = new(StringComparer.Ordinal)
         { "Audio / Event timing", "Audio / Event shared" };
 
-    // The asset kind decides the category; runs on every row, so cached lookups only.
+    // The registry category of a tag class names its type; runs on every row, so cached lookups only.
     static partial void ClassifyContent(PackageEntry entry, StudioNameIndex names, ref StudioCategoryMatch? match)
     {
-        string category = AssetCategories.SplitKind(StudioWorkspace.AssetKind(entry)).Category;
+        var (category, type) = AssetCategories.SplitKind(StudioWorkspace.AssetKind(entry));
         if (category is not (CuiName or AudioName)) return;
-        match = new(ItemKinds.GetOrAdd((category, ContentType(entry)), key =>
+        match = new(ItemKinds.GetOrAdd((category, type.Length == 0 ? BankType(entry) : type), key =>
             key.Type.Length == 0 ? key.Category : $"{key.Category} / {key.Type}"));
     }
 
-    private static string ContentType(PackageEntry entry) => AssetCategories.IsStructured(entry) ? entry.Reference switch
-    {
-        0x8080496A => "Screen",
-        0x80804825 => "Resource",
-        0x80809802 => "Event",
-        0x80808E68 => "Event timing",
-        0x80808E69 => "Event shared",
-        _ => ""
-    } : (entry.Type, entry.SubType) switch
+    // Wwise banks are package types, not tag classes.
+    private static string BankType(PackageEntry entry) => (entry.Type, entry.SubType) switch
     {
         (26, 4) => "Init bank",
         (26, 5) => "Bank",

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SunriseStudio.Packages/SunriseStudio.Packages.csproj" />
+    <!-- Packages compiles the views so its tag readers share them; this project uses that copy. -->
+    <Compile Remove="Views/**" />
+  </ItemGroup>
+</Project>

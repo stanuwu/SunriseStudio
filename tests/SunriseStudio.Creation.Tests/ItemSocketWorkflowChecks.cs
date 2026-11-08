@@ -119,7 +119,7 @@ internal static class ItemSocketWorkflowChecks
     private static uint AddedTag(StudioWorkspace workspace, string id)
     {
         var asset = workspace.Project!.AddedAssets.Single(asset => asset.Id == id).Native!;
-        return checked(0x80800000U + ((uint)asset.PackageId << 13) + (uint)asset.EntryIndex!.Value);
+        return TagHashes.Make(asset.PackageId, asset.EntryIndex!.Value);
     }
     private static void Wait(StudioWorkspace workspace)
     {

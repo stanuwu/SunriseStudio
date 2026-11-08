@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Packages;
 
@@ -48,7 +50,7 @@ public sealed partial class ComponentIndex
     public IReadOnlyList<uint> Models(uint entity) => (entityConfigs.GetValueOrDefault(entity) ?? [])
         .Select(config => modelTags.GetValueOrDefault(config)).Where(tag => tag != 0).Distinct().ToArray();
 
-    /** True when one of the entity's configs has an ActorGroup root, class 0x80807EE1. */
+    /** True when one of the entity's configs has an ActorGroupComponent root. */
     public bool HasActorGroup(uint entity) => (entityConfigs.GetValueOrDefault(entity) ?? []).Any(config =>
         configs.TryGetValue(config, out var facts) && facts.Primary == ComponentRoles.CombatantComponent);
 
@@ -123,7 +125,8 @@ public sealed partial class ComponentIndex
             byte[] data = catalog.Read(tag);
             ObserveSlotConfig(tag, data);
             observedSlots = true;
-            for (int offset = 0x20; offset <= data.Length - 4; offset += 4)
+            for (int offset = TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.ReferenceScanStart));
+                 offset <= data.Length - 4; offset += 4)
             {
                 uint value = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset));
                 if (value >= 0x80000000 && value != uint.MaxValue) dependencies.Add(value);
@@ -139,9 +142,10 @@ public sealed partial class ComponentIndex
                 if (type == ComponentRoles.CombatantNameRecord)
                 {
                     byte[] record = catalog.Read(linked);
-                    if (record.Length >= 12)
+                    const string name = nameof(ActorStateMachineDefinition.DisplayNameHash);
+                    if (TagView.FitsThrough<ActorStateMachineDefinition>(record, 0, name))
                     {
-                        uint hash = BinaryPrimitives.ReadUInt32LittleEndian(record.AsSpan(8));
+                        uint hash = TagRead.U32(record, TagView.FieldOffset<ActorStateMachineDefinition>(name));
                         hashes.Add(hash); combatant ??= strings?.Get(hash)?.Trim();
                     }
                 }
@@ -223,7 +227,8 @@ public sealed partial class ComponentIndex
         soundIds.Remove(tag);
         if (!catalog.TryGetEntry(tag, out var entry) || !AssetCategories.IsStructured(entry) || entry.Reference != SoundClass) return;
         byte[] data = catalog.Read(tag);
-        if (data.Length >= 12) soundIds[tag] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(8));
+        const string id = nameof(SWwiseEvent.WwiseEventId);
+        if (TagView.FitsThrough<SWwiseEvent>(data, 0, id)) soundIds[tag] = TagRead.U32(data, TagView.FieldOffset<SWwiseEvent>(id));
     }
 
     /** Labels an unnamed class "uses X" when 90% of its 10 or more configs reference class X. */
@@ -238,7 +243,7 @@ public sealed partial class ComponentIndex
                     .Where(linked => linked != ConfigClass && ClassNames.Get(linked) is not null))
                 .GroupBy(linked => linked).Where(values => values.Count() * 10 >= members.Length * 9)
                 .OrderByDescending(values => values.Count()).FirstOrDefault();
-            if (best is not null) referenceLabels[type] = $"uses {ClassNames.Get(best.Key)![2..].Replace('_', ' ')}";
+            if (best is not null) referenceLabels[type] = $"uses {ClassNames.Words(best.Key)}";
         }
     }
 

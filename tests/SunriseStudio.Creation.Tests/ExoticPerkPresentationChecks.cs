@@ -44,8 +44,7 @@ internal static class ExoticPerkPresentationChecks
                     catalog.TryGetEntry(part.EntityTag, out var entry);
                     assets.Add(new("Fixture art " + index, catalog.Read(part.EntityTag),
                         new(package, entry.Reference, entry.TypeInfo, null, firstEntry + index), part.EntityTag));
-                    entities[part.Selector] = checked(0x80800000U + ((uint)package << 13)
-                        + (uint)(firstEntry + index));
+                    entities[part.Selector] = TagHashes.Make(package, firstEntry + index);
                 }
                 return new(assets, entities, SourceHashes: new Dictionary<string, string>());
             });
@@ -67,12 +66,12 @@ internal static class ExoticPerkPresentationChecks
         Check(project.AddedAssets.Count == 0 && project.Changes.Count == 0,
             "A pure creation plan changed its project.");
         var bytes = plan.Assets.Where(asset => asset.Native is not null).ToDictionary(asset =>
-            0x80800000u + ((uint)asset.Native!.PackageId << 13) + (uint)asset.Native.EntryIndex!.Value,
+            TagHashes.Make(asset.Native!.PackageId, asset.Native.EntryIndex!.Value),
             asset => asset.Data);
         catalog.SetOverlayEntries(plan.Assets.Where(asset => asset.Native is not null).Select(asset =>
         {
             var native = asset.Native!;
-            uint tag = 0x80800000u + ((uint)native.PackageId << 13) + (uint)native.EntryIndex!.Value;
+            uint tag = TagHashes.Make(native.PackageId, native.EntryIndex!.Value);
             return new PackageOverlayEntry(new(tag, native.Reference, (int)(native.TypeInfo >> 9 & 127),
                 (int)(native.TypeInfo >> 6 & 7), asset.Data.Length, $"w64_sunrise_{package:x4}_0", package,
                 native.EntryIndex.Value) { TypeInfo = native.TypeInfo }, asset.Name);
@@ -110,8 +109,7 @@ internal static class ExoticPerkPresentationChecks
             && investment.ReadIcon(investment.FindItem(plan.WeaponTag)!)!.Texture.Subresources.Single().Data.SequenceEqual(icons[4].Pixels),
             "Item icons did not retain their separate PNG artwork.");
         var hudTexture = plan.Assets.Single(asset => asset.Name == "Presentation fixture.hud.texture");
-        uint hudTextureTag = 0x80800000u + ((uint)hudTexture.Native!.PackageId << 13)
-            + (uint)hudTexture.Native.EntryIndex!.Value;
+        uint hudTextureTag = TagHashes.Make(hudTexture.Native!.PackageId, hudTexture.Native.EntryIndex!.Value);
         Check(new TextureDataReader(catalog).Read(hudTextureTag).Subresources.Single().Data.SequenceEqual(hudImage.Pixels),
             "The HUD silhouette did not decode to its PNG pixels.");
         Check(plan.SourceHashes?.Count == 6, "The creation receipt lost an icon source guard.");

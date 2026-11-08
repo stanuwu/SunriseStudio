@@ -39,11 +39,11 @@ public static class CollisionRegions
             "left_arm", "right_arm", "eye", "weakspot", "shield", "shield_ping", "core"
         }.ToDictionary(Fnv1, name => name);
 
-    /** The FNV-1 hash the game stores; 0x811C9DC5 is the empty name. */
+    /** The FNV-1 hash the game stores; StringHash.Empty is the empty name. */
     public static uint Fnv1(string text) => StringBankWriter.Hash(text);
 
     /** The region's name, its hash when the name is not known, or empty for no region. */
-    public static string Name(uint hash) => hash is 0 or 0x811C9DC5 ? "" : Names.GetValueOrDefault(hash, $"0x{hash:X8}");
+    public static string Name(uint hash) => hash is 0 or StringHash.Empty ? "" : Names.GetValueOrDefault(hash, $"0x{hash:X8}");
 }
 
 /** One distinct decoded shape. Every placement of it shares these triangles. */

@@ -1,6 +1,12 @@
 using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Formats;
 
@@ -20,15 +26,16 @@ public sealed class CuiWidgetAuthoring
 
     public CuiWidgetAuthoring(CuiDocument hierarchy, CuiComposition composition)
     {
-        if (hierarchy.ClassHash != 0x8080496A || hierarchy.Data.Length < 40
+        if (hierarchy.ClassHash != SCuiHierarchy.Class || !TagView.Fits<SCuiHierarchy>(hierarchy.Data.Span, 0)
             || !composition.Resources.TryGetValue(hierarchy.RootResource, out var root))
             throw new InvalidDataException("Open an interface hierarchy before adding widgets.");
         this.hierarchy = hierarchy; this.composition = composition; resource = root;
-        var r = new TagReader(hierarchy.Data);
-        if (new TagReader(resource.Data).Array(24, 0x80804618, 4).Count != resource.Nodes.Count)
+        ref readonly var program = ref TagView.At<SCuiHierarchy>(hierarchy.Data.Span);
+        if (TagArray.Checked(resource.Data.Span, TagView.FieldOffset<CuiResource>("Objects"), SCuiNodeName.Class,
+                Unsafe.SizeOf<SCuiNodeName>()).Count != resource.Nodes.Count)
             throw new NotSupportedException("Widget names and definitions must have matching counts before structural editing.");
         int count = hierarchy.Hierarchy.Count;
-        if (count is < 1 or > 5120 || r.U16(24) != count || r.U16(26) != count
+        if (count is < 1 or > 5120 || program.NodeCountA != count || program.NodeCountB != count
             || hierarchy.Hierarchy.Select(node => (int)node.Id).Order().Where((id, index) => id != index).Any()
             || hierarchy.Hierarchy[0] is not { Id: 0, Parent: 0x7FFF })
             throw new NotSupportedException("This hierarchy uses a nonstandard construction range.");
@@ -53,18 +60,21 @@ public sealed class CuiWidgetAuthoring
     {
         Capacity();
         Parent(parent); Dimensions(rectangle);
-        var writer = new Writer(resource.Data); ushort id = checked((ushort)hierarchy.Hierarchy.Count);
+        var writer = new Writer(resource.Data, ResourceSizeWord); ushort id = checked((ushort)hierarchy.Hierarchy.Count);
         AppendDefinition(writer, Type(kind), nameHash, id);
         int owner = DefaultOwner(writer);
-        int component = writer.AppendRows(owner + 32, 0x808046D4, 24, 1, [16]);
-        writer.Q(component, id);
+        int component = AppendComponents(writer, owner, 1);
+        TagView.Edit<CuiComponentRow>(writer.Bytes, component).NodeKey = id;
         byte[] bytes = writer.Finish();
         var parsed = CuiDocument.Read(resource.TagHash, resource.ClassHash, bytes, nativeTypes: resource.NativeTypes);
         var selected = parsed.Objects.Single(row => row.Offset == owner).Components.Single(row => row.Key == id);
         List<CuiPropertyOverride> values = [];
-        for (int axis = 0; axis < 4; axis++) values.Add(new((ulong)(0x206 + axis), 200, BitConverter.GetBytes(rectangle[axis] / CuiLayout.ReferenceHeight)));
-        values.Add(new(0x20F, 152, BitConverter.GetBytes(0u)));
-        if (kind == CuiWidgetKind.Text) values.Add(new(0x405, 232, BitConverter.GetBytes(0x811C9DC5u)));
+        for (int axis = 0; axis < 4; axis++)
+            values.Add(new((ulong)(0x206 + axis), TagView.FieldOffset<CuiResource>("ValuePool.PoolFloatsBNormalized"),
+                BitConverter.GetBytes(rectangle[axis] / CuiLayout.ReferenceHeight)));
+        values.Add(new(0x20F, TagView.FieldOffset<CuiResource>("ValuePool.PoolIntegers"), BitConverter.GetBytes(0u)));
+        if (kind == CuiWidgetKind.Text)
+            values.Add(new(0x405, TagView.FieldOffset<CuiResource>("ValuePool.PoolStringHashes"), BitConverter.GetBytes(StringHash.Empty)));
         bytes = CuiPropertyEdits.Upsert(bytes, parsed, selected, values);
         return Checked(new(AppendHierarchy(id, parent), bytes, id, new HashSet<ushort>()));
     }
@@ -74,23 +84,26 @@ public sealed class CuiWidgetAuthoring
     {
         Capacity();
         var source = Local(sourceNode); Parent(parent);
-        var writer = new Writer(resource.Data); ushort id = checked((ushort)hierarchy.Hierarchy.Count);
+        var writer = new Writer(resource.Data, ResourceSizeWord); ushort id = checked((ushort)hierarchy.Hierarchy.Count);
         AppendDefinition(writer, Type(source.Definition), nameHash, id);
+        int stride = Unsafe.SizeOf<CuiComponentRow>();
         foreach (var owner in resource.Objects)
         {
             var originals = owner.Components.Where(component => component.Key == sourceNode).ToArray();
             if (originals.Length == 0) continue;
-            int added = writer.AppendRows(owner.Offset + 32, 0x808046D4, 24, originals.Length, [16]);
+            int added = AppendComponents(writer, owner.Offset, originals.Length);
             for (int i = 0; i < originals.Length; i++)
             {
-                int target = added + i * 24;
-                writer.Copy(originals[i].Offset, target, 24, [16]); writer.Q(target, id);
+                int target = added + i * stride;
+                writer.Copy(originals[i].Offset, target, stride, ComponentPointers);
+                TagView.Edit<CuiComponentRow>(writer.Bytes, target).NodeKey = id;
             }
         }
         if (!resource.Objects.Any(owner => owner.IsDefaultProfile && owner.Components.Any(component => component.Key == sourceNode)))
         {
             int owner = DefaultOwner(writer);
-            int component = writer.AppendRows(owner + 32, 0x808046D4, 24, 1, [16]); writer.Q(component, id);
+            int component = AppendComponents(writer, owner, 1);
+            TagView.Edit<CuiComponentRow>(writer.Bytes, component).NodeKey = id;
         }
         return Checked(new(AppendHierarchy(id, parent), writer.Finish(), id, new HashSet<ushort>()));
     }
@@ -102,7 +115,7 @@ public sealed class CuiWidgetAuthoring
         if (descendants.Contains(parent)) throw new InvalidDataException("A widget cannot be parented under its own children.");
         byte[] data = hierarchy.Data.ToArray();
         var row = hierarchy.Hierarchy.Single(row => row.Id == node);
-        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(row.Offset), parent);
+        TagView.Edit<SCuiHierarchyEdge>(data, row.Offset).Parent = parent;
         return Checked(new(data, resource.Data.ToArray(), node, new HashSet<ushort>()));
     }
 
@@ -112,29 +125,39 @@ public sealed class CuiWidgetAuthoring
         _ = Local(node);
         var removed = Descendants(node);
         if (removed.Any(id => id < firstLocal)) throw new NotSupportedException("Remove imported children in their owning interface.");
-        var reader = new TagReader(resource.Data);
+        var source = resource.Data.Span;
+        int trackStride = Unsafe.SizeOf<SCuiAnimationTrack>(), targetStride = Unsafe.SizeOf<SCuiAnimationTarget>();
         foreach (var owner in resource.Objects)
         {
-            var tracks = reader.Array(owner.Offset + 48, 0x808046F3, 24);
+            var tracks = TagArray.Checked(source, owner.Offset + TagView.FieldOffset<CuiObjectRow>("Animations"), SCuiAnimationTrack.Class,
+                trackStride);
             for (int track = 0; track < tracks.Count; track++)
             {
-                var targets = reader.Array(tracks.Data + track * 24 + 8, 0x808046F5, 32);
+                ref readonly var animation = ref TagView.At<SCuiAnimationTrack>(source, tracks.Data + track * trackStride);
+                var targets = TagArray.Checked(source, TagView.OffsetOf(source, in animation.Components), SCuiAnimationTarget.Class, targetStride);
                 for (int target = 0; target < targets.Count; target++)
-                    if (removed.Contains(reader.U16(targets.Data + target * 32)))
+                    if (removed.Contains(TagView.At<SCuiAnimationTarget>(source, targets.Data + target * targetStride).Node))
                         throw new NotSupportedException("This widget has authored animation targets. Remove those dependencies before deleting it.");
             }
         }
         byte[] data = hierarchy.Data.ToArray();
         foreach (var row in hierarchy.Hierarchy.Where(row => removed.Contains(row.Id)))
-            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(row.Offset), 0x7FFF);
-        var writer = new Writer(resource.Data);
-        var bindings = reader.Array(88, 0x808046D8, 56);
-        var retained = Enumerable.Range(0, bindings.Count).Select(index => bindings.Data + index * 56)
-            .Where(at => !removed.Contains(reader.U16(at + 2)) && !removed.Contains(reader.U16(at + 26))).ToArray();
-        int destination = writer.ReplaceRows(88, 0x808046D8, 56, retained.Length);
-        for (int i = 0; i < retained.Length; i++) writer.Copy(retained[i], destination + i * 56, 56, [8, 32, 48]);
+            TagView.Edit<SCuiHierarchyEdge>(data, row.Offset).Parent = 0x7FFF;
+        var writer = new Writer(resource.Data, ResourceSizeWord);
+        int stride = Unsafe.SizeOf<CuiBindingRow>();
+        int field = TagView.FieldOffset<CuiResource>("BindingSet.Bindings");
+        var bindings = TagArray.Checked(source, field, CuiBindingRow.Class, stride);
+        var retained = new List<int>();
+        for (int index = 0; index < bindings.Count; index++)
+        {
+            int at = bindings.Data + index * stride;
+            ref readonly var binding = ref TagView.At<CuiBindingRow>(source, at);
+            if (!removed.Contains(binding.SourceNodeCopy) && !removed.Contains(binding.TargetNodeCopy)) retained.Add(at);
+        }
+        int destination = writer.ReplaceRows(field, CuiBindingRow.Class, stride, retained.Count);
+        for (int i = 0; i < retained.Count; i++) writer.Copy(retained[i], destination + i * stride, stride, BindingPointers);
         return Checked(new(data, writer.Finish(), hierarchy.Hierarchy.Single(row => row.Id == node).Parent, removed,
-            bindings.Count - retained.Length));
+            bindings.Count - retained.Count));
     }
 
     /** Every binding that read before the edit reads the same after it, unless its widget was removed. */
@@ -194,56 +217,75 @@ public sealed class CuiWidgetAuthoring
         if (!float.IsFinite(value.X) || !float.IsFinite(value.Y) || !float.IsFinite(value.Z) || !float.IsFinite(value.W) || value.Z < 0 || value.W < 0)
             throw new InvalidDataException("Enter finite coordinates and nonnegative dimensions.");
     }
+
+    // Row offsets of the relative words each copied row carries.
+    private static readonly int[] ComponentPointers = [TagView.FieldOffset<CuiComponentRow>("Properties.Relative")];
+    private static readonly int[] ObjectPointers =
+        [TagView.FieldOffset<CuiObjectRow>("Components.Relative"), TagView.FieldOffset<CuiObjectRow>("Animations.Relative")];
+    private static readonly int[] BindingPointers = [TagView.FieldOffset<CuiBindingRow>("SourcePathSlot"),
+        TagView.FieldOffset<CuiBindingRow>("TargetPathSlot"), TagView.FieldOffset<CuiBindingRow>("Conversion")];
+
+    private static readonly int ResourceSizeWord = TagView.FieldOffset<CuiResource>("TagSize");
+    private static readonly int HierarchySizeWord = TagView.FieldOffset<SCuiHierarchy>("TagSize");
+
     private static void AppendDefinition(Writer writer, ulong type, uint name, ushort id)
     {
-        int names = writer.AppendRows(24, 0x80804618, 4, 1, []); writer.U(names, name);
-        int definition = writer.AppendRows(56, 0x80804622, 16, 1, []); writer.Q(definition, unchecked((long)type)); writer.S(definition + 10, id);
+        int names = writer.AppendRows(TagView.FieldOffset<CuiResource>("Objects"), SCuiNodeName.Class, Unsafe.SizeOf<SCuiNodeName>(), 1, []);
+        TagView.Edit<SCuiNodeName>(writer.Bytes, names).NameHash = name;
+        int definition = writer.AppendRows(TagView.FieldOffset<CuiResource>("Components"), CuiTypeRow.Class, Unsafe.SizeOf<CuiTypeRow>(), 1, []);
+        ref var row = ref TagView.Edit<CuiTypeRow>(writer.Bytes, definition);
+        row.TypeHash = type; row.NodeId = id;
     }
+    private static int AppendComponents(Writer writer, int owner, int count) => writer.AppendRows(
+        owner + TagView.FieldOffset<CuiObjectRow>("Components"), CuiComponentRow.Class, Unsafe.SizeOf<CuiComponentRow>(), count, ComponentPointers);
     private int DefaultOwner(Writer writer)
     {
         var existing = resource.Objects.FirstOrDefault(row => row.IsDefaultProfile);
         if (existing is not null) return existing.Offset;
-        int owner = writer.AppendRows(72, 0x8080462A, 64, 1, [40, 56]);
-        writer.Q(owner, 0x701CFA3E7F9B89AF); writer.Q(owner + 8, unchecked((long)0xECBABAE340FB9D24));
-        writer.Q(owner + 16, 0xAD52C0B9); writer.Q(owner + 24, 0xB93A719D); return owner;
+        int owner = writer.AppendRows(TagView.FieldOffset<CuiResource>("Overlays"), CuiObjectRow.Class, Unsafe.SizeOf<CuiObjectRow>(), 1, ObjectPointers);
+        MemoryMarshal.AsBytes<ulong>([0x701CFA3E7F9B89AF, 0xECBABAE340FB9D24, 0xAD52C0B9, 0xB93A719D])
+            .CopyTo(TagView.Edit<CuiObjectRow>(writer.Bytes, owner).ProfileKey);
+        return owner;
     }
     private byte[] AppendHierarchy(ushort id, ushort parent)
     {
-        var writer = new Writer(hierarchy.Data);
-        int row = writer.AppendRows(8, 0x80804616, 4, 1, []); writer.S(row, parent); writer.S(row + 2, id);
-        writer.S(24, checked((ushort)(id + 1))); writer.S(26, checked((ushort)(id + 1))); return writer.Finish();
+        var writer = new Writer(hierarchy.Data, HierarchySizeWord);
+        int row = writer.AppendRows(TagView.FieldOffset<SCuiHierarchy>("Edges"), SCuiHierarchyEdge.Class, Unsafe.SizeOf<SCuiHierarchyEdge>(), 1, []);
+        ref var edge = ref TagView.Edit<SCuiHierarchyEdge>(writer.Bytes, row);
+        edge.Parent = parent; edge.Child = id;
+        ref var program = ref TagView.Edit<SCuiHierarchy>(writer.Bytes);
+        program.NodeCountA = checked((ushort)(id + 1)); program.NodeCountB = checked((ushort)(id + 1));
+        return writer.Finish();
     }
 
     /** Appended arrays retain relative targets for every copied pointer field. */
-    private sealed class Writer(ReadOnlyMemory<byte> source)
+    private sealed class Writer(ReadOnlyMemory<byte> source, int sizeWord)
     {
         private byte[] bytes = source.ToArray();
+        /** The bytes so far; an append replaces the array, so read this again after one. */
+        public Span<byte> Bytes => bytes;
         public int AppendRows(int descriptor, uint type, int stride, int extra, int[] pointers)
         {
-            var old = new TagReader(bytes).Array(descriptor, type, stride);
+            var old = TagArray.Checked(bytes, descriptor, type, stride);
             int data = ReplaceRows(descriptor, type, stride, checked(old.Count + extra));
             for (int i = 0; i < old.Count; i++) Copy(old.Data + i * stride, data + i * stride, stride, pointers);
             return data + old.Count * stride;
         }
         public int ReplaceRows(int descriptor, uint type, int stride, int count)
         {
-            if (count == 0) { Q(descriptor, 0); Q(descriptor + 8, 0); return 0; }
-            int header = checked((bytes.Length + 11) & ~7), data = checked(header + 16);
-            Array.Resize(ref bytes, checked(data + count * stride)); U(header - 4, 0x80809FBD); Q(header, count); Q(header + 8, type);
-            Q(descriptor, count); Q(descriptor + 8, header - descriptor - 8); return data;
+            if (count == 0) { bytes.AsSpan(descriptor, TagArray.FieldSize).Clear(); return 0; }
+            return TagRelocator.AppendArray(ref bytes, descriptor, type, count, checked(count * stride), 8);
         }
         public void Copy(int sourceOffset, int destination, int length, int[] pointers)
         {
-            var reader = new TagReader(bytes); bytes.AsSpan(sourceOffset, length).CopyTo(bytes.AsSpan(destination));
+            bytes.AsSpan(sourceOffset, length).CopyTo(bytes.AsSpan(destination));
             foreach (int pointer in pointers)
             {
-                int at = sourceOffset + pointer, target = reader.Relative(at);
+                int at = sourceOffset + pointer, target = TagPointer.Checked(bytes, at);
                 Q(destination + pointer, target < 0 ? 0 : target - destination - pointer);
             }
         }
         public void Q(int at, long value) => BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at), value);
-        public void U(int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), value);
-        public void S(int at, ushort value) => BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(at), value);
-        public byte[] Finish() { Q(0, bytes.Length); return bytes; }
+        public byte[] Finish() { Q(sizeWord, bytes.Length); return bytes; }
     }
 }

@@ -1,3 +1,4 @@
+using SunriseStudio.Tags.Generated;
 using System.Collections.ObjectModel;
 using System.Security.Cryptography;
 using SunriseStudio.Packages;
@@ -107,7 +108,7 @@ public sealed class AssetSurface
         }
 
         token.ThrowIfCancellationRequested();
-        if (entry.Type is 8 or 16 && entry.Reference == 0x808071E8) Material(tag);
+        if (entry.Type is 8 or 16 && entry.Reference == STechnique.Class) Material(tag);
         if (entry.Type == 32 && entry.SubType is >= 1 and <= 3) textureTags.Add(tag);
         if (entry.Type == 33) ShaderTag(tag);
         if (entry.Type is 40 or 41)

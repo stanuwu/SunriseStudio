@@ -101,7 +101,7 @@ internal static class CompatibleSkinChecks
             Check(builtCatalog.Read(modelTag).SequenceEqual(prepared.Replacements[modelTag]), "Built model differs from prepared bytes.");
             foreach (var asset in project.AddedAssets)
             {
-                uint tag = 0x80800000u + ((uint)asset.Native!.PackageId << 13) + (uint)asset.Native.EntryIndex!.Value;
+                uint tag = TagHashes.Make(asset.Native!.PackageId, asset.Native.EntryIndex!.Value);
                 Check(builtCatalog.Read(tag).SequenceEqual(project.ReadAddedAsset(asset.Id, catalog)), "Built skin buffer differs from its delta.");
             }
             Console.WriteLine($"compatible_skin model={modelTag:X8} consumed_bones=63 vertices=4 triangles=2 retained_parts={prepared.RetainedSourceParts.Count} delta=pass repeat=pass source_change=refused reopen=pass build=pass");
@@ -120,7 +120,7 @@ internal static class CompatibleSkinChecks
         var entries = project.AddedAssets.Select(asset =>
         {
             var native = asset.Native!;
-            uint tag = 0x80800000u + ((uint)native.PackageId << 13) + (uint)native.EntryIndex!.Value;
+            uint tag = TagHashes.Make(native.PackageId, native.EntryIndex!.Value);
             return new PackageOverlayEntry(new PackageEntry(tag, native.Reference, (int)(native.TypeInfo >> 9 & 127),
                 (int)(native.TypeInfo >> 6 & 7), (int)asset.Size, $"w64_sunrise_{native.PackageId:x4}_0", native.PackageId, native.EntryIndex.Value)
             { TypeInfo = native.TypeInfo }, native.Name);

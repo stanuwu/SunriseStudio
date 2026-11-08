@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+using SunriseStudio.Tags.Generated;
 using System.Globalization;
 using System.Numerics;
 using System.Text.RegularExpressions;
@@ -77,9 +77,6 @@ public sealed class WeaponAnimationBinding
 /** This explicit path keeps external weapon frames separate from ordinary entity skin ownership. */
 public static partial class WeaponAnimationPreviewSource
 {
-    // Stream 0 is POSITION as four snorm16 words; word 3 holds the palette index.
-    private const int PositionStride = 8, IndexOffset = 6;
-
     /**
      * Parts in stages the viewer never draws are left out. A weapon whose rigs fail the frame partition
      * check opens at rest, with the reason as a scene diagnostic.
@@ -99,7 +96,7 @@ public static partial class WeaponAnimationPreviewSource
         foreach (uint entity in artEntities.Distinct())
         {
             token.ThrowIfCancellationRequested();
-            if (!catalog.TryGetEntry(entity, out var entry) || entry.Reference != 0x80809C0F)
+            if (!catalog.TryGetEntry(entity, out var entry) || entry.Reference != SEntity.Class)
                 throw new InvalidDataException("A weapon art part is not an entity.");
             var part = new AssetSceneLoader(catalog).Load(entity, token);
             var visible = part.Instances.Where(instance => instance.InitiallyVisible != false
@@ -174,7 +171,7 @@ public static partial class WeaponAnimationPreviewSource
                     uint source = mesh.SourceVertexIndices[vertex];
                     if (source >= weights.Length) throw new InvalidDataException("A weapon vertex leaves its position stream.");
                     weights[source] = new(indices?[vertex] ?? 0, 0, 0, 0, new Vector4(1, 0, 0, 0));
-                    if (indices is null && stream.Stride == PositionStride)
+                    if (indices is null && stream.Stride == SkinPositionStream.PaletteStride)
                         entries = Math.Max(entries, ReadIndex(stream, source) + 1);
                 }
             var skin = new ModelSkinBinding(group.Key.TagHash, skins.Count, stream.HeaderTag, stream.Stride,
@@ -197,8 +194,8 @@ public static partial class WeaponAnimationPreviewSource
         int boneCount)
     {
         var native = mesh.Native!;
-        if (!native.InputLayoutVerified || native.VertexStreams[0] is not { Stride: PositionStride } stream
-            || stream.Data.Length % PositionStride != 0
+        if (!native.InputLayoutVerified || native.VertexStreams[0] is not { Stride: SkinPositionStream.PaletteStride } stream
+            || stream.Data.Length % SkinPositionStream.PaletteStride != 0
             || !native.InputElements.Any(e => e is { Semantic: "POSITION", SemanticIndex: 0, Slot: 0, Offset: 0,
                 Format: NativeVertexFormat.R16G16B16A16SNorm, PerInstance: false }))
             return null;
@@ -209,15 +206,14 @@ public static partial class WeaponAnimationPreviewSource
         for (int vertex = 0; vertex < indices.Length; vertex++)
         {
             uint source = mesh.SourceVertexIndices[vertex];
-            if (source >= stream.Data.Length / PositionStride) return null;
+            if (source >= stream.Data.Length / SkinPositionStream.PaletteStride) return null;
             indices[vertex] = ReadIndex(stream, source);
             if (indices[vertex] < 0 || indices[vertex] >= boneCount) return null;
         }
         return indices;
     }
 
-    private static int ReadIndex(NativeVertexStream stream, uint vertex) =>
-        BinaryPrimitives.ReadInt16LittleEndian(stream.Data.AsSpan(checked((int)vertex * PositionStride + IndexOffset)));
+    private static int ReadIndex(NativeVertexStream stream, uint vertex) => SkinPositionStream.PaletteIndex(stream.Data, vertex);
 
     /**
      * True when the VS reads a CB11 3x4 matrix palette by ftou(POSITION.w * 32767 + 0.1), its only

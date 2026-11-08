@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Interchange;
 
@@ -12,7 +13,7 @@ public static partial class AssetBundle
         if (manifest.Format != Format || manifest.Version != 1 || string.IsNullOrWhiteSpace(manifest.Name)
             || manifest.NativeAssets is null || manifest.Meshes is null || manifest.Materials is null
             || manifest.Textures is null || manifest.Shaders is null || manifest.Animations is null || manifest.Notices is null
-            || manifest.NativeAssets.Count is < 1 or > 8192)
+            || manifest.NativeAssets.Count is < 1 or > TagHashes.EntriesPerPackage)
             throw new InvalidDataException("Unsupported asset bundle manifest.");
         var assets = Unique(manifest.NativeAssets, value => value.TagHash);
         if (!assets.ContainsKey(manifest.RootTag) || !assets.ContainsKey(manifest.SelectedTag))
@@ -75,14 +76,14 @@ public static partial class AssetBundle
             throw new InvalidDataException("New asset packages cannot replace an installed package.");
         int first = project.AddedAssets.Where(value => value.Native?.PackageId == options.PackageId && value.Native.EntryIndex is not null)
             .Select(value => value.Native!.EntryIndex!.Value + 1).DefaultIfEmpty(0).Max();
-        if (first + manifest.NativeAssets.Count > 8192) throw new InvalidDataException("The target package has no room for this dependency group.");
+        if (first + manifest.NativeAssets.Count > TagHashes.EntriesPerPackage) throw new InvalidDataException("The target package has no room for this dependency group.");
         var remap = manifest.NativeAssets.Select((asset, index) => (asset.TagHash,
-            NewTag: checked(0x80800000u + ((uint)options.PackageId << 13) + (uint)(first + index))))
+            NewTag: TagHashes.Make(options.PackageId, first + index)))
             .ToDictionary(value => value.TagHash, value => value.NewTag);
         var additions = new List<ProjectAssetAddition>();
         NotSupportedException Unsupported(uint tag, string detail)
         {
-            bool entity = catalog.TryGetEntry(manifest.RootTag, out var root) && root.Reference == 0x80809C0F;
+            bool entity = catalog.TryGetEntry(manifest.RootTag, out var root) && root.Reference == SEntity.Class;
             var error = new NotSupportedException(entity
                 ? "This entity cannot be copied as a new asset yet. Use Apply deltas."
                 : "This asset cannot be copied as a new asset yet. Use Apply deltas.");

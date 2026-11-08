@@ -67,7 +67,7 @@ internal static class PackageKeySourceChecks
         packed.AsSpan(0x220, 0x80).Clear();
         File.WriteAllBytes(executable, packed);
         string failure = RejectRead(install, null);
-        Check(failure.Contains("client.dump_package_keys", StringComparison.Ordinal),
+        Check(failure.Contains("client.exports.package_keys", StringComparison.Ordinal),
             "Missing keys did not explain the Sunrise export option.");
         File.WriteAllBytes(executable, UnpackedImage(keys));
         File.WriteAllBytes(export, Export(keys));
@@ -214,7 +214,7 @@ internal static class PackageKeySourceChecks
         return image;
     }
 
-    private static uint Tag(ushort id) => 0x80800000U + ((uint)id << 13);
+    private static uint Tag(ushort id) => TagHashes.Make(id, 0);
     private static uint R32(byte[] bytes, int offset) =>
         BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset));
     private static void U32(byte[] bytes, int offset, uint value) =>

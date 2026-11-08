@@ -1,5 +1,10 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Text;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Formats;
 
@@ -7,9 +12,12 @@ namespace SunriseStudio.Formats;
 public static class InvestmentWeaponType
 {
     public const uint TraitTableTag = 0x8131932B, TraitCategoryTableTag = 0x8131932A;
-    // Definition +164 holds FNV-1 of the type identifier, such as auto_rifle.
-    private const int IdentifierField = 164, TraitsField = 224;
-    private const uint TraitClass = 0x80802C50, ArrayMarker = 0x80809FBD;
+    private const uint TraitClass = C80802c50.Class;
+    private static readonly int TraitsField = TagView.FieldOffset<ItemDefinition>(nameof(ItemDefinition.Traits));
+    private static readonly int TraitTableField = TagView.FieldOffset<C80802c3e>(nameof(C80802c3e.Table));
+    private static readonly int CategoryTableField = TagView.FieldOffset<C80802c3c>(nameof(C80802c3c.Table));
+    private static readonly int TraitStride = Unsafe.SizeOf<C80802c50>();
+    private static readonly int TraitRowStride = Unsafe.SizeOf<C80802c45>(), CategoryRowStride = Unsafe.SizeOf<TraitCategoryRow>();
     private const string TraitCategory = "weapon_type";
 
     /** `Auto Rifle` becomes `auto_rifle`, the form stock identifiers and trait names use. */
@@ -24,13 +32,14 @@ public static class InvestmentWeaponType
 
     private static IReadOnlyList<ushort> ReadTraits(ReadOnlyMemory<byte> definition)
     {
-        var reader = new TagReader(definition);
-        var traits = reader.Array(TraitsField, TraitClass, 2);
-        return Enumerable.Range(0, traits.Count).Select(index => reader.U16(traits.Data + index * 2)).ToArray();
+        var traits = TagArray.Checked(definition.Span, TraitsField, TraitClass, TraitStride);
+        return Enumerable.Range(0, traits.Count)
+            .Select(index => TagView.At<C80802c50>(definition.Span, traits.Data + index * TraitStride).TraitIndex).ToArray();
     }
 
     /**
      * Sets the identifier and keeps exactly the weapon-type trait whose name matches it, or none.
+     * The definition holds FNV-1 of the identifier, such as auto_rifle.
      * @return The definition and whether a stock trait matched.
      */
     public static (byte[] Definition, bool StockTrait) SetType(ReadOnlyMemory<byte> definition, string typeName,
@@ -39,64 +48,59 @@ public static class InvestmentWeaponType
         string identifier = Identifier(typeName);
         var (first, last) = CategoryRange(categoryTable);
         var traitHashes = TraitHashes(traitTable);
-        int match = traitHashes.ToList().IndexOf(InvestmentItemClone.Fnv1(TraitCategory + "." + identifier));
+        int match = traitHashes.ToList().IndexOf(StringBankWriter.Hash(TraitCategory + "." + identifier));
         if (match >= 0 && (match < first || match > last)) match = -1;
         var current = ReadTraits(definition);
         var kept = current.Where(trait => trait < first || trait > last).ToList();
         if (match >= 0) kept.Add((ushort)match);
         byte[] result = SetTraits(definition, kept);
-        BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(IdentifierField), InvestmentItemClone.Fnv1(identifier));
+        TagView.Edit<ItemDefinition>(result).WeaponTypeIdentifier = StringBankWriter.Hash(identifier);
         return (result, match >= 0);
     }
 
     /** The trait list shrinks or grows in place when it fits, else moves to the end of the definition. */
     private static byte[] SetTraits(ReadOnlyMemory<byte> definition, IReadOnlyList<ushort> traits)
     {
-        var reader = new TagReader(definition);
-        var current = reader.Array(TraitsField, TraitClass, 2);
+        var current = TagArray.Checked(definition.Span, TraitsField, TraitClass, TraitStride);
         byte[] result;
         int data;
         if (traits.Count <= current.Count && current.Count > 0)
         {
             result = definition.ToArray();
             data = current.Data;
-            BinaryPrimitives.WriteInt64LittleEndian(result.AsSpan(data - 16), traits.Count);
+            TagView.Edit<STypedArrayMarker>(result, data - TagArray.HeaderSize).Count = (ulong)traits.Count;
         }
         else
         {
-            int header = (definition.Length + 19) & ~15;
-            result = new byte[header + 16 + traits.Count * 2];
-            definition.Span.CopyTo(result);
-            BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(header - 4), ArrayMarker);
-            BinaryPrimitives.WriteInt64LittleEndian(result.AsSpan(header), traits.Count);
-            BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(header + 8), TraitClass);
-            BinaryPrimitives.WriteInt64LittleEndian(result.AsSpan(TraitsField + 8), header - TraitsField - 8);
-            if (BinaryPrimitives.ReadInt64LittleEndian(definition.Span) == definition.Length)
-                BinaryPrimitives.WriteInt64LittleEndian(result, result.Length);
-            data = header + 16;
+            result = definition.ToArray();
+            data = TagRelocator.AppendArray(ref result, TraitsField, TraitClass, traits.Count, traits.Count * TraitStride);
+            // The checked trait field above holds the whole root, so At cannot throw here.
+            if (TagView.At<ItemDefinition>(definition.Span).TagSize == (ulong)definition.Length)
+                TagView.Edit<ItemDefinition>(result).TagSize = (ulong)result.Length;
         }
         BinaryPrimitives.WriteInt64LittleEndian(result.AsSpan(TraitsField), traits.Count);
         for (int index = 0; index < traits.Count; index++)
-            BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(data + index * 2), traits[index]);
+            TagView.Edit<C80802c50>(result, data + index * TraitStride).TraitIndex = traits[index];
         return result;
     }
 
     private static IReadOnlyList<uint> TraitHashes(ReadOnlyMemory<byte> table)
     {
-        var reader = new TagReader(table);
-        var rows = reader.Array(8, stride: 8);
-        return Enumerable.Range(0, rows.Count).Select(index => reader.U32(rows.Data + index * 8)).ToArray();
+        var rows = TagArray.Checked(table.Span, TraitTableField, stride: TraitRowStride);
+        return Enumerable.Range(0, rows.Count).Select(index => TagView.At<C80802c45>(table.Span, rows.Data + index * TraitRowStride).Unk0).ToArray();
     }
 
-    /** Category rows are {u32 name hash, u16 first trait, u16 last trait}. */
+    /** Category rows name a category and its inclusive trait range. */
     private static (int First, int Last) CategoryRange(ReadOnlyMemory<byte> table)
     {
-        var reader = new TagReader(table);
-        var rows = reader.Array(8, stride: 8);
-        uint hash = InvestmentItemClone.Fnv1(TraitCategory);
+        var span = table.Span;
+        var rows = TagArray.Checked(span, CategoryTableField, stride: CategoryRowStride);
+        uint hash = StringBankWriter.Hash(TraitCategory);
         for (int index = 0; index < rows.Count; index++)
-            if (reader.U32(rows.Data + index * 8) == hash)
-                return (reader.U16(rows.Data + index * 8 + 4), reader.U16(rows.Data + index * 8 + 6));
+        {
+            ref readonly var row = ref TagView.At<TraitCategoryRow>(span, rows.Data + index * CategoryRowStride);
+            if (row.CategoryHash == hash) return (row.FirstTrait, row.LastTrait);
+        }
         throw new InvalidDataException("The trait categories have no weapon_type range.");
     }
 }

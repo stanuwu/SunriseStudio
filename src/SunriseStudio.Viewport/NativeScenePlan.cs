@@ -1,7 +1,9 @@
-using System.Buffers.Binary;
+using SunriseStudio.Tags.Generated;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
@@ -91,8 +93,8 @@ public sealed class NativeScenePlan
     // Scope 13 binds extern 3 resource 7 at pixel t10 and extern 39 resources 0 to 8 at t11 to t19.
     public const uint SceneDepthSlot = 10;
     public const uint FirstAbsentScopeSlot = 11, LastAbsentScopeSlot = 19;
-    // Gear object i's atlas tags are offset by i * this stride; one set holds at most a few atlases.
-    private const uint AtlasTagStride = 0x1000;
+    // Gear object i's synthetic atlas tag ids start at i * this spacing; one set holds at most a few atlases.
+    private const uint AtlasTagSpacing = 0x1000;
     // Decorator parts whose payload, type, model or AO data does not resolve.
     public const string DecoratorSkip = "Decorator data is unavailable";
     // Extern 39 resource 0 at pixel t11 is the screen-space atmosphere lookup; the viewer binds its gradient there.
@@ -214,7 +216,7 @@ public sealed class NativeScenePlan
     public static NativeSkySource SkySource(SceneDocument scene)
     {
         var parts = scene.Instances.GroupBy(instance => instance.BubbleHash).ToDictionary(group => group.Key, group => group.Count());
-        var atmosphere = scene.Atmospheres.Where(item => NativeAtmosphereSettings.Parse(item.Settings).HasMode0Lookups)
+        var atmosphere = scene.Atmospheres.Where(item => NativeAtmosphereSettings.Parse(item.Payload).HasMode0Lookups)
             .OrderByDescending(item => parts.GetValueOrDefault(item.BubbleHash)).FirstOrDefault();
         // A scene with no atmosphere, or none in its list, keeps its first time of day.
         var time = scene.TimesOfDay.FirstOrDefault(item => item.PlacementListTag == atmosphere?.PlacementListTag)
@@ -246,7 +248,7 @@ public sealed class NativeScenePlan
         var loader = new AssetSceneLoader(catalog);
         var decoratorReader = new NativeDecorators(catalog)
         {
-            SceneMap = catalog.TryGetEntry(scene.TagHash, out var sceneEntry) && sceneEntry.Reference == 0x808091DE ? scene.TagHash : 0
+            SceneMap = catalog.TryGetEntry(scene.TagHash, out var sceneEntry) && sceneEntry.Reference == SMapRoot.Class ? scene.TagHash : 0
         };
         var decoratorMaps = scene.OcclusionOwners.GroupBy(owner => owner.BubbleHash)
             .ToDictionary(g => g.Key, g => (IReadOnlySet<uint>)g.Select(owner => owner.MapTag).ToHashSet());
@@ -284,7 +286,7 @@ public sealed class NativeScenePlan
         {
             for (int index = 0; index < atlasSets.Count; index++)
             {
-                uint offset = (uint)index * AtlasTagStride;
+                uint offset = (uint)index * AtlasTagSpacing;
                 if (tag >= offset && atlasSets[index].IsAtlas(tag - offset)) return (atlasSets[index], tag - offset);
             }
             return null;
@@ -364,7 +366,7 @@ public sealed class NativeScenePlan
             {
                 int gearObject = gearObjects[NativeGearPlating.GearObjectFor(scene, instance)];
                 gear = NativeGearPlating.ForPart(catalog, instance, GearBits(native.MaterialTag), NativeGearPlating.DyesFor(scene, instance),
-                    GearScope, gearRecords, atlasSets[gearObject], out string? gearError, (uint)gearObject * AtlasTagStride);
+                    GearScope, gearRecords, atlasSets[gearObject], out string? gearError, (uint)gearObject * AtlasTagSpacing);
                 if (gearError is not null)
                 { Skip("Gear scope unavailable", $"{native.Kind} mesh 0x{instance.Mesh.TagHash:X8} part {instance.Mesh.PartIndex}: {gearError}"); continue; }
             }
@@ -501,8 +503,8 @@ public sealed class NativeScenePlan
                     else if (!sizes.ContainsKey(tag))
                     {
                         byte[] header = catalog.Read(tag);
-                        if (header.Length != 40) throw new InvalidDataException("Texture header has an unsupported size.");
-                        long size = BinaryPrimitives.ReadUInt32LittleEndian(header);
+                        if (header.Length != Unsafe.SizeOf<TextureHeader>()) throw new InvalidDataException("Texture header has an unsupported size.");
+                        long size = MemoryMarshal.Read<TextureHeader>(header).ByteCount;
                         sizes.Add(tag, (size, textureReader.StreamedByteCount(tag))); requiredBytes += size;
                     }
                 // The budget never drops a part; it only decides which textures get their streamed mips.
@@ -627,7 +629,7 @@ public sealed class NativeScenePlan
         var atmosphereLookups = new Dictionary<uint, TextureData>();
         foreach (var placed in scene.Atmospheres)
         {
-            var settings = NativeAtmosphereSettings.Parse(placed.Settings);
+            var settings = NativeAtmosphereSettings.Parse(placed.Payload);
             if (!settings.HasMode0Lookups) continue;
             // Handles 0 and 1 are 3D lookups; handle 2 is the 2D lookup extern 7 resource 7 binds.
             foreach (var (tag, volume) in new[] { (settings.Lookups[0], true), (settings.SecondLookup, true), (settings.Lookups[2], false) })
@@ -646,10 +648,12 @@ public sealed class NativeScenePlan
         var fogTables = new Dictionary<uint, byte[]>();
         foreach (var placed in scene.Atmospheres)
         {
-            uint tag = NativeAtmosphereSettings.Parse(placed.Settings).FogTable;
+            uint tag = NativeAtmosphereSettings.Parse(placed.Payload).FogTable;
             if (tag == uint.MaxValue || fogTables.ContainsKey(tag)) continue;
             try
             {
+                if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != ObjectFogTable.Class)
+                    throw new InvalidDataException($"Fog colour table is not class 0x{ObjectFogTable.Class:X8}.");
                 var bytes = catalog.Read(tag);
                 if (bytes.Length != NativeObjectFog.TableBytes) throw new InvalidDataException("Fog colour table is not 16 x 256 RGBA8.");
                 fogTables.Add(tag, bytes);
@@ -672,8 +676,8 @@ public sealed class NativeScenePlan
         TextureData ReadEnvironmentTexture(uint tag, byte[] header)
         {
             if (textures.TryGetValue(tag, out var existing)) return existing;
-            if (header.Length != 40) throw new InvalidDataException("Environment texture header has an unsupported size.");
-            long bytes = BinaryPrimitives.ReadUInt32LittleEndian(header);
+            if (header.Length != Unsafe.SizeOf<TextureHeader>()) throw new InvalidDataException("Environment texture header has an unsupported size.");
+            long bytes = MemoryMarshal.Read<TextureHeader>(header).ByteCount;
             if (sizes.TryAdd(tag, (bytes, 0))) requiredBytes += bytes;
             // Cubemap bindings read the header's mip count, so environment textures always load whole.
             var decoded = textureReader.Read(tag);
@@ -708,7 +712,7 @@ public sealed class NativeScenePlan
                 var header = catalog.Read(tag);
                 if (header.Length != 40 || !catalog.TryGetEntry(tag, out var entry) || entry.Type != 32 || entry.SubType != 2)
                     throw new NotSupportedException("Cubemap volume texture is not one cube.");
-                var binding = NativeCubemapBinding.Create(placement.Cubemap.SourceData.Span, tag, header[27], header[23]);
+                var binding = NativeCubemapBinding.Create(placement.Cubemap.ResourceData.Span, tag, header[27], header[23]);
                 var texture = ReadEnvironmentTexture(tag, header);
                 if (!texture.IsCube || texture.ArraySize != 6)
                     throw new NotSupportedException("Cubemap volume texture is not one cube.");

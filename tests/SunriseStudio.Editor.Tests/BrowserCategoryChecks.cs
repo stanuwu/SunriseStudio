@@ -1,8 +1,11 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using SunriseStudio.Editor;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 internal static class BrowserCategoryChecks
 {
@@ -15,7 +18,7 @@ internal static class BrowserCategoryChecks
         var strings = Strings(first + 7, "First prompt");
         byte[] model = Component(ComponentRoles.ModelComponent); U(model, 64, first + 8);
         byte[] prompt = Component(ComponentRoles.LightComponent); U(prompt, 64, 0x1234); U(prompt, 80, first + 6);
-        byte[] combatant = Component(ComponentRoles.CombatantComponent); U(combatant, 64, first + 10);
+        byte[] combatant = Combatant(first + 10);
         byte[] record = new byte[16]; U(record, 8, 0x1234);
         var entries = new List<AuthoredPackageEntry>
         {
@@ -98,7 +101,7 @@ internal static class BrowserCategoryChecks
         Require(components.Sections[0].Primary == ComponentRoles.CombatantComponent,
             "The combatant config is not the first component section.");
         var definition = components.Sections[0].Fields.SingleOrDefault(field =>
-            field.Name == StudioWorkspace.LocalDefinitionField && field.Offset == 64);
+            field.Name == StudioWorkspace.LocalDefinitionField && field.Offset == LocalDefinitionAt);
         Require(definition is not null, "The local definition field is missing from the combatant config.");
         try
         {
@@ -183,6 +186,22 @@ internal static class BrowserCategoryChecks
         byte[] bytes = new byte[96];
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(0x10), 0x30 - 0x10);
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(0x2C), primary);
+        return bytes;
+    }
+
+    // The ActorGroupSource object of a combatant fixture starts after the 96-byte config body.
+    private const int SourceStart = 96;
+    private static int LocalDefinitionAt => SourceStart + TagView.FieldOffset<ActorGroupSource>(nameof(ActorGroupSource.LocalDefinition));
+
+    /** A combatant config as installed: Definition names an ActorGroupSource whose LocalDefinition is the record. */
+    private static byte[] Combatant(uint record)
+    {
+        byte[] bytes = new byte[SourceStart + Unsafe.SizeOf<ActorGroupSource>()];
+        Component(ComponentRoles.CombatantComponent).CopyTo(bytes, 0);
+        int definition = TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition));
+        Q(bytes, definition, SourceStart - definition);
+        U(bytes, SourceStart - TagView.ClassWordSize, ActorGroupSource.Class);
+        U(bytes, LocalDefinitionAt, record);
         return bytes;
     }
 

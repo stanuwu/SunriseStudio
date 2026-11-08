@@ -77,6 +77,6 @@ public sealed class PerkBehaviorGraph
     public uint ProgramTag { get; set; }
 }
 
-/** Opcode is the native dispatch index: condition byte +5, effect byte +0. */
+/** Opcode is the native dispatch index, the Opcode byte of the condition or effect header. */
 public sealed record PerkBehaviorPrimitive(string Key, string Name, PerkBehaviorNodeKind Kind,
     uint NativeClass, string Description, bool CanCreate, int Opcode = -1);

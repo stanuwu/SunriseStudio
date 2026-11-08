@@ -113,7 +113,7 @@ static void RunInstalled(string gameRoot, InterchangeMesh mesh)
         {
             var native = asset.Native!;
             int index = native.EntryIndex!.Value;
-            uint tag = checked(0x80800000U + ((uint)native.PackageId << 13) + (uint)index);
+            uint tag = TagHashes.Make(native.PackageId, index);
             return new PackageOverlayEntry(new PackageEntry(tag, native.Reference, (int)(native.TypeInfo >> 9 & 127),
                 (int)(native.TypeInfo >> 6 & 7), (int)asset.Size, $"w64_sunrise_{native.PackageId:x4}_0", native.PackageId, index)
             { TypeInfo = native.TypeInfo }, native.Name);
@@ -147,7 +147,7 @@ static void RunInstalled(string gameRoot, InterchangeMesh mesh)
         }
         foreach (var asset in imported.Assets)
         {
-            uint tag = checked(0x80800000U + ((uint)packageId << 13) + (uint)asset.Native!.EntryIndex!.Value);
+            uint tag = TagHashes.Make(packageId, asset.Native!.EntryIndex!.Value);
             Check(built.Read(tag).SequenceEqual(project.ReadAddedAsset(asset.Id, catalog)), "Package payload differs from project reconstruction.");
         }
         Console.WriteLine("pass native_package entries=8 reopen=verified geometry=equal delta_storage=verified");

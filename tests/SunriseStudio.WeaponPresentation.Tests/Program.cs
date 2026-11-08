@@ -13,7 +13,7 @@ if (rootAt < 0 || rootAt + 1 >= args.Length)
 }
 using var catalog = PackageCatalog.Open(args[rootAt + 1], cacheOptions: new() { Enabled = false });
 const ushort package = 0xB1D;
-uint Tag(int entry) => 0x80800000u + ((uint)package << 13) + (uint)entry;
+uint Tag(int entry) => TagHashes.Make(package, entry);
 var prepared = WeaponPresentationAuthoring.Prepare(catalog, package, 20, "Presentation fixture", Tag(0), Tag(1),
     [new("fixture_idle", Tag(2), 2), new("fixture_inspect", Tag(3), 106)]);
 Check(prepared.Assets.Count == 8, "Named clips did not clone the native query table.");
@@ -69,6 +69,9 @@ foreach (var source in prepared.SourceHashes)
     Check(Convert.ToHexString(SHA256.HashData(catalog.ReadOriginal(source.Key))) == source.Value,
         "Presentation authoring changed an installed source.");
 Console.WriteLine("weapon_presentation clone=pass owners=pass root_links=pass clips=118 named_lookup=pass rebind=pass query_targets=preserved source=unchanged");
+catalog.ReadOverride = null;
+catalog.SetOverlayEntries([]);
+TemplateLayoutChecks.Run(catalog);
 
 /** Native query kind one selects an entry from its weighted definition-row list. */
 static int Resolve(byte[] query, uint hash)

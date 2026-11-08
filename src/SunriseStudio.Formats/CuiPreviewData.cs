@@ -1,5 +1,8 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -42,7 +45,7 @@ public sealed partial class CuiPreviewData
             var document = CuiDocument.Read(tag, classHash, bytes, resolveHash, types);
             var layouts = CuiLayout.Read(document);
             CuiComposition? composition = null;
-            if (classHash == 0x8080496A)
+            if (classHash == SCuiHierarchy.Class)
             {
                 composition = CuiComposition.Read(document, child =>
                 {
@@ -73,12 +76,12 @@ public sealed partial class CuiPreviewData
             if (node.TypeHash == 0x0CE30D0B && node.AuxiliaryTypeHash == 0)
             {
                 var property = rows.LastOrDefault(property => property.Property.Selector == 0x405
-                    && property.Property.ValueClass == 0x80804692);
+                    && property.Property.ValueClass == C80804692.Class);
                 uint hash = property is null ? 0 : CuiVisualProperties.ReadUInt(property.Source, property.Property);
                 var style = rows.LastOrDefault(property => property.Property.Selector == 0x40C
-                    && property.Property.ValueClass == 0x80804692);
+                    && property.Property.ValueClass == C80804692.Class);
                 var size = rows.LastOrDefault(property => property.Property.Selector == 0x420
-                    && property.Property.ValueClass is 0x8080468B or 0x80804696);
+                    && property.Property.ValueClass is CuiShortValue.Class or CuiIntegerValue.Class);
                 uint fontSize = size is null ? 0 : CuiVisualProperties.ReadUInt(size.Source, size.Property);
                 var content = new CuiWidgetContent(hash, resolveHash?.Invoke(hash) ?? "", StyleHash: style is null ? CuiFonts.DefaultStyle
                     : CuiVisualProperties.ReadUInt(style.Source, style.Property), FontSize: (ushort)fontSize);
@@ -97,14 +100,14 @@ public sealed partial class CuiPreviewData
             }
             if (node.TypeHash != 0x7D1BD221 || node.AuxiliaryTypeHash != 0) return new();
             var bitmap = rows.LastOrDefault(property => property.Property.Selector == 0x600
-                && property.Property.ValueClass == 0x80804690);
+                && property.Property.ValueClass == C80804690.Class);
             if (bitmap is null) return new();
             uint bitmapTag = BinaryPrimitives.ReadUInt32LittleEndian(bitmap.Source.Data.Span[bitmap.Property.ValueOffset..]);
             int group = 0, frame = 0;
             IReadOnlyList<IReadOnlyList<uint>> groups = [];
             try
             {
-                if (!catalog.TryGetEntry(bitmapTag, out var entry) || entry.Reference != 0x80804A69)
+                if (!catalog.TryGetEntry(bitmapTag, out var entry) || entry.Reference != SIconBitmap.Class)
                     throw new NotSupportedException("Bitmap source type is unsupported.");
                 if (!bitmapFrames.TryGetValue(bitmapTag, out var known))
                 { known = CuiBitmap.ReadGroups(catalog.Read(bitmapTag)); bitmapFrames.Add(bitmapTag, known); }
@@ -123,7 +126,7 @@ public sealed partial class CuiPreviewData
             {
                 var row = rows.LastOrDefault(property => property.Property.Selector == selector);
                 if (row is null) return 0;
-                if (row.Property.ValueClass != 0x80804696)
+                if (row.Property.ValueClass != CuiIntegerValue.Class)
                     throw new NotSupportedException("The bitmap index storage is unsupported.");
                 return unchecked((int)CuiVisualProperties.ReadUInt(row.Source, row.Property));
             }
@@ -144,23 +147,43 @@ public static class CuiBitmap
 
     public static IReadOnlyList<IReadOnlyList<uint>> ReadGroups(ReadOnlyMemory<byte> bytes)
     {
-        var reader = new TagReader(bytes);
-        if (!reader.Has(0, 24)) throw new InvalidDataException("Truncated CUI bitmap.");
-        int descriptor = reader.Relative(16);
+        var tag = bytes.Span;
+        if (!TagView.Fits<SIconBitmap>(tag, 0)) throw new InvalidDataException("Truncated CUI bitmap.");
+        ref readonly var bitmap = ref TagView.At<SIconBitmap>(tag, 0);
+        int descriptor = TagPointer.Checked(tag, TagView.OffsetOf(tag, in bitmap.Data));
         // Two class sets share one layout: each frame is a texture header tag.
-        (uint Group, uint Frame) classes = descriptor < 4 ? default : reader.U32(descriptor - 4) switch
-        {
-            0x80804A67 => (0x80804A6C, 0x80804A6F),
-            0x80804A65 => (0x80804A6A, 0x80804A6E),
-            _ => default
-        };
-        if (classes.Group == 0) throw new InvalidDataException("Invalid CUI bitmap group descriptor.");
-        var groups = reader.Array(descriptor, classes.Group, 16);
+        uint? kind = descriptor < 4 ? null : TagView.TargetClass(tag, in bitmap.Data);
+        if (kind is not (C80804a67.Class or C80804a65.Class)) throw new InvalidDataException("Invalid CUI bitmap group descriptor.");
         List<IReadOnlyList<uint>> result = [];
-        for (int group = 0; group < groups.Count; group++)
+        int groupStride = Unsafe.SizeOf<C80804a6c>(), frameStride = Unsafe.SizeOf<CuiBitmapFrame>();
+        if (kind == C80804a67.Class)
         {
-            var frames = reader.Array(groups.Data + group * 16, classes.Frame, 4);
-            result.Add(Enumerable.Range(0, frames.Count).Select(frame => reader.U32(frames.Data + frame * 4)).ToArray());
+            var groups = TagArray.Checked(tag, descriptor + TagView.FieldOffset<C80804a67>("Sequences"),
+                C80804a6c.Class, groupStride);
+            for (int group = 0; group < groups.Count; group++)
+            {
+                ref readonly var sequence = ref TagView.At<C80804a6c>(tag, groups.Data + group * groupStride);
+                var frames = TagArray.Checked(tag, TagView.OffsetOf(tag, in sequence.Frames), CuiBitmapFrame.Class, frameStride);
+                var textures = new uint[frames.Count];
+                for (int frame = 0; frame < textures.Length; frame++)
+                    textures[frame] = TagView.At<CuiBitmapFrame>(tag, frames.Data + frame * frameStride).Texture;
+                result.Add(textures);
+            }
+        }
+        else
+        {
+            int altGroupStride = Unsafe.SizeOf<C80804a6a>(), altFrameStride = Unsafe.SizeOf<CuiBitmapFrameAlt>();
+            var groups = TagArray.Checked(tag, descriptor + TagView.FieldOffset<C80804a65>("Sequences"),
+                C80804a6a.Class, altGroupStride);
+            for (int group = 0; group < groups.Count; group++)
+            {
+                ref readonly var sequence = ref TagView.At<C80804a6a>(tag, groups.Data + group * altGroupStride);
+                var frames = TagArray.Checked(tag, TagView.OffsetOf(tag, in sequence.Frames), CuiBitmapFrameAlt.Class, altFrameStride);
+                var textures = new uint[frames.Count];
+                for (int frame = 0; frame < textures.Length; frame++)
+                    textures[frame] = TagView.At<CuiBitmapFrameAlt>(tag, frames.Data + frame * altFrameStride).Texture;
+                result.Add(textures);
+            }
         }
         return result;
     }

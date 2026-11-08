@@ -11,10 +11,10 @@ internal static class WideHashUiChecks
         string install = Path.Combine(root, "alias-modal-install");
         Directory.CreateDirectory(Path.Combine(install, "packages"));
         PackageWriter.WriteNew(Path.Combine(install, "packages", "w64_alias_0100_0.pkg"), 0x100,
-            [new(0x80807DAE, 0x1000, new byte[32], "Original bubble")]);
+            [new(0x80807DAE, 0x1000, new byte[80], "Original bubble")]);
         var project = StudioProject.Create(Path.Combine(root, "alias-modal-project"), "Authored wide references");
         using var catalog = PackageCatalog.Open(install);
-        var asset = project.AddDerivedAsset("Owned bubble", 0x80A00000, new byte[32], new(0xC00, 0x80807DAE, 0x1000), catalog);
+        var asset = project.AddDerivedAsset("Owned bubble", 0x80A00000, new byte[80], new(0xC00, 0x80807DAE, 0x1000), catalog);
         string settings = Path.Combine(root, "alias-modal-settings.json");
         new StudioSettings { BrowserWidth = 260, InspectorWidth = 340 }.Save(settings);
         Exception? failure = null;

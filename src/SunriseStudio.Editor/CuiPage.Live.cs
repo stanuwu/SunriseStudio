@@ -3,6 +3,8 @@ using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Formats;
 using SunriseStudio.Live;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
@@ -62,7 +64,7 @@ public sealed partial class CuiPage
     {
         if (live is null) return;
         liveDrawnAt = Environment.TickCount64;
-        bool watch = showLive && document is { ClassHash: 0x8080496A } && composition is not null;
+        bool watch = showLive && document is { ClassHash: SCuiHierarchy.Class } && composition is not null;
         LiveCall(connection => connection.WatchCui(watch ? new(document!.TagHash, 0) : null));
         var tree = watch ? live?.CuiTree : null;
         if (ReferenceEquals(tree, joinedTree) && ReferenceEquals(composition, joinedScene)) return;
@@ -256,7 +258,7 @@ public sealed partial class CuiPage
     }
 
     private static string TextName(StudioPageContext context, uint hash) =>
-        hash is 0 or 0x811C9DC5 ? "(empty)" : context.Workspace.ResolveHash(hash) ?? $"{hash:X8}";
+        hash is 0 or StringHash.Empty ? "(empty)" : context.Workspace.ResolveHash(hash) ?? $"{hash:X8}";
 
     private static string Number(float value) => value.ToString("0.##", CultureInfo.InvariantCulture);
 

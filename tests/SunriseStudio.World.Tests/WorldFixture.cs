@@ -24,11 +24,12 @@ internal static class WorldFixture
             definition.U32(bubbles + i * 80, i == 0 ? BubbleA : BubbleB);
             definition.U32(bubbles + i * 80 + 72, (uint)i);
             definition.U8(bubbles + i * 80 + 40, (byte)(1 << i));
-            var bubble = new Bytes(0x20); bubble.U32(8, Base + (uint)(6 + i)); bubble.U32(0x18, i == 0 ? BubbleA : BubbleB);
+            // Tags hold their whole class: 80 bytes for a bubble root, 136 for a scenario.
+            var bubble = new Bytes(0x50); bubble.U32(8, Base + (uint)(6 + i)); bubble.U32(0x18, i == 0 ? BubbleA : BubbleB);
             Entry(2 + i, 0x80807DAE, bubble, $"bubble:test:{i}");
         }
         Entry(1, 0x80809962, definition);
-        var scenario = new Bytes(0x70); int scenarioBubbles = scenario.Array(0x50, 0x8080924D, 24, 2);
+        var scenario = new Bytes(0x88); int scenarioBubbles = scenario.Array(0x50, 0x8080924D, 24, 2);
         int state = 0;
         for (int b = 0; b < 2; b++)
         {

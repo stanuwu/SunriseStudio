@@ -2,6 +2,8 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using static SunriseStudio.Packages.PackageFile;
 
 namespace SunriseStudio.Packages;
@@ -29,15 +31,18 @@ public static partial class PackageWriter
     private const int HeaderSize = 0x180, MiscOffset = 0x1000, MetadataMinimumOffset = 0x1800;
     // The header holds the metadata digest; entry records start at metadata +0x60, size from bit 28.
     private const int MetadataDigestField = 0x118, MetadataDigestSize = 20, EntryTable = 0x60, EntrySizeShift = 28;
-    private const uint ArrayMarker = 0x80809FBD, EntryClass = 0x80809EF3, BlockClass = 0x80809EEE;
+    private const uint ArrayMarker = TagArray.Marker, EntryClass = PackageEntryRecord.Class, BlockClass = PackageBlockRecord.Class;
     private const uint SupportedBuild = 86657;
     /** The client's package header check refuses ids above 0x0CFF, although the registrar takes more. */
     public const ushort FirstNewPackageId = 0x0100, LastNewPackageId = 0x0CFF;
     public static string NewPackageIdRange => $"{FirstNewPackageId:X4} to {LastNewPackageId:X4}";
     public static bool IsNewPackageId(int id) => id is >= FirstNewPackageId and <= LastNewPackageId;
 
-    /** Inherited blocks may refer to several older generations of the same package family. */
-    public static IReadOnlyList<string> GetRequiredPredecessors(string sourcePackagePath)
+    /**
+     * Inherited blocks may refer to several older generations of the same package family.
+     * @param otherDirectory Also searched, after the source's folder: a mod's patch sits apart from the installed generations.
+     */
+    public static IReadOnlyList<string> GetRequiredPredecessors(string sourcePackagePath, string? otherDirectory = null)
     {
         var source = new PackageFile(sourcePackagePath);
         source.LoadTables();
@@ -48,6 +53,7 @@ public static partial class PackageWriter
         foreach (ushort patch in source.Blocks.Select(x => x.Patch).Distinct().Order())
         {
             string path = $"{stem}_{patch}.pkg";
+            if (!File.Exists(path) && otherDirectory is not null) path = Path.Combine(otherDirectory, Path.GetFileName(path));
             if (!File.Exists(path)) throw new FileNotFoundException("An inherited package generation is missing.", path);
             var predecessor = new PackageFile(path);
             if (predecessor.Id != source.Id || predecessor.Patch != patch)
@@ -55,6 +61,38 @@ public static partial class PackageWriter
             paths.Add(path);
         }
         return paths;
+    }
+
+    /**
+     * Reads one entry whose blocks are stored plain, as the writer stores every new block.
+     * @param otherDirectory Also searched for the generation files that hold the entry's blocks.
+     * @return The bytes, or null when a block is compressed or encrypted; read those through a catalog.
+     */
+    public static byte[]? ReadPlainEntry(string packagePath, int entryIndex, string? otherDirectory = null)
+    {
+        var file = new PackageFile(packagePath);
+        file.LoadTables();
+        if ((uint)entryIndex >= (uint)file.EntryCount) throw new InvalidDataException("The entry is outside the package.");
+        var entry = file.Entries[entryIndex];
+        string stem = file.Path[..file.Path.LastIndexOf('_')];
+        var result = new byte[entry.Size];
+        int copied = 0, block = entry.StartBlock, skip = entry.StartOffset;
+        while (copied < result.Length)
+        {
+            if ((uint)block >= (uint)file.Blocks.Length) throw new InvalidDataException("The entry runs past its block table.");
+            var record = file.Blocks[block];
+            // Bit 0 marks a compressed block, bit 1 an encrypted one.
+            if ((record.Flags & 3) != 0) return null;
+            string path = $"{stem}_{record.Patch}.pkg";
+            if (!File.Exists(path) && otherDirectory is not null) path = Path.Combine(otherDirectory, Path.GetFileName(path));
+            int count = Math.Min(record.Size - skip, result.Length - copied);
+            if (count <= 0) throw new InvalidDataException("The entry runs past its block.");
+            PackageFile.ReadAt(path, record.Offset + skip, count).CopyTo(result, copied);
+            copied += count;
+            skip = 0;
+            block++;
+        }
+        return result;
     }
 
     /** @return The misc block of one package file, as the patch writer copies it. */
@@ -69,11 +107,12 @@ public static partial class PackageWriter
      * @param misc Replaces the source's misc block, such as after a dependency record edit.
      */
     public static PackageBuildArtifact WritePatch(string sourcePackagePath, string outputPath,
-        IReadOnlyDictionary<int, byte[]> replacements, string? protectedGameRoot = null, byte[]? misc = null)
+        IReadOnlyDictionary<int, byte[]> replacements, string? protectedGameRoot = null, byte[]? misc = null,
+        string? predecessorDirectory = null)
     {
         var source = new PackageFile(sourcePackagePath);
         source.LoadTables();
-        GetRequiredPredecessors(sourcePackagePath);
+        GetRequiredPredecessors(sourcePackagePath, predecessorDirectory);
         if (source.Variant != 1)
             throw new NotSupportedException("Package authoring requires the pre-BL version-38 table layout.");
         if (source.Patch >= 255 || replacements.Count == 0 && misc is null)
@@ -115,7 +154,7 @@ public static partial class PackageWriter
         string? protectedGameRoot = null)
     {
         ValidateOutput(outputPath, protectedGameRoot);
-        if (!IsNewPackageId(packageId) || entries.Count is < 1 or > 8192)
+        if (!IsNewPackageId(packageId) || entries.Count is < 1 or > TagHashes.EntriesPerPackage)
             throw new InvalidDataException($"New packages need an id from {NewPackageIdRange} and 1 to 8192 entries.");
         if (entries.Any(x => x.Data is null || x.Name?.Contains('\0') == true || x.WideHashes is null))
             throw new InvalidDataException("Invalid authored entry.");
@@ -355,14 +394,14 @@ public static partial class PackageWriter
         Put64(misc, 8, 3);
         Put64(misc, 0x10, (ulong)named.Length);
         Put64(misc, 0x18, 0x58);
-        ArrayPrefix(misc, 0x80, capacity, 0x80809EEC);
-        Put32(misc, strings + 4, 0x80800065);
+        ArrayPrefix(misc, 0x80, capacity, PackageNamedTagRow.Class);
+        Put32(misc, strings + 4, SInlineString.Class);
         Put64(misc, strings + 8, (ulong)(total - strings - 16));
         int cursor = strings + 16;
         for (int i = 0; i < named.Length; i++)
         {
             int row = 0x80 + i * EntrySize;
-            Put32(misc, row, checked(0x80800000U + ((uint)id << 13) + (uint)named[i].index));
+            Put32(misc, row, TagHashes.Make(id, named[i].index));
             Put32(misc, row + 4, named[i].entry.Reference);
             Put64(misc, row + 8, (ulong)(cursor - row - 8));
             cursor += Encoding.UTF8.GetBytes(named[i].entry.Name!, misc.AsSpan(cursor)) + 1;
@@ -382,7 +421,7 @@ public static partial class PackageWriter
         }
         byte[] names = CreateNames(id, entries);
         var aliases = entries.SelectMany((entry, index) => entry.WideHashes.Select(hash =>
-            (Hash: hash, Tag: checked(0x80800000U + ((uint)id << 13) + (uint)index), Class: entry.Reference)))
+            (Hash: hash, Tag: TagHashes.Make(id, index), Class: entry.Reference)))
             .OrderBy(row => row.Hash).ToArray();
         if (aliases.Length == 0) return names;
         if (aliases.Select(row => row.Hash).Distinct().Count() != aliases.Length)
@@ -393,7 +432,7 @@ public static partial class PackageWriter
         Put64(misc, 0, (ulong)misc.Length);
         Put64(misc, 0x30, (ulong)aliases.Length);
         Put64(misc, 0x38, (ulong)(rows - 0x48));
-        ArrayPrefix(misc, rows, aliases.Length, 0x80809D02);
+        ArrayPrefix(misc, rows, aliases.Length, Hash64ReferenceRow.Class);
         for (int i = 0; i < aliases.Length; i++)
         {
             int row = rows + i * EntrySize;

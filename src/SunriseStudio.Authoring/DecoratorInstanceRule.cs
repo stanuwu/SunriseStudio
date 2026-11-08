@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -12,6 +14,7 @@ namespace SunriseStudio.Authoring;
  */
 internal sealed class DecoratorInstanceRule : IObjectEditRule
 {
+    private const string RangeError = "Placement range leaves its source.";
     // Tags that more than one instance header names, per catalog.
     private static readonly ConditionalWeakTable<PackageCatalog, HashSet<uint>> shared = [];
 
@@ -37,8 +40,9 @@ internal sealed class DecoratorInstanceRule : IObjectEditRule
         var originalBlock = context.Original(tags.Block);
         var quant = DecoratorQuantization.Read(quantBytes);
         var originalQuant = DecoratorQuantization.Read(context.Original(tags.Quantization));
-        int[] rows = new NativeRows(block).Rows(0x08, DecoratorTags.RecordClass, DecoratorRecords.Size);
-        int[] originalRows = new NativeRows(originalBlock).Rows(0x08, DecoratorTags.RecordClass, DecoratorRecords.Size);
+        int records = TagView.FieldOffset<SDecoratorBlock>(nameof(SDecoratorBlock.Records));
+        int[] rows = ObjectRows.RowOffsets<SDecoratorRecord>(block, records, DecoratorTags.RecordClass);
+        int[] originalRows = ObjectRows.RowOffsets<SDecoratorRecord>(originalBlock, records, DecoratorTags.RecordClass);
         if (rows.Length != originalRows.Length || buffer.Length != rows.Length * DecoratorRecords.Size)
             throw new InvalidDataException("The decorator block and its vertex buffer disagree on the instance count.");
         var values = rows.Select(row => DecoratorRecords.Decode(block.AsSpan(row, DecoratorRecords.Size), quant)).ToArray();
@@ -78,15 +82,19 @@ internal sealed class DecoratorInstanceRule : IObjectEditRule
         int[] originalRows, DecoratorQuantization originalQuant, byte[] block, int[] rows, DecoratorQuantization quant)
     {
         byte[] payloadBytes = context.Current(tags.Payload), cellBytes = context.Current(tags.Cells);
-        var payload = new NativeRows(payloadBytes);
-        uint[] starts = payload.Rows(0x38, 0x80800007, 4).Select(payload.U32).ToArray();
-        var originalCells = new NativeRows(context.Original(tags.Cells));
-        int[] originalBoxes = originalCells.Rows(0x08, 0x80809673, 48);
-        var cells = new NativeRows(cellBytes);
-        int[] boxes = cells.Rows(0x08, 0x80809673, 48);
-        if (starts.Length != boxes.Length + 1 || originalBoxes.Length != boxes.Length || starts[^1] != rows.Length)
+        int[] starts = ObjectRows.RowOffsets<SI32Element>(payloadBytes, TagView.FieldOffset<SDecoratorPayload>(nameof(SDecoratorPayload.CellStarts)),
+            SI32Element.Class).Select(row => TagView.At<SI32Element>(payloadBytes, row).Value).ToArray();
+        byte[] originalCells = context.Original(tags.Cells);
+        int boxField = TagView.FieldOffset<SInstanceBoundsTable>(nameof(SInstanceBoundsTable.Boxes));
+        int[] originalBoxes = ObjectRows.RowOffsets<SInstanceBoundsRow>(originalCells, boxField, SInstanceBoundsRow.Class);
+        int[] boxes = ObjectRows.RowOffsets<SInstanceBoundsRow>(cellBytes, boxField, SInstanceBoundsRow.Class);
+        if (starts.Length != boxes.Length + 1 || originalBoxes.Length != boxes.Length || starts[^1] != rows.Length
+            || starts.Any(start => start < 0))
             throw new InvalidDataException("The decorator cells do not cover the instance block.");
-        Vector3 payloadMin = payload.V3(0x70), payloadMax = payload.V3(0x80), min = payloadMin, max = payloadMax;
+        // The payload box is read as two vec3 values; its W lanes are not read.
+        int minimumField = TagView.FieldOffset<SDecoratorPayload>(nameof(SDecoratorPayload.BoundsMinimumW1));
+        int maximumField = TagView.FieldOffset<SDecoratorPayload>(nameof(SDecoratorPayload.BoundsMaximumW1));
+        Vector3 payloadMin = Vec3(payloadBytes, minimumField), payloadMax = Vec3(payloadBytes, maximumField), min = payloadMin, max = payloadMax;
         foreach (var edit in edits)
         {
             int index = edit.Target.Index;
@@ -95,25 +103,38 @@ internal sealed class DecoratorInstanceRule : IObjectEditRule
             var after = DecoratorRecords.Decode(block.AsSpan(rows[index], DecoratorRecords.Size), quant).Transform;
             if (!Matrix4x4.Invert(before, out var inverse))
                 throw new InvalidDataException("The installed decorator transform cannot be inverted.");
-            var moved = InstanceBoundsRule.TransformBox(originalCells.V3(originalBoxes[cell]),
-                originalCells.V3(originalBoxes[cell] + 16), inverse * after);
+            var installed = TagView.Checked<SInstanceBoundsRow>(originalCells, originalBoxes[cell]);
+            var moved = BoxBounds.Transform(Xyz(installed.MinimumW1), Xyz(installed.MaximumW1), inverse * after);
             // A one-instance cell takes the moved box like a static bounds row; shared cells grow.
             bool alone = starts[cell + 1] - starts[cell] == 1;
-            Vector3 low = alone ? moved.Min : Vector3.Min(cells.V3(boxes[cell]), moved.Min);
-            Vector3 high = alone ? moved.Max : Vector3.Max(cells.V3(boxes[cell] + 16), moved.Max);
+            ref var box = ref TagView.Edit<SInstanceBoundsRow>(cellBytes, boxes[cell]);
+            Vector3 low = alone ? moved.Min : Vector3.Min(Xyz(box.MinimumW1), moved.Min);
+            Vector3 high = alone ? moved.Max : Vector3.Max(Xyz(box.MaximumW1), moved.Max);
             // Both W lanes are 1.0, as in every installed bounds row.
-            if (low != cells.V3(boxes[cell]) || high != cells.V3(boxes[cell] + 16))
+            if (low != Xyz(box.MinimumW1) || high != Xyz(box.MaximumW1))
             {
-                NativeRows.Write(cellBytes, boxes[cell], low.X, low.Y, low.Z, 1);
-                NativeRows.Write(cellBytes, boxes[cell] + 16, high.X, high.Y, high.Z, 1);
+                box.MinimumW1 = new Vector4(low, 1);
+                box.MaximumW1 = new Vector4(high, 1);
                 context.Produced(edit, tags.Cells);
             }
             min = Vector3.Min(min, low); max = Vector3.Max(max, high);
         }
-        if (min != payloadMin) NativeRows.Write(payloadBytes, 0x70, min.X, min.Y, min.Z, 1);
-        if (max != payloadMax) NativeRows.Write(payloadBytes, 0x80, max.X, max.Y, max.Z, 1);
+        if (min != payloadMin) Put(payloadBytes, minimumField, new Vector4(min, 1));
+        if (max != payloadMax) Put(payloadBytes, maximumField, new Vector4(max, 1));
         if (min != payloadMin || max != payloadMax)
             foreach (var edit in edits) context.Produced(edit, tags.Payload);
+    }
+
+    private static Vector3 Xyz(Vector4 value) => new(value.X, value.Y, value.Z);
+
+    /** @return The vec3 at `at`; InvalidDataException when its 12 bytes leave the tag. */
+    private static Vector3 Vec3(byte[] bytes, int at) =>
+        TagView.Fits<Vector3>(bytes, at) ? TagView.At<Vector3>(bytes, at) : throw new InvalidDataException(RangeError);
+
+    private static void Put(byte[] bytes, int at, Vector4 value)
+    {
+        if (!TagView.Fits<Vector4>(bytes, at)) throw new InvalidDataException(RangeError);
+        TagView.Edit<Vector4>(bytes, at) = value;
     }
 
     private static HashSet<uint> Shared(PackageCatalog catalog) => shared.GetValue(catalog, owner =>
@@ -121,8 +142,10 @@ internal sealed class DecoratorInstanceRule : IObjectEditRule
         var counts = new Dictionary<uint, int>();
         foreach (var entry in owner.Entries.Where(entry => entry.Reference == DecoratorTags.HeaderClass).DistinctBy(entry => entry.TagHash))
         {
-            var header = new NativeRows(owner.ReadOriginal(entry.TagHash));
-            foreach (uint tag in new[] { header.U32(0x14), header.U32(0x18), header.U32(0x1C) })
+            byte[] bytes = owner.ReadOriginal(entry.TagHash);
+            if (!TagView.Fits<SDecoratorInstanceHeader>(bytes, 0)) throw new InvalidDataException(RangeError);
+            var header = TagView.At<SDecoratorInstanceHeader>(bytes);
+            foreach (uint tag in new[] { header.Quantization, header.VertexBufferHeader, header.InstanceBlock })
                 counts[tag] = counts.GetValueOrDefault(tag) + 1;
         }
         return counts.Where(pair => pair.Value > 1).Select(pair => pair.Key).ToHashSet();

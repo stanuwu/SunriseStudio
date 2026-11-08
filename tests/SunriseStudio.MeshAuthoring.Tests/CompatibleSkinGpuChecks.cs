@@ -29,7 +29,7 @@ internal static class CompatibleSkinGpuChecks
             var entries = project.AddedAssets.Select(asset =>
             {
                 var native = asset.Native!;
-                uint tag = checked(0x80800000u + ((uint)native.PackageId << 13) + (uint)native.EntryIndex!.Value);
+                uint tag = TagHashes.Make(native.PackageId, native.EntryIndex!.Value);
                 return new PackageOverlayEntry(new PackageEntry(tag, native.Reference, (int)(native.TypeInfo >> 9 & 127),
                     (int)(native.TypeInfo >> 6 & 7), checked((int)asset.Size), $"w64_skin_{native.PackageId:X4}_0",
                     native.PackageId, native.EntryIndex.Value) { TypeInfo = native.TypeInfo }, native.Name);

@@ -104,6 +104,8 @@ public sealed record BundleMaterialSampler(string Filter, string AddressU, strin
 public sealed record BundleShaderNode(string Operation, int[] Inputs, float Value = 0, uint Slot = 0, int Channel = 0)
 {
     public uint? SamplerSlot { get; init; }
+    /** On a constant: the cb0 lane, row * 4 + lane, it copies unchanged from the material's constant template. */
+    public int? TemplateLane { get; init; }
 }
 public sealed record BundleMaterialProgram(IReadOnlyList<BundleShaderNode> Nodes, IReadOnlyDictionary<string, int[]> Outputs)
 {

@@ -5,4 +5,14 @@
   <ItemGroup>
     <InternalsVisibleTo Include="SunriseStudio.Scene" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The tag views live with the tag layer; Packages sits below it and compiles them so both share one copy. -->
+    <Compile Include="../SunriseStudio.Tags/Views/**/*.cs" Link="TagViews/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- The generated views build here too, so the tag readers in this project can use them. -->
+    <Compile Include="../SunriseStudio.Tags.Generated/**/*.cs" Exclude="../SunriseStudio.Tags.Generated/bin/**;../SunriseStudio.Tags.Generated/obj/**" Link="Generated/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Categories, builds and the reference map read the schema; a program without the App's embedded copy reads this one. -->
+    <None Include="../../registry/86657.json" Link="registry/86657.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+  </ItemGroup>
 </Project>

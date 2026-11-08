@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -8,6 +9,8 @@ using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -62,7 +65,7 @@ public static class WeaponAssetReimporter
             ? wrapper.Native!.EntryIndex!.Value : throw new InvalidDataException("The weapon art wrapper is not project-owned."));
         ushort package = weapon.Native.PackageId;
         uint[] tags = Enumerable.Range(first, checked(end - first))
-            .Select(index => 0x80800000u + ((uint)package << 13) + (uint)index).ToArray();
+            .Select(index => TagHashes.Make(package, index)).ToArray();
         if (root.TryGetProperty("assetImport", out var import))
         {
             if (import.GetProperty("version").GetInt32() != 1
@@ -115,11 +118,12 @@ public static class WeaponAssetReimporter
         var map = new Dictionary<uint, uint>();
         foreach (var asset in imported.Assets)
             map[Tag(asset.Native!)] = layoutNames.TryGetValue(asset.Name, out uint kept) && Keeps(asset, kept) ? kept
-                : checked(0x80800000u + ((uint)profile.PackageId << 13) + (uint)nextEntry++);
+                : nextEntry < TagHashes.EntriesPerPackage ? TagHashes.Make(profile.PackageId, nextEntry++)
+                : throw new InvalidDataException("The weapon's package has no free entry for a new record.");
         var prepared = imported.Assets.ToDictionary(asset => map[Tag(asset.Native!)], asset => asset with
         {
             Data = Remap(asset.Data, map),
-            Native = asset.Native! with { EntryIndex = (int)(map[Tag(asset.Native!)] & 8191) }
+            Native = asset.Native! with { EntryIndex = TagHashes.Split(map[Tag(asset.Native!)]).EntryIndex }
         });
         uint Mapped(uint tag) => map.GetValueOrDefault(tag, tag);
         if (!Same(imported.VariantEntities.ToDictionary(pair => pair.Key, pair => Mapped(pair.Value)), profile.VariantEntities)
@@ -148,7 +152,7 @@ public static class WeaponAssetReimporter
                 throw new NotSupportedException("This export changes an owned asset's identity. " + LayoutLimit);
         }
         var gameplayRoot = prepared[profile.GameplayEntityTag];
-        if (gameplayRoot.Native!.Reference != 0x80809C0F
+        if (gameplayRoot.Native!.Reference != SEntity.Class
             || WeaponConfigEdits.ConstructionConfigs(gameplayRoot.Data).Count
                 != WeaponConfigEdits.ConstructionConfigs(current[profile.GameplayEntityTag]).Count)
             throw new NotSupportedException("The weapon's gameplay component layout changed. " + LayoutLimit);
@@ -178,16 +182,18 @@ public static class WeaponAssetReimporter
             for (int index = 0; index < priorNames.Length; index++)
             {
                 int from = priorNames[index], to = nextNames[index];
-                short nextSlot = BinaryPrimitives.ReadInt16LittleEndian(rebound.AsSpan(to + 24));
-                if (BinaryPrimitives.ReadInt16LittleEndian(priorDefinition.AsSpan(from + 24)) != nextSlot)
+                ref var next = ref TagView.Edit<SAnimationNameRow>(rebound, to);
+                ref readonly var prior = ref TagView.At<SAnimationNameRow>(priorDefinition, from);
+                short nextSlot = next.ClipSlot;
+                if (prior.ClipSlot != nextSlot)
                     throw new NotSupportedException("The animation name layout changed. " + LayoutLimit);
-                if (nextSlot == slot) priorDefinition.AsSpan(from + 20, 4).CopyTo(rebound.AsSpan(to + 20));
+                if (nextSlot == slot) next.DurationSeconds = prior.DurationSeconds;
             }
         }
         prepared[definition] = definitionAsset with { Data = rebound };
         // A reticle added after import is a second row in its sight model; the fresh model gets it back.
         var reticleChanges = new Dictionary<string, byte[]>();
-        foreach (uint model in prepared.Keys.Where(tag => !added.Contains(tag) && prepared[tag].Native!.Reference == 0x808073A5).ToArray())
+        foreach (uint model in prepared.Keys.Where(tag => !added.Contains(tag) && prepared[tag].Native!.Reference == SEntityModel.Class).ToArray())
         {
             if (!WeaponReticleAuthoring.HasReticle(current[model])) continue;
             var (positionsHeader, attributesHeader) = WeaponReticleAuthoring.MainBuffers(prepared[model].Data);
@@ -245,7 +251,7 @@ public static class WeaponAssetReimporter
             uint was = BinaryPrimitives.ReadUInt32LittleEndian(current.AsSpan(at));
             uint now = BinaryPrimitives.ReadUInt32LittleEndian(output.AsSpan(at));
             if (was == now) continue;
-            bool link = now >= 0x80800000 && was >= 0x80800000 && catalog.TryGetEntry(now, out var fromEntry)
+            bool link = TagHashes.IsTag(now) && TagHashes.IsTag(was) && catalog.TryGetEntry(now, out var fromEntry)
                 && catalog.TryGetEntry(was, out var toEntry) && fromEntry.Reference == toEntry.Reference;
             if (link || now == WeaponPresentationReader.TemplateSelector)
                 BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(at), was);
@@ -297,16 +303,21 @@ public static class WeaponAssetReimporter
     /** Duration preservation accepts only the native definition's bounded name-row array. */
     private static int[] NameRows(byte[] data)
     {
-        if (data.Length < 120) throw new InvalidDataException("The animation definition is truncated.");
-        long count = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(104));
-        long header = checked(112 + BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(112)));
+        const string rowsMember = nameof(SAnimationDefinition.MotionDefinitions);
+        if (!TagView.FitsThrough<SAnimationDefinition>(data, 0, rowsMember))
+            throw new InvalidDataException("The animation definition is truncated.");
+        ref readonly var names = ref TagView.Member<SAnimationDefinition, TagArray<SAnimationNameRow>>(data, 0, rowsMember);
+        int stride = Unsafe.SizeOf<SAnimationNameRow>();
+        long count = names.Count;
         if (count == 0) return [];
-        if (count < 0 || header < 4 || header > data.Length - 16 || count > (data.Length - header - 16) / 32
-            || BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan((int)header - 4)) != 0x80809FBD
-            || BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan((int)header)) != count
-            || BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan((int)header + 8)) != 0x80809002)
+        long header = checked(TagView.OffsetOf(data, in names.Relative) + names.Relative);
+        var array = new TagArrayHeader(data, header);
+        if (count < 0 || header < TagView.ClassWordSize || header > data.Length - TagArray.HeaderSize
+            || count > (data.Length - array.DataOffset) / stride || !TagArray.MarkerAt(data, header)
+            || array.Count != count || array.ElementClass != SAnimationNameRow.Class)
             throw new InvalidDataException("The animation name layout is malformed.");
-        return Enumerable.Range(0, checked((int)count)).Select(index => checked((int)header + 16 + index * 32)).ToArray();
+        int first = checked((int)array.DataOffset);
+        return Enumerable.Range(0, checked((int)count)).Select(index => checked(first + index * stride)).ToArray();
     }
 
     /** Replaces every aligned tag the map names, in one pass. */
@@ -321,6 +332,6 @@ public static class WeaponAssetReimporter
 
     private static bool Same<TKey>(IReadOnlyDictionary<TKey, uint> first, IReadOnlyDictionary<TKey, uint> second)
         where TKey : notnull => first.Count == second.Count && first.All(pair => second.TryGetValue(pair.Key, out uint tag) && tag == pair.Value);
-    private static uint Tag(NativeAssetMetadata native) => checked(0x80800000u + ((uint)native.PackageId << 13) + (uint)native.EntryIndex!.Value);
+    private static uint Tag(NativeAssetMetadata native) => TagHashes.Make(native.PackageId, native.EntryIndex!.Value);
     private static string Hash(byte[] data) => Convert.ToHexString(SHA256.HashData(data));
 }

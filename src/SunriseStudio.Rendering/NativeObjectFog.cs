@@ -1,10 +1,12 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Rendering;
 
 /**
  * The 112-byte view fog block 0x7FF742EF7E00 builds at view +0x300 and copies to camera +0x2A90.
- * @param Table 16 x 256 RGBA8 colour table from atmosphere settings +0x8C, or null when the handle is absent.
+ * @param Table 16 x 256 RGBA8 colour table the atmosphere's ObjectFogTable names, or null when the handle is absent.
  */
 public sealed record NativeViewFog(Vector3 Camera, Vector4 Scatter, Vector4 Tint, float InScatterScale,
     float InScatterFloor, float ScatterScale, Vector4 HeightFog, float RangeStart, float RangeEnd, float Start,
@@ -16,7 +18,7 @@ public static class NativeObjectFog
     public const uint ScopeTag = 0x80B356EB;
     public const int Rows = 8;
     // The colour table is 16 time-of-day columns by 256 distance rows of RGBA8.
-    public const int TableBytes = 16 * 256 * 4;
+    public static readonly int TableBytes = Unsafe.SizeOf<ObjectFogTable>();
     // The caller owns row 3 W and row 4 X; the fog helpers supply every other word.
     private static readonly uint[] CallerWords = [15, 16];
     // Row 4 Z and W place the object's cell in a 32 x 32 lighting atlas; a missing cell (-1) writes 0.

@@ -1,14 +1,13 @@
 using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Live;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
 public sealed partial class LivePage
 {
-    // Package class of a CUI hierarchy; only these open in the CUI page.
-    private const uint CuiHierarchyClass = 0x8080496A;
     // Screens open and close in bursts while menus animate; one open per settled choice.
     private const long CuiSettleMilliseconds = 500;
     private bool syncCui, screensShown;
@@ -60,7 +59,7 @@ public sealed partial class LivePage
     }
 
     private static bool IsHierarchy(StudioWorkspace workspace, uint tag) =>
-        workspace.Catalog?.TryGetEntry(tag, out var entry) == true && entry.Reference == CuiHierarchyClass;
+        workspace.Catalog?.TryGetEntry(tag, out var entry) == true && entry.Reference == SCuiHierarchy.Class;
 
     private void ResetCui()
     {

@@ -1,12 +1,14 @@
-using System.Buffers.Binary;
 using System.Text;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Animation;
 
 public sealed record AnimationClipNameEvidence(uint NameHash, int DefinitionRow, int ClipListIndex,
     uint AudioEventTag, int EventOffset, string Name, string AudioPath);
 
-/** Animation definition +0x68: 32-byte name rows of class 0x80809002, hash at +16, i16 clip slot at +24. */
+/** The animation definition's name rows: a hash and a clip slot each. */
 public static class AnimationNameRows
 {
     private const int MaximumRows = 65_536;
@@ -18,12 +20,17 @@ public static class AnimationNameRows
     /** Every name row in order; empty for a definition too short to hold the array. */
     internal static (uint Hash, int Slot, byte Kind, int Row)[] Read(byte[] definition)
     {
-        if (definition.Length < 0x78) return [];
-        var data = new AnimationControlReader.Data(definition);
-        if (data.I64(0x68) is < 0 or > MaximumRows)
+        if (!TagView.FitsThrough<SAnimationDefinition>(definition, 0, nameof(SAnimationDefinition.MotionDefinitions))) return [];
+        ref readonly var names = ref AnimationControlReader.Member<SAnimationDefinition, TagArray<SAnimationNameRow>>(
+            definition, 0, nameof(SAnimationDefinition.MotionDefinitions));
+        if (names.Count is < 0 or > MaximumRows)
             throw new InvalidDataException("Animation name row count is invalid.");
-        return [.. data.Rows(0x68, 0x80809002, 32).Select((offset, index) =>
-            (data.U32(offset + 16), (int)data.I16(offset + 24), data.U8(offset + 26), index))];
+        var rows = AnimationControlReader.Rows<SAnimationNameRow>(definition, TagView.OffsetOf(definition, in names),
+            SAnimationNameRow.Class);
+        var result = new (uint Hash, int Slot, byte Kind, int Row)[rows.Length];
+        for (int index = 0; index < result.Length; index++)
+            result[index] = (rows[index].NameHash, rows[index].ClipSlot, rows[index].Kind, index);
+        return result;
     }
 }
 
@@ -45,7 +52,7 @@ internal static class AnimationClipNames
         foreach (var row in rows)
         {
             if (row.Slot < 0 || row.Slot >= clips.Length || row.Kind is not (1 or 2)
-                || row.Hash is 0 or 0x811C9DC5 or uint.MaxValue || repeatedHashes.Contains(row.Hash)
+                || row.Hash is 0 or StringHash.Empty or uint.MaxValue || repeatedHashes.Contains(row.Hash)
                 || clips[row.Slot] is 0 or uint.MaxValue) continue;
             foreach (var source in paths(clips[row.Slot]))
                 foreach (string candidate in Candidates(source.Path))
@@ -62,24 +69,29 @@ internal static class AnimationClipNames
     /** Event pointers and string-bank bounds are checked before a path contributes a name. */
     internal static IReadOnlyList<EventPath> ReadPaths(byte[] clip, Func<uint, uint> classOf)
     {
-        if (clip.Length < 0x190) return [];
-        var data = new AnimationControlReader.Data(clip);
-        if (data.I64(0x160) is < 0 or > MaximumRows)
+        if (!TagView.Fits<SAnimationClip>(clip, 0)) return [];
+        ref readonly var head = ref TagView.At<SAnimationClip>(clip);
+        if (head.Events.Count is < 0 or > MaximumRows)
             throw new InvalidDataException("Animation event count is invalid.");
-        var rows = data.Rows(0x160, 0x8080902B, 8);
+        var rows = AnimationControlReader.Rows<SAnimationEventSlot>(clip, TagView.OffsetOf(clip, in head.Events),
+            SAnimationEventSlot.Class);
         if (rows.Length == 0) return [];
-        var banks = StringBanks(clip);
+        var banks = TagBlock.Find(clip, SInlineString.Class)
+            .Select(bank => (Start: bank.Start, End: bank.Start + bank.Length)).ToArray();
         var result = new List<EventPath>();
-        foreach (int row in rows)
+        foreach (ref readonly var row in rows)
         {
-            if (data.I64(row) == 0) continue;
-            int value = data.Pointer(row);
-            if (data.U32(value - 4) != 0x80809033) continue;
-            if (data.U8(value + 2) != 3) continue;
-            uint eventTag = data.U32(value + 24);
-            if (eventTag is 0 or uint.MaxValue || classOf(eventTag) != 0x80809802) continue;
-            if (data.I64(value + 16) == 0) continue;
-            int start = data.Pointer(value + 16);
+            if (row.FrameEvent.IsNull) continue;
+            int value = TagView.TargetOffset(clip, in row.FrameEvent)!.Value;
+            if (AnimationControlReader.ClassBefore(clip, value) != AnimationTagEvent.Class) continue;
+            // Members are read alone and in this order, so an event that stops early needs no later bytes.
+            if (AnimationControlReader.Member<AnimationTagEvent, byte>(clip, value, nameof(AnimationTagEvent.EventKind)) != 3) continue;
+            uint eventTag = AnimationControlReader.Member<AnimationTagEvent, uint>(clip, value, nameof(AnimationTagEvent.EventTarget));
+            if (eventTag is 0 or uint.MaxValue || classOf(eventTag) != SWwiseEvent.Class) continue;
+            ref readonly var audioPath = ref AnimationControlReader.Member<AnimationTagEvent, RelativePointer<byte>>(
+                clip, value, nameof(AnimationTagEvent.AudioPath));
+            if (audioPath.IsNull) continue;
+            int start = TagView.TargetOffset(clip, in audioPath)!.Value;
             var owners = banks.Where(bank => start >= bank.Start && start < bank.End
                 && (start == bank.Start || clip[start - 1] == 0)).ToArray();
             if (owners.Length != 1) continue;
@@ -92,26 +104,6 @@ internal static class AnimationClipNames
             if (Candidates(path).Count != 0) result.Add(new(eventTag, value, path));
         }
         return result.AsReadOnly();
-    }
-
-    /** A pointer may target any NUL-delimited entry inside one typed inline string bank. */
-    private static List<(int Start, int End)> StringBanks(byte[] data)
-    {
-        var result = new List<(int, int)>();
-        ReadOnlySpan<byte> marker = [0x65, 0, 0x80, 0x80];
-        int scan = 0;
-        while (scan <= data.Length - 12)
-        {
-            int found = data.AsSpan(scan).IndexOf(marker);
-            if (found < 0) break;
-            int offset = scan + found;
-            scan = offset + 4;
-            if (offset > data.Length - 12) break;
-            ulong length = BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(offset + 4, 8));
-            if (length > 0 && length <= (ulong)(data.Length - offset - 12))
-                result.Add((offset + 12, checked(offset + 12 + (int)length)));
-        }
-        return result;
     }
 
     /** Only contiguous tokens from the referenced audio filename are candidates. */
@@ -143,7 +135,7 @@ internal static class AnimationClipNames
     /** FNV-1 over UTF-16 code units, exact case; equal to the UTF-8 hash only for ASCII text. */
     internal static uint Hash(string text)
     {
-        uint result = 0x811C9DC5;
+        uint result = StringHash.Empty;
         foreach (char value in text) result = unchecked(result * 0x01000193) ^ value;
         return result;
     }

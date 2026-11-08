@@ -1,7 +1,8 @@
 using System.Buffers;
-using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -68,11 +69,11 @@ internal static partial class OriginalConfigReferences
                 && (ready.Failed.Count == 0 || holder.Generation == catalog.ReadGeneration)) snapshot = ready;
             else
             {
-                uint[] configTags = catalog.Entries.Where(entry => entry.Reference == 0x80809C36)
+                uint[] configTags = catalog.Entries.Where(entry => entry.Reference == SEntityConfig.Class)
                     .Select(entry => entry.TagHash).Order().ToArray();
-                var allOwners = catalog.Entries.Where(entry => entry.Reference == 0x80806EF4)
+                var allOwners = catalog.Entries.Where(entry => entry.Reference == SMapResourceLink.Class)
                     .Select(entry => entry.TagHash).ToHashSet();
-                var tableTags = catalog.Entries.Where(entry => entry.Reference == 0x8080966D)
+                var tableTags = catalog.Entries.Where(entry => entry.Reference == SStaticMeshInstances.Class)
                     .Select(entry => entry.TagHash).Order().ToArray();
                 var nodeEntries = catalog.Entries.Where(entry => InstanceIsolationFacts.Classes.Contains(entry.Reference))
                     .ToDictionary(entry => entry.TagHash);
@@ -106,7 +107,7 @@ internal static partial class OriginalConfigReferences
         var nodes = new Dictionary<uint, IsolationNode>();
         var highBytes = SearchValues.Create(owners.Select(owner => (byte)(owner >> 24)).Distinct().ToArray());
         int links = 0, index = 0, facts = 0;
-        foreach (var entry in catalog.Entries.Where(entry => entry.Reference is 0x80809C36 or 0x8080966D
+        foreach (var entry in catalog.Entries.Where(entry => entry.Reference is SEntityConfig.Class or SStaticMeshInstances.Class
             || InstanceIsolationFacts.Classes.Contains(entry.Reference)))
         {
             token.ThrowIfCancellationRequested();
@@ -118,10 +119,12 @@ internal static partial class OriginalConfigReferences
             catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException
                 or ArgumentException or OverflowException or KeyNotFoundException)
             { failed.Add(entry.TagHash); continue; }
-            if (entry.Reference == 0x8080966D)
+            if (entry.Reference == SStaticMeshInstances.Class)
             {
-                if (bytes.Length < 0x1C) failed.Add(entry.TagHash);
-                else tableBounds.Add(entry.TagHash, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(0x18)));
+                // A table only needs to reach its bounds field, not the whole view.
+                const string bounds = nameof(SStaticMeshInstances.BoundsTable);
+                if (!TagView.FitsThrough<SStaticMeshInstances>(bytes, 0, bounds)) failed.Add(entry.TagHash);
+                else tableBounds.Add(entry.TagHash, TagView.Member<SStaticMeshInstances, uint>(bytes, 0, bounds));
                 continue;
             }
             if (InstanceIsolationFacts.Classes.Contains(entry.Reference))
@@ -131,13 +134,8 @@ internal static partial class OriginalConfigReferences
                 if (facts > MaximumLinks) throw new InvalidDataException("The isolation metadata index exceeds its limit.");
                 nodes.Add(entry.TagHash, node); continue;
             }
-            for (int at = 0; at <= bytes.Length - 4; at++)
+            foreach (uint owner in WordScan.Find(bytes, highBytes, owners))
             {
-                int skip = bytes.AsSpan(at + 3).IndexOfAny(highBytes);
-                if (skip < 0) break;
-                at += skip;
-                uint owner = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at, 4));
-                if (!owners.Contains(owner)) continue;
                 if (!candidates.TryGetValue(owner, out var users)) candidates.Add(owner, users = []);
                 if (users.Add(entry.TagHash) && ++links > MaximumLinks)
                     throw new InvalidDataException("The original config reference index exceeds its limit.");

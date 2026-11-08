@@ -1,9 +1,12 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Editor;
 using SunriseStudio.Editor.Creation;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Creation.Tests;
 
@@ -111,8 +114,8 @@ internal static class ItemIconWorkflowChecks
             int collectible = InvestmentCollections.FindCollectible(packages.Read(sources.Collectibles), current.Index);
             byte[] displays = packages.Read(sources.CollectibleDisplays);
             int start = checked(16 + (int)BinaryPrimitives.ReadInt64LittleEndian(displays.AsSpan(16)) + 16);
-            Check(collectible >= 0 && BinaryPrimitives.ReadUInt32LittleEndian(displays.AsSpan(start
-                + collectible * InvestmentCollections.DisplayStride + InvestmentCollections.DisplayIcon)) == itemIndex,
+            Check(collectible >= 0 && TagView.At<CollectibleDisplayRow>(displays,
+                start + collectible * Unsafe.SizeOf<CollectibleDisplayRow>()).IconIndex == itemIndex,
                 "The collectible does not use the item's custom icon row.");
             return icon;
         }

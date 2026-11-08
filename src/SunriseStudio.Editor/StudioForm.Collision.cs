@@ -1,6 +1,7 @@
 using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Authoring;
+using SunriseStudio.Packages;
 using SunriseStudio.Scene;
 using SunriseStudio.Scene.Collision;
 using SunriseStudio.Viewport;
@@ -90,7 +91,7 @@ public sealed partial class StudioForm
         if (entity.Source == CollisionSource.EntityPhysics)
             facts.Add(("Initial state", placement.InitiallyEnabled is { } enabled ? enabled ? "Enabled" : "Disabled (authored)"
                 : entity.InitialStateError ?? "Unresolved", ""));
-        if (placement.Region is not (0 or 0x811C9DC5)) facts.Add(("Region", $"0x{placement.Region:X8}", "Region hash"));
+        if (placement.Region is not (0 or StringHash.Empty)) facts.Add(("Region", $"0x{placement.Region:X8}", "Region hash"));
         if (placement.Bone >= 0) facts.Add(("Bone", placement.Bone.ToString(), ""));
         facts.Add(("Triangles", piece.Shape.TriangleCount.ToString("N0"), ""));
         if (piece.Shape.Undecoded is { } missing) facts.Add(("Not decoded", missing, ""));

@@ -1,14 +1,13 @@
-using System.Buffers.Binary;
 using SunriseStudio.Authoring;
 using SunriseStudio.Formats;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Editor.Creation;
 
 /** A new RGBA8 texture from a PNG, or new pixels for the open texture. */
 public sealed class TextureWorkflow : CreationWorkflow
 {
-    /** Header field naming the streamed large-mip payload tag. */
-    private const int LargeMipOffset = 0x24;
     private readonly StudioDocument? target;
     private readonly CreationField image, name, package;
 
@@ -46,9 +45,9 @@ public sealed class TextureWorkflow : CreationWorkflow
     {
         if (!workspace.IsProjectTag(texture.Entry.TagHash)) return false;
         if (!workspace.IsProjectTag(texture.Entry.Reference)) return true;
-        if (texture.Texture is not { LargeMipCount: > 0 } || texture.Bytes.Length < LargeMipOffset + 4) return false;
-        uint large = BinaryPrimitives.ReadUInt32LittleEndian(texture.Bytes.AsSpan(LargeMipOffset));
-        return large is not (0 or uint.MaxValue) && !workspace.IsProjectTag(large);
+        if (texture.Texture is not { LargeMipCount: > 0 } || !TagView.Fits<TextureHeader>(texture.Bytes, 0)) return false;
+        uint large = TagView.At<TextureHeader>(texture.Bytes).StreamedTag;
+        return large is not (0 or TextureHeader.NoStreamedTag) && !workspace.IsProjectTag(large);
     }
 
     public override CreationFollowUp? Create(StudioWorkspace workspace)

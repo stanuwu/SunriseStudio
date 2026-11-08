@@ -55,9 +55,9 @@ internal sealed class PackageKeys : IDisposable
             // Without a key export, the packed executable never yields keys, so name the fix, not the signature miss.
             if (string.IsNullOrWhiteSpace(explicitSource) && !File.Exists(ExportPath(gameRoot)))
                 throw new InvalidDataException("No decryption keys were found. Sunrise has not exported its package keys: "
-                    + "set client.dump_package_keys to true, start the game with Sunrise once, then open the installation again.", error);
+                    + "set client.exports.package_keys to true, start the game with Sunrise once, then open the installation again.", error);
             throw new InvalidDataException($"Cannot read package keys from {Path.GetFileName(source)}: {error.Message} "
-                + "Set client.dump_package_keys to true and run Sunrise once.", error);
+                + "Set client.exports.package_keys to true and run Sunrise once.", error);
         }
         finally
         {

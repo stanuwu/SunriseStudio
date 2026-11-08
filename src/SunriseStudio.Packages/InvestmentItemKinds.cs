@@ -1,9 +1,6 @@
 namespace SunriseStudio.Packages;
 
-/**
- * Facts of one investment item: its index row, the definition's bucket +184 and tier +186, the display type
- * line, and whether the objective +48, plug +64 and sack +88 blocks are set.
- */
+/** Facts of one investment item: its index row, bucket, tier, display type line and which blocks are set. */
 public readonly record struct InvestmentItemFacts(ushort Index, uint Hash, uint DisplayTag, byte Bucket, byte Tier,
     string TypeLine, bool HasObjectives, bool HasPlug, bool HasSack);
 
@@ -23,7 +20,7 @@ public static class InvestmentItemKinds
         Artifacts, Mods, Currencies, Engrams, Consumables, Bounties, Quests, Other
     ];
 
-    // Buckets with one fixed category; the ids are the inventory bucket ids at definition +184.
+    // Buckets with one fixed category, by inventory bucket id.
     private static readonly Dictionary<byte, string> BucketCategories = new()
     {
         [8] = Ghosts, [9] = Vehicles, [10] = Ships, [12] = Emotes, [14] = Shaders, [16] = Subclasses,
@@ -61,7 +58,7 @@ public static class InvestmentItemKinds
         6 => "Leg armor", 7 => "Class armor", _ => ""
     };
 
-    /** Rarity name of the tier byte at definition +186; 255 means unset. */
+    /** Rarity name of a tier byte; 255 means unset. */
     public static string TierName(byte tier) => tier switch
     {
         0 => "None", 1 => "Common", 2 => "Uncommon", 3 => "Rare", 4 => "Legendary", 5 => "Exotic", 255 => "Unset",

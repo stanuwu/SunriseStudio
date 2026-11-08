@@ -3,6 +3,7 @@ using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Formats;
 using SunriseStudio.Rendering;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 using ItemKinds = SunriseStudio.Packages.InvestmentItemKinds;
 
@@ -56,7 +57,7 @@ public sealed partial class InvestmentPage : IPreparedStudioPage
     public bool CanOpen(StudioDocument document) => document.Entry.TagHash is not (InvestmentCatalog.ItemIndexTag
         or InvestmentCatalog.DisplayIndexTag)
         && document.Entry.Reference is InvestmentCatalog.ItemClass or InvestmentCatalog.DisplayClass
-            or InvestmentCatalog.VendorClass or 0x80807D84 or 0x808058EE;
+            or InvestmentCatalog.VendorClass or InvestmentRoot.Class or SInvestmentVendorDisplay.Class;
 
     /** Detail and edits of the open item or vendor; the asset browser finds them. */
     public void Draw(StudioPageContext context)
@@ -129,7 +130,7 @@ public sealed partial class InvestmentPage : IPreparedStudioPage
         ImGui.Spacing();
         if (item.DisplayTag != 0 && ImGui.SmallButton("Display strings")) context.Workspace.Select(item.DisplayTag);
         ImGui.SeparatorText("ITEM");
-        foreach (var field in detail.Fields) Field(context, field, field.Offset == 186 ? item.Rarity : null);
+        foreach (var field in detail.Fields) Field(context, field, field.Offset == ItemFields.Tier ? item.Rarity : null);
         if (detail.Stats.Count != 0 || context.Workspace.CanEdit)
         {
             ImGui.SeparatorText("BASE STATS");
@@ -275,7 +276,7 @@ public sealed partial class InvestmentPage : IPreparedStudioPage
                     if (ImGui.Selectable(catalog.ItemName(index) + $"##{index}")) editValue = index.ToString(CultureInfo.InvariantCulture);
                 ImGui.EndChild();
             }
-            if (field.Offset == 186 && context.Workspace.SelectedInvestmentItem is not null)
+            if (field.Offset == ItemFields.Tier && context.Workspace.SelectedInvestmentItem is not null)
             {
                 ImGui.SetNextItemWidth(350);
                 if (ImGui.BeginCombo("##investmentValue", byte.TryParse(editValue, out byte current) ? ItemKinds.TierName(current) : editValue))

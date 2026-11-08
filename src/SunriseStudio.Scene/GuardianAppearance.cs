@@ -1,4 +1,6 @@
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -12,7 +14,7 @@ public static class GuardianClasses
 {
     public const uint Titan = 0x80BAB778, Hunter = 0x80BB1E44, Warlock = 0x80BB2C9A;
     /** Entity class of every body. */
-    public const uint BodyClass = 0x80809C0F;
+    public const uint BodyClass = SEntity.Class;
     public static IReadOnlyList<GuardianClass> All { get; } =
         [new(Titan, 0, "Titan"), new(Hunter, 1, "Hunter"), new(Warlock, 2, "Warlock")];
     public static GuardianClass? ForBody(uint bodyTag) => All.FirstOrDefault(value => value.BodyTag == bodyTag);
@@ -57,25 +59,15 @@ public sealed class GuardianAppearance
 {
     public const uint RaceGenderTable = 0x81327D65, ArrangementTable = 0x81613D23, ArtMap = 0x80EC3F61,
         RuntimeMap = 0x80EC3F60, GearTable = 0x81613D27, DyeTable = 0x81613D24;
-    /** Gear-preview placeholders: one row per class byte; row +8 lists item indices. */
+    /** Gear-preview placeholders: one row per class byte; each row lists item indices. */
     public const uint ClassDefaultsTable = 0x81327CE3;
-    private const uint ClassDefaultsRowClass = 0x808074FA, ClassDefaultsItemClass = 0x808087DB;
-    private const int ClassDefaultsStride = 32, ClassDefaultsItems = 8;
-    // Item index rows are 24 bytes with the definition tag at +16; definition +184 is the bucket.
-    private const int ItemIndexStride = 24, ItemIndexTagField = 16, BucketField = 184;
     // Buckets 3 to 7 are armor slots 0 to 4.
     private const int FirstArmorBucket = 3, ArmorSlots = 5;
+    private const string Bucket = "InventoryItemBlock.InventoryBucket";
     // The world draws the first selector of each pair. The part names are assumed.
     public const int HeadSelector = 13, HairSelector = 15, ThirdSelector = 17, MarkingSelector = 19;
     public static IReadOnlyList<string> RaceNames { get; } = ["Human", "Awoken", "Exo"];
     public static IReadOnlyList<string> GenderNames { get; } = ["Male", "Female"];
-    private const uint RowClass = 0x80805858, PresetClass = 0x80805867, DyeClass = 0x80805864, TripleClass = 0x80805861;
-    private const int RowStride = 432, PresetStride = 24, DyeStride = 24, TripleStride = 28;
-    // Assumed: the six row dye lists feed header +6, +8, +10, +12, +18 and +24, in that order.
-    // Triple lists read these i16 fields; the game never uses header +18 and +20, so +320 keeps its third.
-    private static readonly (int Field, int Header, int[]? Triple)[] DyeFields =
-        [(192, 6, null), (224, 8, null), (256, 10, null), (288, 12, [0, 2, 4]), (320, 18, [4]), (352, 24, null)];
-    private const int NameField = 16;
     // Row names such as "human_male" hash with FNV-1.
     private static readonly Dictionary<uint, (int Race, int Gender)> RowNames =
         Enumerable.Range(0, 3).SelectMany(race => Enumerable.Range(0, 2).Select(gender => (race, gender)))
@@ -106,26 +98,35 @@ public sealed class GuardianAppearance
     {
         var table = PackageHashMap.ReadStructured(catalog, RaceGenderTable);
         var tables = new GuardianArtTables(catalog);
-        int[] rows = table.Rows(8, RowClass, RowStride);
+        var rows = TagView.Rows(table, in TagView.At<C80805854>(table).Table, UnknownRaceGenderRow.Class);
         if (rows.Length == 0) throw new InvalidDataException("The race/gender table has no rows.");
         var groups = new Dictionary<int, IReadOnlyList<(int Selector, uint[] Hashes)>>();
         var result = new List<GuardianRaceGender>();
         for (int index = 0; index < rows.Length; index++)
         {
             token.ThrowIfCancellationRequested();
-            int row = rows[index];
+            ref readonly var row = ref rows[index];
             var presets = new List<GuardianPreset>();
-            foreach (int preset in table.Rows(row + 64, PresetClass, PresetStride))
+            foreach (ref readonly var preset in TagView.Rows(table, in row.H27160fe1.Options, UnknownFacePreset.Class))
             {
-                int arrangement = checked((int)table.U32(preset));
+                int arrangement = checked((int)preset.ArrangementIndex);
                 if (!groups.TryGetValue(arrangement, out var found))
                     groups.Add(arrangement, found = GuardianArt.Groups(tables.Arrangements, tables.Arrangement(arrangement)));
                 presets.Add(new(arrangement, found.GroupBy(group => group.Selector)
                     .ToDictionary(group => group.Key, group => group.Max(value => value.Hashes.Length))));
             }
-            var dyes = DyeFields.Select(field => new GuardianDyeList(field.Header, ReadDyes(table, row + field.Field, field.Triple)))
-                .ToArray();
-            uint name = table.U32(row + NameField);
+            // Assumed: the six row dye lists feed header +6, +8, +10, +12, +18 and +24, in that order.
+            // The game never uses header +18 and +20, so the fifth list keeps only the third index of each triple.
+            GuardianDyeList[] dyes =
+            [
+                new(6, ReadDyes(table, in row.H7a2fc365.Options)),
+                new(8, ReadDyes(table, in row.HAb86638f.Options)),
+                new(10, ReadDyes(table, in row.H6bd65daf.Options)),
+                new(12, ReadDyes(table, in row.H19f9faf6.Options, allThree: true)),
+                new(18, ReadDyes(table, in row.HD88b7972.Options, allThree: false)),
+                new(24, ReadDyes(table, in row.H15cccc17.Options))
+            ];
+            uint name = row.RowName;
             var (race, gender) = RowNames.TryGetValue(name, out var known) ? known : (-1, -1);
             result.Add(new(index, name, race, gender, presets, dyes));
         }
@@ -143,30 +144,31 @@ public sealed class GuardianAppearance
         {
             var table = PackageHashMap.ReadStructured(catalog, ClassDefaultsTable);
             var index = PackageHashMap.ReadStructured(catalog, InvestmentTags.ItemIndex);
-            int[] items = index.RowsOfAnyClass(8, ItemIndexStride);
+            var items = TagView.Rows(index, in TagView.At<ItemIndexTable>(index).Table);
             var result = new List<uint[]>();
             string? error = null;
-            foreach (int row in table.Rows(8, ClassDefaultsRowClass, ClassDefaultsStride))
+            foreach (ref readonly var row in TagView.Rows(table, in TagView.At<CharacterClassTable>(table).Table, CharacterClassRow.Class))
             {
                 var slots = new uint[ArmorSlots];
                 result.Add(slots);
-                // Row +0 is FNV-1 of the class name; the row index is assumed to be the class byte.
+                // The row names its class by FNV-1; the row index is assumed to be the class byte.
                 var guardianClass = GuardianClasses.All.FirstOrDefault(value => value.ClassByte == result.Count - 1);
-                if (guardianClass is null || table.U32(row) != StringBankWriter.Hash(guardianClass.Name.ToLowerInvariant()))
+                if (guardianClass is null || row.ClassName != StringBankWriter.Hash(guardianClass.Name.ToLowerInvariant()))
                 {
                     error ??= $"placeholder row {result.Count - 1} does not name the {guardianClass?.Name ?? "class"}";
                     continue;
                 }
-                foreach (int at in table.Rows(row + ClassDefaultsItems, ClassDefaultsItemClass, 2))
+                foreach (ref readonly var at in TagView.Rows(table, in row.ItemIndices, ItemIndexU16Row.Class))
                 {
-                    int item = table.U16(at);
+                    int item = at.ItemIndex;
                     if (item >= items.Length) throw new InvalidDataException($"Item index {item} is outside the item index.");
-                    uint tag = index.U32(items[item] + ItemIndexTagField);
+                    uint tag = items[item].ItemDefinition;
                     if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != InvestmentTags.ItemClass)
                         throw new InvalidDataException($"Item index {item} does not name an item definition.");
                     byte[] definition = catalog.Read(tag);
-                    if (definition.Length <= BucketField) continue;
-                    int slot = definition[BucketField] - FirstArmorBucket;
+                    // A definition too short for its bucket names no slot.
+                    if (!TagView.FitsThrough<ItemDefinition>(definition, 0, Bucket)) continue;
+                    int slot = TagRead.U8(definition, TagView.FieldOffset<ItemDefinition>(Bucket)) - FirstArmorBucket;
                     if ((uint)slot < ArmorSlots && slots[slot] == 0) slots[slot] = tag;
                 }
             }
@@ -175,13 +177,25 @@ public sealed class GuardianAppearance
         catch (Exception error) when (Recoverable(error)) { return ([], error.Message); }
     }
 
-    /** Dye choices of one list; a triple keeps the i16 fields at these offsets, and -1 entries are dropped. */
-    private static IReadOnlyList<IReadOnlyList<int>> ReadDyes(TagData table, int field, int[]? triple)
+    /** Dye choices of one list of single indices; -1 entries are dropped. */
+    private static IReadOnlyList<IReadOnlyList<int>> ReadDyes(byte[] table, ref readonly TagArray<UnknownDyeEntry> list)
     {
         var result = new List<IReadOnlyList<int>>();
-        foreach (int at in table.Rows(field, triple is null ? DyeClass : TripleClass, triple is null ? DyeStride : TripleStride))
+        foreach (ref readonly var entry in TagView.Rows(table, in list, UnknownDyeEntry.Class))
         {
-            int[] values = triple is null ? [(int)table.U32(at)] : [.. triple.Select(offset => (int)table.I16(at + offset))];
+            int[] values = [(int)entry.DyeIndex];
+            result.Add(values.Where(value => value >= 0).ToArray());
+        }
+        return result;
+    }
+
+    /** Dye choices of one triple list: all three indices, or only the third; -1 entries are dropped. */
+    private static IReadOnlyList<IReadOnlyList<int>> ReadDyes(byte[] table, ref readonly TagArray<UnknownDyeTriple> list, bool allThree)
+    {
+        var result = new List<IReadOnlyList<int>>();
+        foreach (ref readonly var entry in TagView.Rows(table, in list, UnknownDyeTriple.Class))
+        {
+            int[] values = allThree ? [entry.DyeIndexA, entry.DyeIndexB, entry.DyeIndexC] : [entry.DyeIndexC];
             result.Add(values.Where(value => value >= 0).ToArray());
         }
         return result;

@@ -2,8 +2,8 @@ using System.Globalization;
 using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Formats;
-using SunriseStudio.Viewport;
 using SunriseStudio.Scene;
+using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
@@ -36,6 +36,7 @@ public sealed class StudioPageRegistry
         Register(new ComponentsPage());
         Register(new CuiPage());
         Register(new GraphPage());
+        Register(new TagPage());
         Register(new PropertiesPage());
         Register(new ReferencesPage());
         Register(new HexPage());
@@ -293,6 +294,10 @@ public sealed class PropertiesPage : IStudioPage
     private HashSet<AssetNode>? matching;
     private string matchedFilter = "";
     private AssetInspection? matchedInspection;
+    // Set when Show all puts new rows on screen; the filter searched only the rows shown.
+    private bool refilter;
+    // Folded arrays the user opened in full; cleared with the inspection.
+    private readonly HashSet<AssetNode> unfolded = new(ReferenceEqualityComparer.Instance);
     public string Id => "sunrise.properties";
     public string Title => "Properties";
     public bool CanOpen(StudioDocument document) => true;
@@ -303,8 +308,10 @@ public sealed class PropertiesPage : IStudioPage
         if (context.Workspace.Document is not { } document) return;
         ImGui.SetNextItemWidth(-1);
         ImGui.InputTextWithHint("##propertySearch", "Find property", ref filter, 256);
-        if (filter != matchedFilter || !ReferenceEquals(document.Inspection, matchedInspection))
+        if (refilter || filter != matchedFilter || !ReferenceEquals(document.Inspection, matchedInspection))
         {
+            refilter = false;
+            if (!ReferenceEquals(document.Inspection, matchedInspection)) unfolded.Clear();
             matchedFilter = filter; matchedInspection = document.Inspection;
             matching = filter.Length == 0 ? null : Match(document.Inspection.Sections);
         }
@@ -325,7 +332,11 @@ public sealed class PropertiesPage : IStudioPage
         ImGui.EndChild();
     }
 
-    /** Filtering retains ancestors so a matching field keeps its place in the tree. */
+    /** Children on screen: a folded array lists its first rows until it is opened in full. */
+    private int Shown(AssetNode node) =>
+        node.Children is not { } children ? 0 : unfolded.Contains(node) ? children.Count : Math.Min(children.Count, node.FoldedRows);
+
+    /** Filtering retains ancestors so a matching field keeps its place in the tree; it searches the rows on screen. */
     private HashSet<AssetNode> Match(IReadOnlyList<AssetNode> sections)
     {
         var result = new HashSet<AssetNode>(ReferenceEqualityComparer.Instance);
@@ -335,7 +346,7 @@ public sealed class PropertiesPage : IStudioPage
         bool Visit(AssetNode node)
         {
             bool child = false;
-            if (node.Children is { } children) foreach (var nested in children) child |= Visit(nested);
+            for (int i = 0, shown = Shown(node); i < shown; i++) child |= Visit(node.Children![i]);
             if (!child && !node.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)
                 && !node.Properties.Any(property => property.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)
                     || property.Value.Contains(filter, StringComparison.OrdinalIgnoreCase))) return false;
@@ -368,13 +379,19 @@ public sealed class PropertiesPage : IStudioPage
             }
             ImGui.EndTable();
         }
-        if (node.Children is { } children)
-            for (int i = 0; i < children.Count; i++)
-            {
-                ImGui.PushID(i);
-                DrawNode(children[i], context, depth + 1);
-                ImGui.PopID();
-            }
+        int shown = Shown(node);
+        for (int i = 0; i < shown; i++)
+        {
+            ImGui.PushID(i);
+            DrawNode(node.Children![i], context, depth + 1);
+            ImGui.PopID();
+        }
+        if (node.Children is { } children && shown < children.Count
+            && ImGui.Button($"Show all {children.Count:N0} rows ({children.Count - shown:N0} hidden)"))
+        {
+            unfolded.Add(node);
+            refilter = true;
+        }
         ImGui.TreePop();
     }
 }

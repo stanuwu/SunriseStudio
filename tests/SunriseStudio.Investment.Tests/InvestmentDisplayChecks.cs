@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 internal static class InvestmentDisplayChecks
 {
@@ -26,7 +28,7 @@ internal static class InvestmentDisplayChecks
         const uint first = 0x80A00000;
         string install = Path.Combine(temporaryRoot, "display-curves", "install");
         Directory.CreateDirectory(Path.Combine(install, "packages"));
-        byte[] item = new byte[200]; Q(item, 0, item.Length); U(item, 180, 1); item[186] = 4;
+        byte[] item = new byte[200]; Q(item, 0, item.Length); U(item, Inventory("MaximumStack"), 1); item[Inventory("Tier")] = 4;
         byte[] display = new byte[256]; Q(display, 0, display.Length); Q(display, 112, 208 - 112); U(display, 204, 0x80805CF1);
         byte[] groups = new byte[384]; Q(groups, 0, groups.Length); Array(groups, 8, 32, 1, 0x80805D02);
         U(groups, 48, 0x12345678); Array(groups, 64, 128, 2, 0x80805D06);
@@ -95,6 +97,7 @@ internal static class InvestmentDisplayChecks
     private static void Array(byte[] data, int field, int header, int count, uint type)
     { Q(data, field, count); Q(data, field + 8, header - field - 8); U(data, header - 4, 0x80809FBD); Q(data, header, count); U(data, header + 8, type); }
     private static void I(byte[] data, int offset, int value) => BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(offset), value);
+    private static int Inventory(string field) => TagView.FieldOffset<ItemDefinition>("InventoryItemBlock." + field);
     private static void U(byte[] data, int offset, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset), value);
     private static void Q(byte[] data, int offset, long value) => BinaryPrimitives.WriteInt64LittleEndian(data.AsSpan(offset), value);
     private static void Check(bool value, string message) { if (!value) throw new InvalidDataException(message); }

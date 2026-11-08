@@ -12,6 +12,10 @@
     <ProjectReference Include="../SunriseStudio.Editor/SunriseStudio.Editor.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The published exe is one file, so StudioRegistry reads the tag registry from this resource. -->
+    <EmbeddedResource Include="../../registry/86657.json" LogicalName="registry/86657.json" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- Frame code reaches optimized code a few frames after a map load instead of a few dozen. -->
     <RuntimeHostConfigurationOption Include="System.Runtime.TieredCompilation.CallCountingDelayMs" Value="0" />
     <RuntimeHostConfigurationOption Include="System.Runtime.TieredCompilation.CallCountThreshold" Value="5" />

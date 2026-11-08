@@ -112,7 +112,7 @@ internal static class VendorWorkflowChecks
         var manifestAdded = receipt.RootElement.GetProperty("manifestEdits").EnumerateArray()
             .ToDictionary(row => row.GetProperty("added").GetString()!, row => row.GetProperty("manifest").GetString());
         var classes = workspace.Project.AddedAssets.Where(asset => asset.Native is not null)
-            .ToDictionary(asset => (0x80800000U + ((uint)asset.Native!.PackageId << 13) + (uint)asset.Native.EntryIndex!.Value).ToString("X8"),
+            .ToDictionary(asset => TagHashes.Make(asset.Native!.PackageId, asset.Native.EntryIndex!.Value).ToString("X8"),
                 asset => asset.Native!.Reference);
         Check(manifestAdded.Count > 0 && manifestAdded.All(pair => classes[pair.Key] == 0x80809A88 && pair.Value == "81A2926F")
             && classes.Where(pair => pair.Value == 0x80809A88).All(pair => manifestAdded.ContainsKey(pair.Key)),

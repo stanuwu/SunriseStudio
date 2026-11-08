@@ -4,6 +4,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../SunriseStudio.Packages/SunriseStudio.Packages.csproj" />
+    <ProjectReference Include="../SunriseStudio.Tags/SunriseStudio.Tags.csproj" />
+    <ProjectReference Include="../SunriseStudio.World/SunriseStudio.World.csproj" />
     <InternalsVisibleTo Include="SunriseStudio.Projects.Tests" />
   </ItemGroup>
 </Project>

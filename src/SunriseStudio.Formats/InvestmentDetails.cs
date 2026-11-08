@@ -1,5 +1,8 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -11,71 +14,91 @@ public sealed partial class InvestmentCatalog
         var summary = FindItem(tag) ?? throw new InvalidDataException("Item is absent from the investment index.");
         if (tag != summary.Tag) throw new InvalidDataException("Open the gameplay definition to edit this item.");
         RequireClass(catalog, tag, ItemClass);
-        var data = new TagReader(bytes);
-        if (!data.Has(180, 8)) throw new InvalidDataException("Item definition is truncated.");
-        var item = summary with { MaximumStack = data.I32(180), Bucket = data.U8(184), Tier = data.U8(186), Instanced = data.U8(187) != 0 };
-        List<AssetProperty> fields = [data.Int("Maximum stack", 180, true), data.Byte("Inventory bucket", 184, true),
-            data.Byte("Rarity", 186, true), data.Byte("Instanced", 187)];
+        var data = bytes.Span;
+        // Only the inventory fields need to fit; a short definition still reads.
+        if (!TagView.FitsThrough<ItemDefinition>(data, 0, "InventoryItemBlock.Instanced"))
+            throw new InvalidDataException("Item definition is truncated.");
+        ref readonly int maximum = ref TagView.At<int>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.MaximumStack"));
+        ref readonly byte bucket = ref TagView.At<byte>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.InventoryBucket"));
+        ref readonly byte tier = ref TagView.At<byte>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.Tier"));
+        ref readonly byte instanced = ref TagView.At<byte>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.Instanced"));
+        var item = summary with { MaximumStack = maximum, Bucket = bucket, Tier = tier, Instanced = instanced != 0 };
+        List<AssetProperty> fields = [ViewProperty.Of(data, "Maximum stack", in maximum, true),
+            ViewProperty.Of(data, "Inventory bucket", in bucket, true),
+            ViewProperty.Of(data, "Rarity", in tier, true), ViewProperty.Of(data, "Instanced", in instanced)];
         var stats = new List<InvestmentStat>(); var sockets = new List<InvestmentSocket>();
         var perks = new List<InvestmentPerk>(); var errors = new List<string>();
         void Read(Action action, string section)
         { try { action(); } catch (Exception error) when (Recoverable(error)) { errors.Add(section + ": " + error.Message); } }
         Read(() =>
         {
-            int block = data.Relative(112);
+            var span = bytes.Span;
+            int block = TagPointer.Checked(span, TagView.FieldOffset<ItemDefinition>("StatsItemBlock"));
             if (block < 0) return;
-            var rows = data.Array(block, 0x80803033, 40);
+            // Stats are read before the perk array is checked.
+            var rows = TagArray.Checked(span, block + TagView.FieldOffset<SItemSandboxPerkBlock>("ItemStats"), SItemStatRow.Class,
+                Unsafe.SizeOf<SItemStatRow>());
             if (rows.Count > MaximumAuthoredRows) throw new InvalidDataException("Item declares too many stats for this editor.");
             for (int i = 0; i < rows.Count; i++)
             {
-                int p = rows.Data + i * 40; byte index = data.U8(p);
-                stats.Add(new(index, StatName(index), data.I32(p + 4), data.Int(StatName(index), p + 4, true),
-                    data.U64(p + 24) != 0, data.U64(p + 8) != 0));
+                ref readonly var row = ref TagView.At<SItemStatRow>(span, rows.Data + i * Unsafe.SizeOf<SItemStatRow>());
+                byte index = row.ItemStat.StatIndex;
+                stats.Add(new(index, StatName(index), row.ItemStat.Value, ViewProperty.Of(span, StatName(index), in row.ItemStat.Value, true),
+                    row.HEb6220de.ExpressionSteps.Count != 0, row.ItemStat.HA46186f1.ExpressionSteps.Count != 0));
             }
-            var list = data.Array(block + 16, 0x808077BC, 24);
+            var list = TagArray.Checked(span, block + TagView.FieldOffset<SItemSandboxPerkBlock>("ItemPerks"), ItemSandboxPerk.Class,
+                Unsafe.SizeOf<ItemSandboxPerk>());
             if (list.Count > MaximumAuthoredRows) throw new InvalidDataException("Item declares too many perks for this editor.");
             for (int i = 0; i < list.Count; i++)
             {
-                int p = list.Data + i * 24; ushort index = data.U16(p);
-                perks.Add(new(index, PerkName(index), data.UShort("Sandbox perk", p, true), data.U64(p + 8) != 0));
+                ref readonly var perk = ref TagView.At<ItemSandboxPerk>(span, list.Data + i * Unsafe.SizeOf<ItemSandboxPerk>());
+                ushort index = perk.SandboxPerkIndex;
+                perks.Add(new(index, PerkName(index), ViewProperty.Of(span, "Sandbox perk", in perk.SandboxPerkIndex, true),
+                    perk.HEb6220de.ExpressionSteps.Count != 0));
             }
         }, "Stats");
         Read(() =>
         {
-            int block = data.Relative(104);
+            var span = bytes.Span;
+            int block = TagPointer.Checked(span, TagView.FieldOffset<ItemDefinition>("SocketsItemBlock"));
             if (block < 0) return;
-            var rows = data.Array(block, 0x808077C4, 80);
+            var rows = TagArray.Checked(span, block + TagView.FieldOffset<SItemSocketBlock>("Sockets"),
+                ItemOrdinarySocketEntry.Class, Unsafe.SizeOf<ItemOrdinarySocketEntry>());
             if (rows.Count > 64) throw new InvalidDataException("Item declares too many socket lanes.");
-            TagReader? sets = catalog.ContainsTag(sources.PlugSets) ? new(catalog.Read(sources.PlugSets)) : null;
+            byte[]? sets = catalog.ContainsTag(sources.PlugSets) ? catalog.Read(sources.PlugSets) : null;
             for (int i = 0; i < rows.Count; i++)
             {
-                int p = rows.Data + i * 80; ushort plug = data.U16(p + 2);
+                int p = rows.Data + i * Unsafe.SizeOf<ItemOrdinarySocketEntry>();
+                ref readonly var socket = ref TagView.At<ItemOrdinarySocketEntry>(span, p);
+                ushort plug = socket.InitialPlugItem;
                 var allowed = new HashSet<ushort>();
                 if (plug < Items.Count) allowed.Add(plug);
-                void Members(TagReader source, int descriptor)
+                void Members(ReadOnlySpan<byte> source, ref readonly TagArray<PlugSetMember> descriptor)
                 {
-                    var members = source.Array(descriptor, stride: 32);
+                    var members = TagArray.Checked(source, TagView.OffsetOf(source, in descriptor), stride: Unsafe.SizeOf<PlugSetMember>());
                     for (int row = 0; row < members.Count; row++)
                     {
-                        uint index = source.U32(members.Data + row * 32);
+                        uint index = TagView.At<PlugSetMember>(source, members.Data + row * Unsafe.SizeOf<PlugSetMember>()).PlugItemIndex;
                         if (index < Items.Count) allowed.Add((ushort)index);
                     }
                 }
-                Read(() => Members(data, p + 64), $"Socket {i} plug list");
+                Read(() => Members(bytes.Span, in TagView.At<ItemOrdinarySocketEntry>(bytes.Span, p).EmbeddedPlugs), $"Socket {i} plug list");
                 if (sets is not null)
                     Read(() =>
                     {
-                        var shared = sets.Array(8, stride: 24);
-                        foreach (int field in new[] { 12, 32 })
+                        ReadOnlySpan<byte> table = sets;
+                        var shared = TagArray.Checked(table, TagView.FieldOffset<C80802cb6>("Table"), stride: Unsafe.SizeOf<SPlugSetRow>());
+                        ref readonly var owner = ref TagView.At<ItemOrdinarySocketEntry>(bytes.Span, p);
+                        foreach (ushort set in new[] { owner.ReusablePlugSetRow, owner.RandomizedPlugSetRow })
                         {
-                            ushort set = data.U16(p + field);
                             if (set == ushort.MaxValue) continue;
                             if (set >= shared.Count) throw new InvalidDataException("Socket plug set is outside its index.");
-                            Members(sets, shared.Data + set * 24 + 8);
+                            Members(table, in TagView.At<SPlugSetRow>(table, shared.Data + set * Unsafe.SizeOf<SPlugSetRow>()).Entries);
                         }
                     }, $"Socket {i} shared plugs");
-                sockets.Add(new(i, data.U16(p), plug, ItemName(plug), data.UShort("Socket type", p, true),
-                    data.UShort("Initial plug", p + 2, true), allowed.OrderBy(index => ItemName(index), StringComparer.OrdinalIgnoreCase).ToArray()));
+                sockets.Add(new(i, socket.SocketType, plug, ItemName(plug), ViewProperty.Of(span, "Socket type", in socket.SocketType, true),
+                    ViewProperty.Of(span, "Initial plug", in socket.InitialPlugItem, true),
+                    allowed.OrderBy(index => ItemName(index), StringComparer.OrdinalIgnoreCase).ToArray()));
             }
         }, "Sockets");
         var curves = ReadDisplayCurves(item, errors);
@@ -88,33 +111,36 @@ public sealed partial class InvestmentCatalog
         var vendor = FindVendor(tag) ?? throw new InvalidDataException("Vendor is absent from its index.");
         if (vendor.Tag != tag) throw new InvalidDataException("Open the vendor gameplay definition.");
         RequireClass(catalog, tag, VendorClass);
-        var data = new TagReader(bytes);
-        var rows = data.Array(48, 0x80807861, 184);
+        var data = bytes.Span;
+        var rows = TagArray.Checked(data, TagView.FieldOffset<SInvestmentVendor>("ItemList"), SVendorSale.Class, Unsafe.SizeOf<SVendorSale>());
         if (rows.Count > MaximumAuthoredRows) throw new InvalidDataException("Vendor declares too many sale rows.");
         string sourceHash = Convert.ToHexString(SHA256.HashData(bytes.Span));
         var sales = new List<InvestmentSale>(); var errors = new List<string>();
         for (int i = 0; i < rows.Count; i++)
         {
-            int p = rows.Data + i * 184;
-            ushort item = data.U16(p + 70); int category = data.I32(p + 100);
+            ref readonly var sale = ref TagView.At<SVendorSale>(data, rows.Data + i * Unsafe.SizeOf<SVendorSale>());
+            ushort item = sale.SaleItemIndex; int category = sale.CategoryIndex;
             var costs = new List<InvestmentCost>();
             try
             {
-                var list = data.Array(p + 32, 0x80807865, 48);
+                var list = TagArray.Checked(data, TagView.OffsetOf(data, in sale.Costs), SVendorCost.Class, Unsafe.SizeOf<SVendorCost>());
                 if (list.Count > MaximumAuthoredRows) throw new InvalidDataException("Sale declares too many cost rows.");
                 for (int k = 0; k < list.Count; k++)
                 {
-                    int q = list.Data + k * 48; ushort costItem = data.U16(q);
-                    bool conditional = data.U64(q + 8) != 0 || data.U64(q + 24) != 0 || data.U32(q + 40) != 100_000;
-                    costs.Add(new(costItem, ItemName(costItem), data.U32(q + 4), data.UShort("Cost item", q, true),
-                        data.UInt(conditional ? "Base quantity" : "Quantity", q + 4, true), conditional));
+                    ref readonly var cost = ref TagView.At<SVendorCost>(data, list.Data + k * Unsafe.SizeOf<SVendorCost>());
+                    ushort costItem = cost.CostItemIndex;
+                    bool conditional = cost.HA170ebf3.ExpressionSteps.Count != 0 || cost.HDff8ca81.ExpressionSteps.Count != 0
+                        || cost.Scale != 100_000;
+                    costs.Add(new(costItem, ItemName(costItem), cost.Quantity, ViewProperty.Of(data, "Cost item", in cost.CostItemIndex, true),
+                        ViewProperty.Of(data, conditional ? "Base quantity" : "Quantity", in cost.Quantity, true), conditional));
                 }
             }
             catch (Exception error) when (Recoverable(error)) { errors.Add($"Sale {i}: {error.Message}"); }
-            sales.Add(new(i, item, ItemName(item), category, data.UShort("Sale item", p + 70, true),
-                data.Int("Category", p + 100, true), costs) { OwnerTag = tag, SourceSha256 = sourceHash });
+            sales.Add(new(i, item, ItemName(item), category, ViewProperty.Of(data, "Sale item", in sale.SaleItemIndex, true),
+                ViewProperty.Of(data, "Category", in sale.CategoryIndex, true), costs) { OwnerTag = tag, SourceSha256 = sourceHash });
         }
-        return new(vendor, sales, data.U32(20), data.U32(24), errors);
+        return new(vendor, sales, TagView.At<uint>(data, TagView.FieldOffset<SInvestmentVendor>("ResetInterval")),
+            TagView.At<uint>(data, TagView.FieldOffset<SInvestmentVendor>("ResetPhase")), errors);
     }
 
     /** Only fields re-derived from the current native layout can enter a project delta. */
@@ -130,9 +156,11 @@ public sealed partial class InvestmentCatalog
             if (detail.Perks.Any(row => row.Field.Offset == field.Offset)
                 && (!ushort.TryParse(value, out ushort perk) || perk >= PerkCount))
                 throw new InvalidDataException("Choose a sandbox perk from this installation.");
-            if (field.Offset == 180 && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maximum) || maximum < 0))
+            if (field.Offset == TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.MaximumStack")
+                && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maximum) || maximum < 0))
                 throw new InvalidDataException("Maximum stack must be zero or greater.");
-            if (field.Offset == 186 && (!byte.TryParse(value, out byte rarity) || rarity > 5 && rarity != byte.MaxValue))
+            if (field.Offset == TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.Tier")
+                && (!byte.TryParse(value, out byte rarity) || rarity > 5 && rarity != byte.MaxValue))
                 throw new InvalidDataException("Choose a rarity from None through Exotic, or Unset.");
             var socket = detail.Sockets.FirstOrDefault(row => row.PlugField.Offset == field.Offset);
             if (socket is not null)
@@ -156,7 +184,8 @@ public sealed partial class InvestmentCatalog
                 if (sale.ItemField.Offset == field.Offset || sale.Costs.Any(cost => cost.ItemField.Offset == field.Offset)) ValidateItemIndex(value);
                 if (sale.CategoryField.Offset == field.Offset)
                 {
-                    var data = new TagReader(current); int count = data.Array(32, 0x80807860, 24).Count;
+                    int count = TagArray.Checked(current.Span, TagView.FieldOffset<SInvestmentVendor>("CategoryList"),
+                        VendorInstalledRow.Class, Unsafe.SizeOf<VendorInstalledRow>()).Count;
                     if (!int.TryParse(value, out int category) || category < -1 || category >= count)
                         throw new InvalidDataException("Vendor category is outside the declared category rows.");
                 }

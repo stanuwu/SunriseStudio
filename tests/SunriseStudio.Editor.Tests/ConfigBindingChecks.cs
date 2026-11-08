@@ -111,7 +111,7 @@ internal static class ConfigBindingChecks
         Reject(() => ModManifest.Serialize(mod, [site, site]));
         Reject(() => ModManifest.Serialize(mod, [site with { BindingOffset = 8 }]));
         Reject(() => ModManifest.Serialize(mod, [site with { Profile = "unknown" }]));
-        Reject(() => ModManifest.Serialize(mod, [site with { Tag = 0x80800000U + (0x1A00U << 13) }]));
+        Reject(() => ModManifest.Serialize(mod, [site with { Tag = TagHashes.Make(0x1A00, 0) }]));
         using (var locked = new FileStream(project.ManifestPath, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
             bool refused = false;
@@ -250,7 +250,7 @@ internal static class ConfigBindingChecks
         project = StudioProject.Open(project.DirectoryPath); project.ConfigBindingCompiler = CuiConfigBindingCompiler.Default;
         byte[] before = File.ReadAllBytes(project.ManifestPath);
         Reject(() => project.SetConfigBindings([new("auto_width", ModConfigType.Bool,
-            0x80800000U + (0xD00U << 13), legacy.Id, Class, null, null, candidate.Site)], catalog));
+            TagHashes.Make(0xD00, 0), legacy.Id, Class, null, null, candidate.Site)], catalog));
         Check(File.ReadAllBytes(project.ManifestPath).SequenceEqual(before), "legacy added id binding refused without migration");
         project.RemoveAddedAsset(legacy.Id);
         var occupied = project.AddAsset("occupied", source, new(0x100, Class, 0x1000));

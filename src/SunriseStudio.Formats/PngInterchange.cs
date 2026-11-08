@@ -63,7 +63,7 @@ public static class PngInterchange
             var type = bytes.Slice(p + 4, 4);
             var data = bytes.Slice(p + 8, count);
             uint crc = BinaryPrimitives.ReadUInt32BigEndian(bytes[(p + 8 + count)..]);
-            if (Crc(bytes.Slice(p + 4, count + 4)) != crc) throw new InvalidDataException("PNG checksum mismatch.");
+            if (Crc32.Compute(bytes.Slice(p + 4, count + 4)) != crc) throw new InvalidDataException("PNG checksum mismatch.");
             string name = Encoding.ASCII.GetString(type);
             if (!headerSeen && name != "IHDR") throw new InvalidDataException("PNG header must come first.");
             switch (name)
@@ -183,18 +183,8 @@ public static class PngInterchange
         BinaryPrimitives.WriteUInt32BigEndian(record, (uint)data.Length);
         Encoding.ASCII.GetBytes(name, record.AsSpan(4, 4));
         data.CopyTo(record.AsSpan(8));
-        BinaryPrimitives.WriteUInt32BigEndian(record.AsSpan(data.Length + 8), Crc(record.AsSpan(4, data.Length + 4)));
+        BinaryPrimitives.WriteUInt32BigEndian(record.AsSpan(data.Length + 8), Crc32.Compute(record.AsSpan(4, data.Length + 4)));
         stream.Write(record);
     }
 
-    private static uint Crc(ReadOnlySpan<byte> bytes)
-    {
-        uint crc = uint.MaxValue;
-        foreach (byte value in bytes)
-        {
-            crc ^= value;
-            for (int bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xEDB88320u : 0);
-        }
-        return ~crc;
-    }
 }

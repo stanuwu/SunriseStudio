@@ -17,9 +17,9 @@ public static partial class ProjectBuilder
         {
             if (!authored.TryGetValue(tag, out var asset))
                 return catalog.TryGetEntry(tag, out var entry) ? entry : null;
-            ushort package = checked((ushort)((tag - 0x80800000u) >> 13));
+            ushort package = checked((ushort)TagHashes.Package(tag));
             return new(tag, asset.Class, (int)((asset.TypeInfo >> 9) & 127), (int)((asset.TypeInfo >> 6) & 7),
-                asset.Data.Length, $"w64_sunrise_{package:x4}_0", package, (int)(tag & 8191))
+                asset.Data.Length, $"w64_sunrise_{package:x4}_0", package, TagHashes.Entry(tag))
                 { TypeInfo = asset.TypeInfo };
         }
         var pending = new Queue<uint>(authored.Keys.Concat(edited.Keys));

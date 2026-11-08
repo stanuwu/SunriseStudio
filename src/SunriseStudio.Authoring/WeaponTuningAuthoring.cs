@@ -137,7 +137,7 @@ public static class WeaponTuningAuthoring
             if (Owned(project, current) is { } ownedConfig) addedChanges[ownedConfig.Id] = config;
             else
             {
-                uint Tag(int index) => checked(0x80800000u + ((uint)packageId << 13) + (uint)index);
+                uint Tag(int index) => TagHashes.Make(packageId, index);
                 if (firstEntry < 0 || firstEntry > 8191 || catalog.ContainsTag(Tag(firstEntry))
                     || plannedAssets?.Any(asset => asset.Native is { } native && NativeTag(native) == Tag(firstEntry)) == true)
                     throw new InvalidDataException("The translation config needs a free native entry.");
@@ -162,7 +162,7 @@ public static class WeaponTuningAuthoring
             groups = InvestmentStatGroups.SetCurves(groups, statGroup, curves);
         else
         {
-            uint hash = InvestmentItemClone.NewDefinitionHash($"sunrise:tuning:{project.Name}:{weapon.Hash:X8}",
+            uint hash = StringHash.NewDefinitionHash($"sunrise:tuning:{project.Name}:{weapon.Hash:X8}",
                 InvestmentStatGroups.Hashes(groups).ToHashSet());
             (groups, statGroup) = InvestmentStatGroups.AddGroup(groups, statGroup, hash, curves);
             changes[weapon.DisplayTag] = InvestmentStatGroups.SetDisplayGroup(Read(weapon.DisplayTag), statGroup);
@@ -317,5 +317,5 @@ public static class WeaponTuningAuthoring
         project.AddedAssets.FirstOrDefault(added => added.Native is { } native && NativeTag(native) == tag);
 
     private static uint NativeTag(NativeAssetMetadata native) =>
-        checked(0x80800000u + ((uint)native.PackageId << 13) + (uint)native.EntryIndex!.Value);
+        TagHashes.Make(native.PackageId, native.EntryIndex!.Value);
 }

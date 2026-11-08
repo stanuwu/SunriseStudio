@@ -1,21 +1,21 @@
-using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Formats;
 
 /** Native operations stay fixed; authored graphs select their inputs and phase membership. */
 public static partial class NativePerkBehavior
 {
-    public const uint Class = 0x808040B5;
-    private const int RootSize = 208, MaximumNodes = 128;
-    private const uint ArrayMarker = 0x80809FBD, ConditionRowClass = 0x808040BA;
-    private const uint EffectRowClass = 0x808040AC;
-    // Root +16 is the feedback array; a status row puts a buff in the HUD tray.
-    private const int FeedbackField = 16, StatusSize = 24;
-    private const uint FeedbackRowClass = 0x80804083, StatusClass = 0x80804085;
+    public const uint Class = SSandboxPerkProgram.Class;
+    private const int MaximumNodes = 128;
+    private const uint ConditionRowClass = C808040ba.Class;
+    private const uint EffectRowClass = C808040ac.Class;
+    // A status row in the root feedback array puts a buff in the HUD tray.
+    private const uint FeedbackRowClass = C80804083.Class, StatusClass = SPerkStatusFeedback.Class;
     // Status mask bit 0x02 shows the entry while the perk is active.
     private const byte StatusWhileActive = 0x02;
-    // Root +88 holds cooldown conditions and +104 stack branches; neither is shown as a phase.
-    private const int CooldownField = 88, StackField = 104, TimerEffectsField = 160;
 
     /** Status labels already present in both the HUD icon library and the label strings. */
     public static IReadOnlyList<PerkBehaviorChoice> HudLabels { get; } =
@@ -104,22 +104,25 @@ public static partial class NativePerkBehavior
     {
         RequireRoot(bytes);
         var graph = new PerkBehaviorGraph { OriginalBytes = bytes.ToArray(), ProgramTag = FindProgramTag(bytes) };
-        var data = new TagReader(bytes);
-        ReadPhase(32, graph.Activation, PerkBehaviorNodeKind.Condition);
-        ReadPhase(56, graph.Effects, PerkBehaviorNodeKind.Effect);
-        ReadPhase(72, graph.Deactivation, PerkBehaviorNodeKind.Condition);
+        ReadPhase(PayloadFields.Activation, graph.Activation, PerkBehaviorNodeKind.Condition);
+        ReadPhase(PayloadFields.Effects, graph.Effects, PerkBehaviorNodeKind.Effect);
+        ReadPhase(PayloadFields.Deactivation, graph.Deactivation, PerkBehaviorNodeKind.Condition);
         graph.Hud = FindHud(bytes)?.Hud;
-        if (data.U64(FeedbackField) != 0 && graph.Hud is null || data.U64(CooldownField) != 0 || data.U64(StackField) != 0)
+        ref readonly var root = ref TagView.At<SSandboxPerkProgram>(bytes.Span);
+        if (root.Feedback.Count != 0 && graph.Hud is null || root.HB38b5954.CooldownConditions.Count != 0
+            || root.StackBranches.Count != 0)
             graph.Diagnostics.Add("HUD, cooldown and stack branches kept; not shown.");
         return graph;
 
         void ReadPhase(int field, List<PerkBehaviorNode> nodes, PerkBehaviorNodeKind kind)
         {
-            var array = data.Array(field, kind == PerkBehaviorNodeKind.Condition ? ConditionRowClass : EffectRowClass, 8);
+            bool condition = kind == PerkBehaviorNodeKind.Condition;
+            int stride = condition ? PayloadFields.ConditionRowSize : PayloadFields.EffectRowSize;
+            var array = TagArray.Checked(bytes.Span, field, condition ? ConditionRowClass : EffectRowClass, stride);
             if (array.Count > MaximumNodes) throw new InvalidDataException("The perk phase exceeds the node limit.");
             for (int i = 0; i < array.Count; i++)
             {
-                int target = data.Relative(array.Data + i * 8);
+                int target = TagPointer.Checked(bytes.Span, array.Data + i * stride);
                 nodes.Add(ReadNode(bytes, target, kind, Role.Top, $"{field}:{i}:{target}", graph.Diagnostics));
             }
         }
@@ -149,7 +152,7 @@ public static partial class NativePerkBehavior
         // Extend-timers conditions under effects take no index, so only phase conditions count here.
         if (source is not null && graph.Activation.Concat(graph.Deactivation).SelectMany(Flatten)
                 .Any(node => node.OriginalOffset < 0 && node.Primitive != GroupKey)
-            && (new TagReader(graph.OriginalBytes).U64(StackField) != 0 || ConditionIndices(graph.OriginalBytes) is null))
+            && (TagRead.U64(graph.OriginalBytes, PayloadFields.Stack) != 0 || ConditionIndices(graph.OriginalBytes) is null))
             problems.Add("Adding conditions needs a perk without stack branches.");
         if (graph.Effects.SelectMany(Flatten).Any(node => node.NativeClass == ResistClass && node.OriginalOffset < 0)
             && graph.ProgramTag == 0)
@@ -162,7 +165,7 @@ public static partial class NativePerkBehavior
         {
             if (!HudLabels.Any(label => label.Value == hud.Label))
                 problems.Add("Choose a HUD label from the installed status labels.");
-            if (source is { Hud: null } && new TagReader(graph.OriginalBytes).U64(FeedbackField) != 0)
+            if (source is { Hud: null } && TagRead.U64(graph.OriginalBytes, PayloadFields.Feedback) != 0)
                 problems.Add("This perk already has native HUD feedback, which is preserved.");
             if (hud.ShowTimer && !graph.Deactivation.Any(node => node.Primitive == "timer"))
                 problems.Add("The HUD timer needs a deactivation timer.");
@@ -250,39 +253,30 @@ public static partial class NativePerkBehavior
         if (problems.Count != 0) throw new InvalidDataException(string.Join("\n", problems));
         var writer = new PerkWriter(fresh ? NewRoot() : graph.OriginalBytes) { ProgramTag = graph.ProgramTag };
         List<int> indices = fresh ? [] : ConditionIndices(graph.OriginalBytes) ?? [];
-        // Condition +7 is unique within the program; new conditions continue after the highest.
+        // ConditionIndex is unique within the program; new conditions continue after the highest.
         int nextIndex = indices.Count == 0 ? 0 : indices.Max() + 1;
-        WritePhase(32, graph.Activation, source?.Activation, ConditionRowClass);
-        WritePhase(56, graph.Effects, source?.Effects, EffectRowClass);
-        WritePhase(72, graph.Deactivation, source?.Deactivation, ConditionRowClass);
-        writer.U64(136, writer.Read64(136) | Mask(graph.Activation));
-        writer.U64(144, writer.Read64(144) | Mask(graph.Deactivation));
-        // Root +160 has bit i set when effect i extends timers; the event walker visits only those.
-        writer.U64(TimerEffectsField, Enumerable.Range(0, Math.Min(64, graph.Effects.Count))
-            .Where(i => graph.Effects[i].NativeClass == ExtendTimersClass).Aggregate(0UL, (mask, i) => mask | 1UL << i));
-        if (fresh)
-        {
-            // Every stock root sets these; their reader is unknown. Values follow the stock pattern.
-            writer.U8(204, 1);
-            writer.U8(205, checked((byte)graph.Activation.Concat(graph.Deactivation).Count(node => node.Primitive == "timer")));
-        }
+        WritePhase(PayloadFields.Activation, graph.Activation, source?.Activation, ConditionRowClass);
+        WritePhase(PayloadFields.Effects, graph.Effects, source?.Effects, EffectRowClass);
+        WritePhase(PayloadFields.Deactivation, graph.Deactivation, source?.Deactivation, ConditionRowClass);
+        WriteRootMasks(writer, graph, fresh);
         // A HUD row Studio wrote is rewritten in place; removing it empties the feedback array.
         var installedHud = fresh ? null : FindHud(graph.OriginalBytes);
         if (graph.Hud is { } hud)
         {
-            int status = installedHud?.At ?? writer.Node(StatusClass, StatusSize);
+            int status = installedHud?.At ?? writer.Node(StatusClass, PayloadFields.StatusSize);
             writer.Copy(status, StatusBytes(hud));
             if (installedHud is null)
             {
-                int rows = writer.Array(FeedbackField, FeedbackRowClass, 1, 8);
+                int rows = writer.Array(PayloadFields.Feedback, FeedbackRowClass, 1, PayloadFields.FeedbackRowSize);
                 writer.I64(rows, status - rows);
             }
         }
-        else if (installedHud is not null) writer.Array(FeedbackField, FeedbackRowClass, 0, 8);
+        else if (installedHud is not null) writer.Array(PayloadFields.Feedback, FeedbackRowClass, 0, PayloadFields.FeedbackRowSize);
         return writer.Finish();
 
         void WritePhase(int field, List<PerkBehaviorNode> nodes, List<PerkBehaviorNode>? original, uint rowClass)
         {
+            int stride = rowClass == ConditionRowClass ? PayloadFields.ConditionRowSize : PayloadFields.EffectRowSize;
             var offsets = new List<int>();
             foreach (var node in nodes)
             {
@@ -296,34 +290,53 @@ public static partial class NativePerkBehavior
                 offsets.Add(target);
             }
             if (original is not null && offsets.SequenceEqual(original.Select(node => node.OriginalOffset))) return;
-            int rows = writer.Array(field, rowClass, nodes.Count, 8);
-            for (int i = 0; i < offsets.Count; i++) writer.I64(rows + i * 8, offsets[i] - rows - i * 8);
+            int rows = writer.Array(field, rowClass, nodes.Count, stride);
+            for (int i = 0; i < offsets.Count; i++) writer.I64(rows + i * stride, offsets[i] - rows - i * stride);
         }
+    }
+
+    /** Phase event masks, the extend-timers mask and, on a new root, the stock trailer bytes. */
+    private static void WriteRootMasks(PerkWriter writer, PerkBehaviorGraph graph, bool fresh)
+    {
+        ref var root = ref writer.Edit<SSandboxPerkProgram>(0);
+        root.ActivationEventMask |= Mask(graph.Activation);
+        root.DeactivationEventMask |= Mask(graph.Deactivation);
+        // Bit i is set when effect i extends timers; the event walker visits only those.
+        root.ExtendTimerEffectMask = Enumerable.Range(0, Math.Min(64, graph.Effects.Count))
+            .Where(i => graph.Effects[i].NativeClass == ExtendTimersClass).Aggregate(0UL, (mask, i) => mask | 1UL << i);
+        if (!fresh) return;
+        // Every stock root sets these; their reader is unknown. Values follow the stock pattern.
+        root.Unknown204 = 1;
+        root.TimerCount = checked((byte)graph.Activation.Concat(graph.Deactivation).Count(node => node.Primitive == "timer"));
     }
 
     /** The status row Compile writes for a HUD entry. */
     private static byte[] StatusBytes(PerkHudStatus hud)
     {
-        byte[] status = new byte[StatusSize];
-        status[0] = StatusWhileActive;
-        status[1] = byte.MaxValue;
-        BinaryPrimitives.WriteUInt32LittleEndian(status.AsSpan(4), hud.Label);
-        status[20] = byte.MaxValue;
-        status[21] = 1;
-        status[22] = hud.ShowTimer ? (byte)1 : (byte)0;
+        byte[] status = new byte[PayloadFields.StatusSize];
+        ref var row = ref TagView.Edit<SPerkStatusFeedback>(status);
+        row.StatusMask = StatusWhileActive;
+        row.Unknown1 = byte.MaxValue;
+        row.HudLabel = hud.Label;
+        row.Unknown20 = byte.MaxValue;
+        row.Unknown21 = 1;
+        row.ShowTimer = hud.ShowTimer ? (byte)1 : (byte)0;
         return status;
     }
 
-    /** The HUD entry and its row offset when root +16 holds exactly one row in the form Compile writes. */
+    /** The HUD entry and its row offset when the feedback array holds one row in Compile's form. */
     private static (PerkHudStatus Hud, int At)? FindHud(ReadOnlyMemory<byte> bytes)
     {
-        var data = new TagReader(bytes);
-        if (!data.TryArray(FeedbackField, FeedbackRowClass, 8, out var rows) || rows.Count != 1) return null;
-        int at = Target(data, rows.Data);
-        if (at < 4 || !data.Has(at, StatusSize) || data.U32(at - 4) != StatusClass) return null;
-        var hud = new PerkHudStatus { Label = data.U32(at + 4), ShowTimer = data.U8(at + 22) == 1 };
+        var span = bytes.Span;
+        if (!TagArray.TryChecked(span, PayloadFields.Feedback, FeedbackRowClass, PayloadFields.FeedbackRowSize, out var rows)
+            || rows.Count != 1) return null;
+        int at = TagPointer.TryChecked(span, rows.Data);
+        if (at < TagView.ClassWordSize || !TagView.Fits<SPerkStatusFeedback>(span, at) || TagView.ClassAt(span, at) != StatusClass)
+            return null;
+        ref readonly var status = ref TagView.At<SPerkStatusFeedback>(span, at);
+        var hud = new PerkHudStatus { Label = status.HudLabel, ShowTimer = status.ShowTimer == 1 };
         if (!HudLabels.Any(label => label.Value == hud.Label)
-            || !bytes.Span.Slice(at, StatusSize).SequenceEqual(StatusBytes(hud))) return null;
+            || !span.Slice(at, PayloadFields.StatusSize).SequenceEqual(StatusBytes(hud))) return null;
         return (hud, at);
     }
 
@@ -333,48 +346,53 @@ public static partial class NativePerkBehavior
 
     private static ulong Bits(PerkBehaviorNode node)
     {
-        int opcode = node.Primitive == GroupKey ? -1 : node.NativeBytes.Length >= 6 ? node.NativeBytes[5]
+        // Only conditions reach here, so installed bytes start with the condition header.
+        int opcode = node.Primitive == GroupKey ? -1 : node.NativeBytes.Length > ConditionOpcode ? node.NativeBytes[ConditionOpcode]
             : PrimitiveOf(node.Primitive)?.Opcode ?? -1;
         ulong bits = opcode is >= 0 and < 64 ? 1UL << opcode : 0;
         return node.Children.Aggregate(bits, (mask, child) => mask | Bits(child));
     }
 
-    /** Every condition's +7 index, nested ones included; null when a payload cannot be walked. */
+    /** Every condition's ConditionIndex, nested ones included; null when a payload cannot be walked. */
     private static List<int>? ConditionIndices(ReadOnlyMemory<byte> bytes)
     {
-        var data = new TagReader(bytes);
         var seen = new HashSet<int>();
         var result = new List<int>();
         try
         {
-            foreach (int field in new[] { 32, 72, CooldownField })
+            foreach (int field in new[] { PayloadFields.Activation, PayloadFields.Deactivation, PayloadFields.Cooldown })
             {
-                var array = data.Array(field, ConditionRowClass, 8);
-                for (int i = 0; i < array.Count; i++) Visit(data.Relative(array.Data + i * 8), 0);
+                var array = TagArray.Checked(bytes.Span, field, ConditionRowClass, PayloadFields.ConditionRowSize);
+                for (int i = 0; i < array.Count; i++) Visit(array.Data + i * PayloadFields.ConditionRowSize, 0);
             }
         }
         catch (Exception error) when (error is InvalidDataException or OverflowException) { return null; }
         return result;
 
-        void Visit(int at, int depth)
+        // `pointer` is the field that names the condition.
+        void Visit(int pointer, int depth)
         {
-            if (at < 4 || !data.Has(at, 8) || depth > 8) throw new InvalidDataException("The perk condition is truncated.");
+            var span = bytes.Span;
+            int at = TagPointer.Checked(span, pointer);
+            if (at < 4 || at > span.Length - ConditionHeaderSize || depth > 8)
+                throw new InvalidDataException("The perk condition is truncated.");
             if (!seen.Add(at)) return;
-            result.Add(data.U8(at + 7));
-            uint type = data.U32(at - 4);
-            if (type == CounterClass && data.Has(at, 56))
+            result.Add(ConditionHeader(span, at).ConditionIndex);
+            uint? type = TagView.ClassAt(span, at);
+            if (type == CounterClass && TagView.Fits<PerkCounter>(span, at))
             {
-                var rows = data.Array(at + 8, CounterRowClass, 32);
-                for (int i = 0; i < rows.Count; i++) Visit(data.Relative(rows.Data + i * 32), depth + 1);
+                var rows = TagArray.Checked(span, at + PayloadFields.CounterRows, CounterRowClass, PayloadFields.CounterRowSize);
+                for (int i = 0; i < rows.Count; i++) Visit(rows.Data + i * PayloadFields.CounterRowSize, depth + 1);
             }
-            if (type == GatedClass && data.Has(at, 264)) Visit(data.Relative(at + 256), depth + 1);
-            if (type == AllGroupsClass && data.Has(at, 24))
+            if (type == GatedClass && TagView.Fits<PerkStateGated>(span, at)) Visit(at + PayloadFields.GatedInner, depth + 1);
+            if (type == AllGroupsClass && TagView.Fits<PerkAllGroups>(span, at))
             {
-                var groups = data.Array(at + 8, GroupClass, 32);
+                var groups = TagArray.Checked(span, at + PayloadFields.AllGroupsGroups, GroupClass, PayloadFields.GroupSize);
                 for (int i = 0; i < groups.Count; i++)
                 {
-                    var members = data.Array(groups.Data + i * 32 + 8, ConditionRowClass, 8);
-                    for (int j = 0; j < members.Count; j++) Visit(data.Relative(members.Data + j * 8), depth + 1);
+                    var members = TagArray.Checked(span, groups.Data + i * PayloadFields.GroupSize + PayloadFields.GroupMembers,
+                        ConditionRowClass, PayloadFields.ConditionRowSize);
+                    for (int j = 0; j < members.Count; j++) Visit(members.Data + j * PayloadFields.ConditionRowSize, depth + 1);
                 }
             }
         }
@@ -386,17 +404,18 @@ public static partial class NativePerkBehavior
     /** The native no-stack sentinel prevents reads from absent stack branches. */
     private static byte[] NewRoot()
     {
-        byte[] bytes = new byte[RootSize];
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(8), InvestmentItemClone.EmptyStringHash);
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(128), InvestmentItemClone.EmptyStringHash);
-        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(152), 1);
-        bytes.AsSpan(188, 16).Fill(byte.MaxValue);
+        byte[] bytes = new byte[PayloadFields.RootSize];
+        ref var root = ref TagView.Edit<SSandboxPerkProgram>(bytes);
+        root.Unknown8 = StringHash.Empty;
+        root.Unknown128 = StringHash.Empty;
+        root.NoStackSentinel = 1;
+        ((Span<byte>)root.Unknown188).Fill(byte.MaxValue);
         return bytes;
     }
 
     private static void RequireRoot(ReadOnlyMemory<byte> bytes)
     {
-        if (bytes.Length < RootSize || BinaryPrimitives.ReadUInt64LittleEndian(bytes.Span) != (ulong)bytes.Length)
+        if (bytes.Length < PayloadFields.RootSize || TagView.At<SSandboxPerkProgram>(bytes.Span).TagSize != (ulong)bytes.Length)
             throw new InvalidDataException("The native perk root is truncated or has an invalid size.");
     }
 
@@ -407,4 +426,81 @@ public static partial class NativePerkBehavior
         double maximum, PerkBehaviorValueKind kind = PerkBehaviorValueKind.Float, string description = "") =>
         new() { Key = key, Label = label, Value = value, Minimum = minimum, Maximum = maximum,
             Kind = kind, Description = description };
+
+    /** Payload field offsets from the generated views; a nested class has its own static order. */
+    private static class PayloadFields
+    {
+        public static int RootSize => Unsafe.SizeOf<SSandboxPerkProgram>();
+        public static int ConditionRowSize => Unsafe.SizeOf<C808040ba>();
+        public static int EffectRowSize => Unsafe.SizeOf<C808040ac>();
+        public static int FeedbackRowSize => Unsafe.SizeOf<C80804083>();
+        public static readonly int Feedback = Root(nameof(SSandboxPerkProgram.Feedback));
+        public static readonly int Activation = Root("HB38b5954.ActivationConditions");
+        public static readonly int Effects = Root("HB38b5954.Effects");
+        public static readonly int Deactivation = Root("HB38b5954.DeactivationConditions");
+        // Cooldown conditions and stack branches are kept but never shown as a phase.
+        public static readonly int Cooldown = Root("HB38b5954.CooldownConditions");
+        public static readonly int Stack = Root(nameof(SSandboxPerkProgram.StackBranches));
+
+        public static int BranchSize => Unsafe.SizeOf<C8080407d>();
+        public static readonly int BranchEffects = TagView.FieldOffset<C8080407d>(nameof(C8080407d.Effects));
+
+        public static int StatusSize => Unsafe.SizeOf<SPerkStatusFeedback>();
+
+        public static int GroupSize => Unsafe.SizeOf<PerkConditionGroup>();
+        public static readonly int GroupMembers = TagView.FieldOffset<PerkConditionGroup>(nameof(PerkConditionGroup.Members));
+        public static readonly int GroupMask = TagView.FieldOffset<PerkConditionGroup>(nameof(PerkConditionGroup.MemberEventMask));
+        public static readonly int AllGroupsGroups = TagView.FieldOffset<PerkAllGroups>(nameof(PerkAllGroups.Groups));
+
+        public static readonly int CounterRows = TagView.FieldOffset<PerkCounter>(nameof(PerkCounter.Rows));
+        public static int CounterRowSize => Unsafe.SizeOf<PerkCounterRow>();
+        public static readonly int GatedInner = TagView.FieldOffset<PerkStateGated>(nameof(PerkStateGated.InnerCondition));
+        public static readonly int TimerConditions = TagView.FieldOffset<PerkExtendTimers>(nameof(PerkExtendTimers.Conditions));
+        public static readonly int TimerMask = TagView.FieldOffset<PerkExtendTimers>(nameof(PerkExtendTimers.ConditionEventMask));
+
+        public static readonly int MovementBlock = TagView.FieldOffset<PerkMovement>(nameof(PerkMovement.MovementBlock));
+        public static int MovementBlockSize => Unsafe.SizeOf<PerkMovementBlock>();
+        public static readonly int MovementName = Block(nameof(PerkMovementBlock.BlockName));
+        public static readonly int MovementAllowFirst = Block(nameof(PerkMovementBlock.AllowFirst));
+        public static readonly int MovementAllowSecond = Block(nameof(PerkMovementBlock.AllowSecond));
+        // Per set: value 0, entry, value 8, horizontal min, max, value 20, vertical min, max.
+        public static readonly int[] MovementFirst =
+        [
+            Block(nameof(PerkMovementBlock.FirstValue0)), Block(nameof(PerkMovementBlock.FirstEntry)),
+            Block(nameof(PerkMovementBlock.FirstValue8)), Block(nameof(PerkMovementBlock.FirstHmin)),
+            Block(nameof(PerkMovementBlock.FirstHmax)), Block(nameof(PerkMovementBlock.FirstValue20)),
+            Block(nameof(PerkMovementBlock.FirstVmin)), Block(nameof(PerkMovementBlock.FirstVmax))
+        ];
+        public static readonly int[] MovementSecond =
+        [
+            Block(nameof(PerkMovementBlock.SecondValue0)), Block(nameof(PerkMovementBlock.SecondEntry)),
+            Block(nameof(PerkMovementBlock.SecondValue8)), Block(nameof(PerkMovementBlock.SecondHmin)),
+            Block(nameof(PerkMovementBlock.SecondHmax)), Block(nameof(PerkMovementBlock.SecondValue20)),
+            Block(nameof(PerkMovementBlock.SecondVmin)), Block(nameof(PerkMovementBlock.SecondVmax))
+        ];
+
+        public static int LabelRowSize => Unsafe.SizeOf<PerkLabelRow>();
+        public static readonly int LabelRowPath = TagView.FieldOffset<PerkLabelRow>(nameof(PerkLabelRow.LabelTablePath));
+        public static readonly int LabelRowTable = TagView.FieldOffset<PerkLabelRow>(nameof(PerkLabelRow.LabelTable));
+        public static readonly int LabelSetPath = TagView.FieldOffset<C808093f3>(nameof(C808093f3.ItemLabelTablePath));
+        public static readonly int LabelSetTable = TagView.FieldOffset<C808093f3>(nameof(C808093f3.ItemLabelTable));
+
+        // Refill fractions: active weapon, this weapon, slots 0 to 2.
+        public static readonly int[] RefillFractions =
+        [
+            TagView.FieldOffset<PerkRefill>(nameof(PerkRefill.H0268fe0f)),
+            TagView.FieldOffset<PerkRefill>(nameof(PerkRefill.H4ae7200a)),
+            TagView.FieldOffset<PerkRefill>(nameof(PerkRefill.HFd12630f)),
+            TagView.FieldOffset<PerkRefill>(nameof(PerkRefill.HD9077078)),
+            TagView.FieldOffset<PerkRefill>(nameof(PerkRefill.HFb53277c))
+        ];
+        // A constant or pass-through program sets both of these words to 1.
+        public static readonly int ExpressionFirstOne =
+            TagView.FieldOffset<SCompiledExpression>(nameof(SCompiledExpression.Unknown56One));
+        public static readonly int ExpressionSecondOne =
+            TagView.FieldOffset<SCompiledExpression>(nameof(SCompiledExpression.Unknown64One));
+
+        private static int Root(string member) => TagView.FieldOffset<SSandboxPerkProgram>(member);
+        private static int Block(string member) => TagView.FieldOffset<PerkMovementBlock>(member);
+    }
 }

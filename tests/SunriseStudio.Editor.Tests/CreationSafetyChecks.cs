@@ -7,6 +7,7 @@ using SunriseStudio.Editor;
 using SunriseStudio.Editor.Creation;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.World;
 
 internal static class CreationSafetyChecks
 {
@@ -49,10 +50,25 @@ internal static class CreationSafetyChecks
             && CreationTypes.KeyFor(plain with { Reference = InvestmentTags.ItemClass }, workspace) == InvestmentItemKinds.Other,
             "A vendor display or item record with no category row fell to the Other key.");
         Check(workspace.CloneBaseOf(first + 1) == first + 1, "A plain clone base was remapped.");
-        Check(!CreationTypes.Blocked.Single(type => type.Name == "Map").Blocker.Contains("no hash64"),
-            "Map blocker still denies authored wide-hash support.");
+        Check(CreationTypes.Blocked.All(type => type.Name != "Map") && CreationTypes.Destination is { Available: true, Factory: not null },
+            "Map is still blocked, or Destination cannot start.");
+        var destination = CreationTypes.Destination.Factory!(workspace);
+        var name = destination.Fields.Single(field => field.Label == "Name");
+        Check(destination.Problems(workspace).Any(problem => problem.Contains("Template")), "A destination without a template had no problem.");
+        name.Text = "Test Bed";
+        Check(destination.Problems(workspace).Any(problem => problem.Contains("lowercase")), "A destination name with spaces was accepted.");
+        // The launcher starts a destination only through an activity, so the destination brings one.
+        Check(destination.AnchorTag == ActivityRows.ActivityTable
+            && destination.Fields.Any(field => field.Label == "Package ID")
+            && destination.Problems(workspace).Any(problem => problem.Contains("Activity template")),
+            "A destination does not create its activity.");
+        Check(CreationTypes.Blocked.All(type => type.Name != "Activity") && CreationTypes.Activity is { Available: true, Factory: not null },
+            "Activity is still blocked, or cannot start.");
+        var activity = CreationTypes.Activity.Factory!(workspace);
+        Check(activity.AnchorTag == ActivityRows.ActivityTable
+            && activity.Problems(workspace).Any(problem => problem.Contains("Destination")), "An activity without a destination had no problem.");
         Console.WriteLine("creation_safety static_template=installed material_io=contained retry=pass search_error=nonselectable"
-            + " row_swap=refiltered record_key=pass");
+            + " row_swap=refiltered record_key=pass destination=available activity=available");
     }
 
     /** A new row array with the same revision and search must refilter. */

@@ -1,16 +1,20 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Numerics;
 using System.Text;
-using System.Buffers.Binary;
 using SunriseStudio.Authoring;
-using SunriseStudio.Formats;
 using SunriseStudio.Editor;
+using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
 
 string root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "sunrise-editor-" + Guid.NewGuid().ToString("N")));
 Directory.CreateDirectory(root);
+// One dummy key export serves every install under root.
+string keyExport = Path.Combine(root, "package_keys.bin");
+TestFixtures.WriteDummyKeyExport(keyExport);
+StudioWorkspace.TestKeySource = install => install.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? keyExport : null;
 try
 {
     if (args is ["--weapon-scene", var weaponGame, var weaponKeys, var weaponProject, var weaponOutput])
@@ -33,6 +37,7 @@ try
         NavigationChecks.Run(navigationGame, navigationOutput);
         return 0;
     }
+    if (args is ["--destination-owned", var destinationGame]) { DestinationContentChecks.Owned(destinationGame, root); return 0; }
     if (args is ["--isolated-objects"]) { IsolatedObjectWorkflowChecks.Run(root); return 0; }
     if (args is ["--groups"]) { GroupTransformWorkflowChecks.Run(root); SceneSelectionUiChecks.Run(root); return 0; }
     if (args is ["--groups-owned", var groupGame]) { GroupTransformWorkflowChecks.Owned(groupGame, root); return 0; }
@@ -66,6 +71,7 @@ try
     }
     if (args is ["--scene-selection"]) { SceneSelectionUiChecks.Run(root); return 0; }
     if (args is ["--browser-filter"]) { BrowserFilterChecks.Run(root); return 0; }
+    if (args is ["--tag-page"]) { TagPageChecks.Run(root); InspectorPanelChecks.Run(); return 0; }
     if (args is ["--browser-added"]) { BrowserAddedChecks.Run(root); BrowserConfigChecks.Run(root); return 0; }
     if (args is ["--creation-history"]) { ImportHistoryChecks.Run(root); CreationSafetyChecks.Run(root); return 0; }
     if (args is ["--creation-history", var importGame]) { ImportHistoryChecks.Owned(root, importGame); return 0; }
@@ -240,6 +246,8 @@ try
     PlacementUpdateWorkflowChecks.Run(root);
     GroupTransformWorkflowChecks.Run(root);
     ReadinessChecks.Run(root);
+    TagPageChecks.Run(root);
+    InspectorPanelChecks.Run();
     if (Array.IndexOf(args, "--game-root") is >= 0 and var gameIndex)
     {
         ConfigBindingChecks.Owned(root, args[gameIndex + 1], Path.Combine(root, "config-owned-artifacts"));
@@ -250,6 +258,7 @@ try
         CollisionAddWorkflowChecks.Run(args[gameIndex + 1], root);
         CollisionPartWorkflowChecks.Run(args[gameIndex + 1], root);
         SpawnPreviewChecks.Run(args[gameIndex + 1]);
+        DestinationContentChecks.Owned(args[gameIndex + 1], root);
         uint Tag(string name, uint fallback) => Array.IndexOf(args, name) is >= 0 and var at
             ? Convert.ToUInt32(args[at + 1], 16) : fallback;
         PlacementUpdateWorkflowChecks.Owned(args[gameIndex + 1], root, Tag("--map", 0x80EDC19B), Tag("--mission", 0x80B48062));

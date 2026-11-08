@@ -1,10 +1,14 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -74,46 +78,58 @@ public static class MeshAssetImporter
         ValidateMesh(mesh);
         if (!PackageWriter.IsNewPackageId(packageId) || catalog.ContainsInstalledPackage(packageId))
             throw new InvalidDataException($"Choose an unused package id from {PackageWriter.NewPackageIdRange}.");
-        if (first < 0 || first > 8192 - EntryCount) throw new InvalidDataException("The package has no room for a mesh.");
+        if (first < 0 || first > TagHashes.EntriesPerPackage - EntryCount) throw new InvalidDataException("The package has no room for a mesh.");
         cancellationToken.ThrowIfCancellationRequested();
         using var originals = PackageCatalog.Open(catalog.GameRoot);
         originals.ReadOverride = catalog.ReadOriginal;
         var template = FindTemplate(originals, templateTag, cancellationToken);
-        uint Tag(int index) => checked(0x80800000U + ((uint)packageId << 13) + (uint)(first + index));
+        uint Tag(int index) => TagHashes.Make(packageId, first + index);
         var encoded = EncodeGeometry(mesh, cancellationToken);
         byte[] model = (byte[])template.Model.Clone(), resource = (byte[])template.Resource.Clone();
-        U(model, 8, Tag(1));
-        WriteVector(model, 0x60, encoded.PositionOffset);
-        F(model, 0x6C, encoded.PositionScale);
-        F(model, 0x70, encoded.UvScale); F(model, 0x74, encoded.UvScale);
-        F(model, 0x78, encoded.UvOffset.X); F(model, 0x7C, encoded.UvOffset.Y);
-        var material = new byte[checked(4 * meshes.Count)];
-        var assignments = new byte[checked(8 * meshes.Count)];
-        var parts = new byte[checked(12 * meshes.Count)];
+        Member<SStaticMesh, uint>(model, nameof(SStaticMesh.MeshData)) = Tag(1);
+        Member<SStaticMesh, Vector3>(model, nameof(SStaticMesh.PositionOffset)) = encoded.PositionOffset;
+        Member<SStaticMesh, float>(model, nameof(SStaticMesh.PositionScale)) = encoded.PositionScale;
+        Member<SStaticMesh, float>(model, nameof(SStaticMesh.UvScaleU)) = encoded.UvScale;
+        Member<SStaticMesh, float>(model, nameof(SStaticMesh.UvScaleV)) = encoded.UvScale;
+        Member<SStaticMesh, float>(model, nameof(SStaticMesh.UvOffsetU)) = encoded.UvOffset.X;
+        Member<SStaticMesh, float>(model, nameof(SStaticMesh.UvOffsetV)) = encoded.UvOffset.Y;
+        var material = new byte[checked(Unsafe.SizeOf<TagReferenceElement>() * meshes.Count)];
+        var assignments = new byte[checked(Unsafe.SizeOf<SStaticMeshGroup>() * meshes.Count)];
+        var parts = new byte[checked(Unsafe.SizeOf<SStaticMeshPart>() * meshes.Count)];
+        var materialRows = MemoryMarshal.Cast<byte, TagReferenceElement>(material);
+        var assignmentRows = MemoryMarshal.Cast<byte, SStaticMeshGroup>(assignments);
+        var partRows = MemoryMarshal.Cast<byte, SStaticMeshPart>(parts);
         uint firstIndex = 0;
         for (int index = 0; index < meshes.Count; index++)
         {
-            U(material, index * 4, materialTags?[index] ?? template.Mesh.MaterialTag);
-            template.Assignment.CopyTo(assignments, index * 8);
-            S(assignments, index * 8, checked((ushort)index));
-            template.Part.CopyTo(parts, index * 12);
-            U(parts, index * 12, firstIndex); U(parts, index * 12 + 4, checked((uint)meshes[index].Indices.Length));
-            S(parts, index * 12 + 8, 0); parts[index * 12 + 10] = 0; parts[index * 12 + 11] = 3;
+            materialRows[index].Tag = materialTags?[index] ?? template.Mesh.MaterialTag;
+            template.Assignment.CopyTo(MemoryMarshal.AsBytes(assignmentRows.Slice(index, 1)));
+            assignmentRows[index].PartIndex = checked((ushort)index);
+            template.Part.CopyTo(MemoryMarshal.AsBytes(partRows.Slice(index, 1)));
+            ref var part = ref partRows[index];
+            part.IndexStart = firstIndex; part.IndexCount = checked((uint)meshes[index].Indices.Length);
+            part.BufferGroupIndex = 0; part.LodCategory = 0; part.PrimitiveType = 3;
             firstIndex = checked(firstIndex + (uint)meshes[index].Indices.Length);
         }
-        model = AppendArray(model, 0x10, 0x80800014, 4, material);
-        resource = AppendArray(resource, 8, 0x8080719B, 8, assignments);
-        resource = AppendArray(resource, 0x18, 0x8080719A, 12, parts);
+        model = AppendArray(model, TagView.FieldOffset<SStaticMesh>(nameof(SStaticMesh.Materials)),
+            TagReferenceElement.Class, Unsafe.SizeOf<TagReferenceElement>(), material);
+        resource = AppendArray(resource, TagView.FieldOffset<SStaticMeshData>(nameof(SStaticMeshData.StageAssignments)),
+            SStaticMeshGroup.Class, Unsafe.SizeOf<SStaticMeshGroup>(), assignments);
+        resource = AppendArray(resource, TagView.FieldOffset<SStaticMeshData>(nameof(SStaticMeshData.Parts)),
+            SStaticMeshPart.Class, Unsafe.SizeOf<SStaticMeshPart>(), parts);
         var group = (byte[])template.Group.Clone();
-        U(group, 0, Tag(6)); U(group, 4, Tag(2)); U(group, 8, Tag(4)); U(group, 12, 0);
-        resource = AppendArray(resource, 0x28, 0x80807199, 16, group);
+        ref var buffers = ref TagView.Edit<SStaticBufferGroup>(group);
+        buffers.IndexBuffer = Tag(6); buffers.PositionBuffer[0].Unk0 = Tag(2); buffers.PositionBuffer[1].Unk0 = Tag(4);
+        buffers.Unknown0x0c = 0;
+        resource = AppendArray(resource, TagView.FieldOffset<SStaticMeshData>(nameof(SStaticMeshData.Buffers)),
+            SStaticBufferGroup.Class, Unsafe.SizeOf<SStaticBufferGroup>(), group);
         var positionsHeader = (byte[])template.PositionHeader.Clone();
         var attributesHeader = (byte[])template.AttributeHeader.Clone();
         var indexHeader = (byte[])template.IndexHeader.Clone();
-        U(positionsHeader, 0, checked((uint)encoded.Positions.Length));
-        U(attributesHeader, 0, checked((uint)encoded.Attributes.Length));
-        indexHeader[1] = 1;
-        Q(indexHeader, 8, encoded.Indices.LongLength);
+        TagView.Edit<VertexBufferHeader>(positionsHeader).ByteCount = checked((uint)encoded.Positions.Length);
+        TagView.Edit<VertexBufferHeader>(attributesHeader).ByteCount = checked((uint)encoded.Attributes.Length);
+        Member<IndexBufferHeader, byte>(indexHeader, nameof(IndexBufferHeader.Wide)) = 1;
+        Member<IndexBufferHeader, long>(indexHeader, nameof(IndexBufferHeader.ByteCount)) = encoded.Indices.LongLength;
         ProjectAssetAddition Derived(int index, string suffix, byte[] bytes, PackageEntry source,
             uint reference, bool named = false) => new(name + suffix, bytes,
                 new(packageId, reference, source.TypeInfo, named ? name : null, first + index), source.TagHash);
@@ -145,14 +161,14 @@ public static class MeshAssetImporter
     {
         IEnumerable<PackageEntry> candidates = explicitTag is uint tag
             ? catalog.TryGetEntry(tag, out var found) ? [found] : []
-            : catalog.Entries.Where(x => x.Reference == 0x808071A7)
+            : catalog.Entries.Where(x => x.Reference == SStaticMesh.Class)
                 .OrderBy(x => x.TagHash == PreferredTemplate ? 0 : 1).ThenBy(x => x.TagHash);
         var loader = new AssetSceneLoader(catalog);
         Dictionary<uint, bool> shaders = [];
         foreach (var candidate in candidates)
         {
             token.ThrowIfCancellationRequested();
-            if (candidate.Reference != 0x808071A7 || candidate.Type is not (8 or 16)) continue;
+            if (candidate.Reference != SStaticMesh.Class || candidate.Type is not (8 or 16)) continue;
             SceneDocument scene;
             try { scene = loader.LoadMesh(candidate.TagHash, token); }
             catch (Exception error) when (explicitTag is null && error is InvalidDataException
@@ -172,30 +188,37 @@ public static class MeshAssetImporter
                 try
                 {
                     byte[] model = catalog.Read(candidate.TagHash);
-                    if (model.Length < 128 || Q(model, 0) != model.LongLength)
+                    // The model must reach UvOffsetV; the members after it are not read.
+                    if (!TagView.FitsThrough<SStaticMesh>(model, 0, nameof(SStaticMesh.UvOffsetV))
+                        || Member<SStaticMesh, long>(model, nameof(SStaticMesh.TagByteLength)) != model.LongLength)
                         throw new InvalidDataException("Invalid static model header.");
-                    var resourceEntry = Require(catalog, U(model, 8), 0x80807194);
+                    var resourceEntry = Require(catalog, Member<SStaticMesh, uint>(model, nameof(SStaticMesh.MeshData)), SStaticMeshData.Class);
                     byte[] resource = catalog.Read(resourceEntry.TagHash);
-                    if (resource.Length < 64 || Q(resource, 0) != resource.LongLength)
+                    if (!TagView.Fits<SStaticMeshData>(resource, 0)
+                        || TagView.At<SStaticMeshData>(resource).TagByteLength != (ulong)resource.LongLength)
                         throw new InvalidDataException("Invalid static resource header.");
-                    var materials = Rows(model, 0x10, 0x80800014, 4);
-                    var assignments = Rows(resource, 8, 0x8080719B, 8);
-                    var parts = Rows(resource, 0x18, 0x8080719A, 12);
-                    var groups = Rows(resource, 0x28, 0x80807199, 16);
+                    ref readonly var data = ref TagView.At<SStaticMeshData>(resource);
+                    var materials = Rows(model, in Member<SStaticMesh, TagArray<TagReferenceElement>>(model, nameof(SStaticMesh.Materials)),
+                        TagReferenceElement.Class);
+                    var assignments = Rows(resource, in data.StageAssignments, SStaticMeshGroup.Class);
+                    var parts = Rows(resource, in data.Parts, SStaticMeshPart.Class);
+                    var groups = Rows(resource, in data.Buffers, SStaticBufferGroup.Class);
                     if (mesh.PartIndex < 0 || mesh.PartIndex >= parts.Length) continue;
-                    int part = parts[mesh.PartIndex], groupIndex = S(resource, part + 8);
+                    ref readonly var part = ref parts[mesh.PartIndex];
+                    int groupIndex = part.BufferGroupIndex;
                     if (groupIndex >= groups.Length) throw new InvalidDataException("Invalid buffer group index.");
-                    int group = groups[groupIndex];
-                    int assignment = Enumerable.Range(0, Math.Min(materials.Length, assignments.Length))
-                        .First(i => S(resource, assignments[i]) == mesh.PartIndex
-                            && S(resource, assignments[i] + 2) == native.RenderStage
-                            && U(model, materials[i]) == mesh.MaterialTag);
-                    var position = Buffer(catalog, U(resource, group + 4), 4, 8);
-                    var attribute = Buffer(catalog, U(resource, group + 8), 4, 20);
-                    var index = Buffer(catalog, U(resource, group), 6, 0);
+                    ref readonly var group = ref groups[groupIndex];
+                    int assignment = -1;
+                    for (int i = 0; i < Math.Min(materials.Length, assignments.Length); i++)
+                        if (assignments[i].PartIndex == mesh.PartIndex && assignments[i].RenderStage == native.RenderStage
+                            && materials[i].Tag == mesh.MaterialTag) { assignment = i; break; }
+                    if (assignment < 0) throw new InvalidOperationException("No assignment matches the part, stage and material.");
+                    var position = Buffer(catalog, group.PositionBuffer[0].Unk0, 4, 8);
+                    var attribute = Buffer(catalog, group.PositionBuffer[1].Unk0, 4, 20);
+                    var index = Buffer(catalog, group.IndexBuffer, 6, 0);
                     return new(candidate, model, resourceEntry, resource, mesh,
-                        resource.AsSpan(assignments[assignment], 8).ToArray(), resource.AsSpan(part, 12).ToArray(),
-                        resource.AsSpan(group, 16).ToArray(), position.Entry, position.Header, position.Payload,
+                        MemoryMarshal.AsBytes(assignments.Slice(assignment, 1)).ToArray(), MemoryMarshal.AsBytes(parts.Slice(mesh.PartIndex, 1)).ToArray(),
+                        MemoryMarshal.AsBytes(groups.Slice(groupIndex, 1)).ToArray(), position.Entry, position.Header, position.Payload,
                         attribute.Entry, attribute.Header, attribute.Payload, index.Entry, index.Header, index.Payload);
                 }
                 catch (Exception error) when (explicitTag is null && error is InvalidDataException or InvalidOperationException)
@@ -233,9 +256,10 @@ public static class MeshAssetImporter
             || !catalog.TryGetEntry(entry.Reference, out var payload) || payload.Type != 40 || payload.SubType != subtype)
             throw new InvalidDataException("Static buffer header and payload types disagree.");
         byte[] header = catalog.Read(tag);
-        if (subtype == 4 && (header.Length < 12 || U(header, 0) != payload.Size
-            || S(header, 4) != stride || U(header, 8) != 0xDEADBEEF)
-            || subtype == 6 && (header.Length < 16 || Q(header, 8) != payload.Size))
+        if (subtype == 4 && (!TagView.Fits<VertexBufferHeader>(header, 0) || TagView.At<VertexBufferHeader>(header).ByteCount != payload.Size
+            || TagView.At<VertexBufferHeader>(header).Stride != stride || TagView.At<VertexBufferHeader>(header).End != VertexBufferHeader.EndValue)
+            || subtype == 6 && (!TagView.FitsThrough<IndexBufferHeader>(header, 0, nameof(IndexBufferHeader.ByteCount))
+                || Member<IndexBufferHeader, long>(header, nameof(IndexBufferHeader.ByteCount)) != payload.Size))
             throw new InvalidDataException("Static buffer header has an unsupported layout.");
         return (entry, header, payload);
     }
@@ -270,9 +294,11 @@ public static class MeshAssetImporter
             tangents[a] += tangent; tangents[b] += tangent; tangents[c] += tangent;
             bitangents[a] += bitangent; bitangents[b] += bitangent; bitangents[c] += bitangent;
         }
-        var positions = new byte[checked(mesh.Positions.Length * 8)];
-        var attributes = new byte[checked(mesh.Positions.Length * 20)];
-        var indices = new byte[checked(mesh.Indices.Length * 4)];
+        var positions = new byte[checked(mesh.Positions.Length * Unsafe.SizeOf<PositionVertex>())];
+        var attributes = new byte[checked(mesh.Positions.Length * Unsafe.SizeOf<AttributeVertex>())];
+        var indices = new byte[checked(mesh.Indices.Length * sizeof(uint))];
+        var positionRows = MemoryMarshal.Cast<byte, PositionVertex>(positions);
+        var attributeRows = MemoryMarshal.Cast<byte, AttributeVertex>(attributes);
         for (int i = 0; i < mesh.Positions.Length; i++)
         {
             if ((i & 0xFFF) == 0) token.ThrowIfCancellationRequested();
@@ -282,13 +308,15 @@ public static class MeshAssetImporter
             Vector3 tangent = tangents[i] - normal * Vector3.Dot(normal, tangents[i]);
             tangent = Normalize(tangent, Normalize(Vector3.Cross(MathF.Abs(normal.Z) < .9f ? Vector3.UnitZ : Vector3.UnitY, normal), Vector3.UnitX));
             float handedness = Vector3.Dot(Vector3.Cross(normal, tangent), bitangents[i]) < 0 ? -1 : 1;
-            WriteSnorm3(positions, i * 8, position);
-            WriteSnorm(attributes, i * 20, uv.X); WriteSnorm(attributes, i * 20 + 2, uv.Y);
-            WriteSnorm3(attributes, i * 20 + 4, normal);
-            WriteSnorm3(attributes, i * 20 + 12, tangent);
-            WriteSnorm(attributes, i * 20 + 18, handedness);
+            positionRows[i] = new() { X = Snorm(position.X), Y = Snorm(position.Y), Z = Snorm(position.Z) };
+            attributeRows[i] = new()
+            {
+                U = Snorm(uv.X), V = Snorm(uv.Y),
+                NormalX = Snorm(normal.X), NormalY = Snorm(normal.Y), NormalZ = Snorm(normal.Z),
+                TangentX = Snorm(tangent.X), TangentY = Snorm(tangent.Y), TangentZ = Snorm(tangent.Z), Handedness = Snorm(handedness)
+            };
         }
-        for (int i = 0; i < mesh.Indices.Length; i++) U(indices, i * 4, mesh.Indices[i]);
+        mesh.Indices.CopyTo(MemoryMarshal.Cast<byte, uint>(indices));
         return new(positions, attributes, indices, offset, scale, uvOffset, uvScale);
     }
 
@@ -321,23 +349,10 @@ public static class MeshAssetImporter
     /** Appended arrays leave all unknown original bytes available through the base delta. */
     private static byte[] AppendArray(byte[] source, int field, uint type, int stride, byte[] rows)
     {
-        if (rows.Length % stride != 0 || field < 8 || field > source.Length - 16)
+        if (rows.Length % stride != 0 || field < 8 || field > source.Length - Unsafe.SizeOf<TagArray<Unknown>>())
             throw new InvalidDataException("Invalid native array replacement.");
-        return NativeRows.Append(source, field, type, stride, rows, out _);
-    }
-
-    private static int[] Rows(byte[] bytes, int field, uint type, int stride)
-    {
-        if (field < 0 || field > bytes.Length - 16) throw new InvalidDataException("Truncated native array.");
-        long count = Q(bytes, field), relative = Q(bytes, field + 8);
-        if (count == 0 && relative == 0) return [];
-        long header = checked(field + 8 + relative);
-        if (count is < 0 or > 1_000_000 || header < 4 || header > bytes.Length - 16
-            || U(bytes, (int)header - 4) != 0x80809FBD || Q(bytes, (int)header) != count
-            || U(bytes, (int)header + 8) != type || U(bytes, (int)header + 12) != 0
-            || count * stride > bytes.Length - header - 16)
-            throw new InvalidDataException("Invalid typed native array.");
-        return Enumerable.Range(0, (int)count).Select(i => checked((int)header + 16 + i * stride)).ToArray();
+        // The template's size word holds its length, so the relocator keeps it current.
+        return TagRelocator.ReplaceArray(source, field, type, stride, rows, out _);
     }
 
     private static float Mid(float a, float b) => checked((float)(((double)a + b) * .5));
@@ -345,21 +360,49 @@ public static class MeshAssetImporter
     private static bool Finite(Vector3 p) => float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z);
     private static Vector3 Normalize(Vector3 value, Vector3 fallback) => value.LengthSquared() > 1e-12f
         && float.IsFinite(value.LengthSquared()) ? Vector3.Normalize(value) : fallback;
-    private static void WriteSnorm(byte[] bytes, int offset, float value)
+    private static short Snorm(float value)
     {
         if (!float.IsFinite(value) || value is < -1.00001f or > 1.00001f)
             throw new InvalidDataException("Encoded mesh attribute is outside signed normalized range.");
-        BinaryPrimitives.WriteInt16LittleEndian(bytes.AsSpan(offset), (short)MathF.Round(Math.Clamp(value, -1, 1) * 32767));
+        return (short)MathF.Round(Math.Clamp(value, -1, 1) * 32767);
     }
-    private static void WriteSnorm3(byte[] bytes, int offset, Vector3 value)
-    { WriteSnorm(bytes, offset, value.X); WriteSnorm(bytes, offset + 2, value.Y); WriteSnorm(bytes, offset + 4, value.Z); }
-    private static void WriteVector(byte[] bytes, int offset, Vector3 value)
-    { F(bytes, offset, value.X); F(bytes, offset + 4, value.Y); F(bytes, offset + 8, value.Z); }
-    private static uint U(byte[] bytes, int p) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(p));
-    private static void U(byte[] bytes, int p, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(p), value);
-    private static ushort S(byte[] bytes, int p) => BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(p));
-    private static void S(byte[] bytes, int p, ushort value) => BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(p), value);
-    private static long Q(byte[] bytes, int p) => BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(p));
-    private static void Q(byte[] bytes, int p, long value) => BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(p), value);
-    private static void F(byte[] bytes, int p, float value) => BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(p), value);
+
+    /** The member of a T at offset 0; only that member must fit, not the whole T. */
+    private static ref TField Member<T, TField>(byte[] bytes, string member) where T : unmanaged where TField : unmanaged =>
+        ref TagView.Edit<TField>(bytes, TagView.FieldOffset<T>(member));
+
+    /**
+     * Rows of an array field. No rows and no header reads as empty; otherwise it needs at most
+     * MaximumReaderRows rows and a well-formed header of `elementClass`, with its rows inside the tag.
+     */
+    private static ReadOnlySpan<TRow> Rows<TRow>(byte[] bytes, ref readonly TagArray<TRow> field, uint elementClass)
+        where TRow : unmanaged
+    {
+        if (field.Count == 0 && field.Relative == 0) return [];
+        // Only a long overflow throws; a header past the int range fails the layout checks.
+        long header = checked(TagView.OffsetOf(bytes, in field.Relative) + field.Relative);
+        var array = new TagArray(bytes, TagView.OffsetOf(bytes, in field));
+        if (field.Count is < 0 or > TagArray.MaximumReaderRows || header < TagView.ClassWordSize || header > bytes.Length - TagArray.HeaderSize
+            || !array.IsWellFormed || array.ElementClass != elementClass
+            || field.Count * Unsafe.SizeOf<TRow>() > bytes.Length - header - TagArray.HeaderSize)
+            throw new InvalidDataException("Invalid typed native array.");
+        return MemoryMarshal.Cast<byte, TRow>(bytes.AsSpan(array.DataOffset, (int)field.Count * Unsafe.SizeOf<TRow>()));
+    }
+
+    /** One position of declaration 123: snorm16 XYZ; W stays zero. */
+    [StructLayout(LayoutKind.Sequential, Pack = 2)]
+    private struct PositionVertex
+    {
+        public short X, Y, Z, W;
+    }
+
+    /**
+     * One attribute vertex of declaration 123: snorm16 UV, normal and tangent.
+     * The tangent's W lane holds the handedness; the normal's W stays zero.
+     */
+    [StructLayout(LayoutKind.Sequential, Pack = 2)]
+    private struct AttributeVertex
+    {
+        public short U, V, NormalX, NormalY, NormalZ, NormalW, TangentX, TangentY, TangentZ, Handedness;
+    }
 }

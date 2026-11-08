@@ -1,5 +1,8 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -25,10 +28,13 @@ public static partial class CuiPropertyEdits
             && (other.Offset == component.Offset || other.Properties.Any(candidate => candidate.RecordOffset == property.RecordOffset)));
         if (!shared) return Apply(bytes, document, new Dictionary<CuiProperty, ReadOnlyMemory<byte>> { [property] = value });
         byte[] detached = bytes.ToArray();
-        int components = CloneArray(ref detached, objectRow.Offset + 32, 0x808046D4, 24, [16]);
-        int target = components + owner.ComponentIndex * 24;
-        _ = CloneArray(ref detached, target + 8, 0x80804858, 24, [0, 16]);
-        BinaryPrimitives.WriteInt64LittleEndian(detached, detached.Length);
+        int componentStride = Unsafe.SizeOf<CuiComponentRow>();
+        int componentsField = TagView.OffsetOf(detached, in TagView.At<CuiObjectRow>(detached, objectRow.Offset).Components);
+        int components = CloneArray(ref detached, componentsField, CuiComponentRow.Class, componentStride, [ComponentPointer]);
+        int target = components + owner.ComponentIndex * componentStride;
+        _ = CloneArray(ref detached, TagView.OffsetOf(detached, in TagView.At<CuiComponentRow>(detached, target).Properties),
+            CuiPropertyRow.Class, Unsafe.SizeOf<CuiPropertyRow>(), PropertyPointers);
+        BinaryPrimitives.WriteInt64LittleEndian(detached.AsSpan(SizeWord), detached.Length);
         var copy = CuiDocument.Read(document.TagHash, document.ClassHash, detached, nativeTypes: document.NativeTypes);
         var selected = copy.Objects[owner.ObjectIndex].Components[owner.ComponentIndex].Properties[index];
         return Apply(detached, copy, new Dictionary<CuiProperty, ReadOnlyMemory<byte>> { [selected] = value });

@@ -40,8 +40,7 @@ internal static class WeaponHudIconWorkflowChecks
         var created = workspace.Project.AddedAssets.Skip(beforeAssets).ToArray();
         Check(created.Length == 4 && catalog.Read(weapon.Tag).SequenceEqual(oldDefinition),
             "HUD editing changed the weapon definition or allocated the wrong asset count.");
-        uint Tag(SunriseStudio.Projects.AddedProjectAsset asset) => 0x80800000u
-            + ((uint)asset.Native!.PackageId << 13) + (uint)asset.Native.EntryIndex!.Value;
+        uint Tag(SunriseStudio.Projects.AddedProjectAsset asset) => TagHashes.Make(asset.Native!.PackageId, asset.Native.EntryIndex!.Value);
         uint config = Tag(created.Single(asset => asset.Name.EndsWith(".hud.config")));
         uint texture = Tag(created.Single(asset => asset.Name.EndsWith(".hud.texture")));
         Check(WeaponConfigEdits.ConstructionConfigs(catalog.Read(root)).Contains(config),

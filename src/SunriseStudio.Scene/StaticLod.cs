@@ -1,5 +1,6 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -40,14 +41,19 @@ public static class StaticLod
         var transform = instance.Transform;
         float scale = new Vector3(transform.M11, transform.M12, transform.M13).Length();
         var row = instance.NativeInstanceData.Span;
-        // Instance row +0x20 scales the first two sizes, +0x24 the third.
-        float near = row.Length >= 0x28 ? BinaryPrimitives.ReadSingleLittleEndian(row[0x20..]) : 1;
-        float far = row.Length >= 0x28 ? BinaryPrimitives.ReadSingleLittleEndian(row[0x24..]) : 1;
+        // The near scale applies to the first two sizes, the far scale to the third.
+        bool scaled = TagView.FitsThrough<SStaticInstanceTransform>(row, 0, nameof(SStaticInstanceTransform.LodFarScale));
+        float near = scaled ? Scale(row, nameof(SStaticInstanceTransform.LodNearScale)) : 1;
+        float far = scaled ? Scale(row, nameof(SStaticInstanceTransform.LodFarScale)) : 1;
         var sizes = new Vector3(MathF.Max(1, scale * part.Sizes.X * near), MathF.Max(1, scale * part.Sizes.Y * near),
             MathF.Max(1, scale * part.Sizes.Z * far));
         var center = Vector3.Transform(new Vector3(part.Sphere.X, part.Sphere.Y, part.Sphere.Z), transform);
         return new(center, sizes, part.Levels);
     }
+
+    /** One scale of an instance row; the rest of the row need not be present. */
+    private static float Scale(ReadOnlySpan<byte> row, string member) =>
+        TagView.Member<SStaticInstanceTransform, float>(row, 0, member);
 
     /**
      * The default scales with the zoom term of 0x7FF742E43C20, at environment_detail 1.

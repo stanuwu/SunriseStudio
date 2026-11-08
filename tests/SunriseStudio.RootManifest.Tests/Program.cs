@@ -52,8 +52,8 @@ foreach (var row in rows)
     }
     foreach (var group in original.Groups)
     {
-        var expected = group.Entries.Concat(retained.Where(tag => (tag - 0x80800000u) >> 13 == group.PackageId)
-            .Select(tag => (int)(tag & 8191))).ToHashSet();
+        var expected = group.Entries.Concat(retained.Where(tag => TagHashes.Package(tag) == group.PackageId)
+            .Select(tag => TagHashes.Entry(tag))).ToHashSet();
         var actual = manifest.Groups.Single(current => current.PackageId == group.PackageId).Entries;
         Check(actual.SetEquals(expected), $"Manifest {manifestTag:X8} changed package {group.PackageId:X4}: extra "
             + string.Join(",", actual.Except(expected).Select(entry => entry.ToString("X"))) + ", missing "
@@ -72,7 +72,7 @@ var globals = PackageManifest.Read(built.Read(0x81A2926F));
 var shared = PackageManifest.Read(built.Read(0x80EE8CBD));
 // The installed records each authored particle system draws with must load beside it.
 var required = new Queue<uint>(project.AddedAssets.Where(asset => asset.Native?.Reference == 0x80806E28)
-    .Select(asset => 0x80800000u + ((uint)asset.Native!.PackageId << 13) + (uint)asset.Native.EntryIndex!.Value)
+    .Select(asset => TagHashes.Make(asset.Native!.PackageId, asset.Native.EntryIndex!.Value))
     .SelectMany(system => new[] { 4, 8, 0x10, 0x14, 0x18, 0x1C }
         .Select(offset => BinaryPrimitives.ReadUInt32LittleEndian(built.Read(system).AsSpan(offset))))
     .Where(tag => catalog.TryGetEntry(tag, out _)));
@@ -139,7 +139,7 @@ Console.WriteLine($"root_manifests count={rows.Length} native_map=pass flags=pre
 static void Check(bool value, string message) { if (!value) throw new InvalidDataException(message); }
 static uint U32(byte[] data, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset));
 static uint Tag(AddedProjectAsset asset) =>
-    0x80800000u + ((uint)asset.Native!.PackageId << 13) + (uint)asset.Native.EntryIndex!.Value;
+    TagHashes.Make(asset.Native!.PackageId, asset.Native.EntryIndex!.Value);
 
 // Item definition and display index rows pair up by row number; each names its tag at +16.
 static Dictionary<uint, uint> ItemDisplays(PackageCatalog catalog)

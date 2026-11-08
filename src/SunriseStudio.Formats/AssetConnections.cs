@@ -1,6 +1,9 @@
+using System.Runtime.CompilerServices;
 using SunriseStudio.Animation;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -48,7 +51,7 @@ public sealed class AssetConnectionReader(PackageCatalog catalog)
     public IReadOnlyList<RelatedAsset> ReadNativeReferences(uint tag, CancellationToken token = default) =>
         ReadDirect(tag, null, token);
 
-    private const uint EntityClass = 0x80809C0F, ConfigClass = 0x80809C36, ModelClass = 0x808073A5;
+    private const uint EntityClass = SEntity.Class, ConfigClass = SEntityConfig.Class, ModelClass = SEntityModel.Class;
     private sealed record ModelLink(uint Config, uint Model, int Offset);
     private sealed record EntityLinks(uint Tag, uint[] Configs, ModelLink[] Models,
         EntityAnimationReference[] Clips, uint[] Skeletons);
@@ -88,7 +91,7 @@ public sealed class AssetConnectionReader(PackageCatalog catalog)
 
         EntityLinks? owner = null;
         if (Class(tag) == EntityClass) Safe(() => owner = Entity(tag));
-        else if (Class(tag) is ModelClass or ConfigClass or 0x80808F49 or 0x808036F6
+        else if (Class(tag) is ModelClass or ConfigClass or SAnimationClip.Class or SAnimationDefinition.Class
             && context?.EntityTag is > 0 and var contextEntity && Class(contextEntity) == EntityClass)
         {
             Safe(() =>
@@ -96,8 +99,8 @@ public sealed class AssetConnectionReader(PackageCatalog catalog)
                 var found = Entity(contextEntity);
                 bool linked = found.Models.Any(model => model.Model == tag && (context.ConfigTag == 0 || model.Config == context.ConfigTag))
                     || entry.Reference == ConfigClass && found.Configs.Contains(tag)
-                    || entry.Reference == 0x80808F49 && found.Clips.Any(clip => clip.ClipTag == tag)
-                    || entry.Reference == 0x808036F6 && found.Clips.Any(clip => clip.DefinitionTag == tag);
+                    || entry.Reference == SAnimationClip.Class && found.Clips.Any(clip => clip.ClipTag == tag)
+                    || entry.Reference == SAnimationDefinition.Class && found.Clips.Any(clip => clip.DefinitionTag == tag);
                 if (linked) owner = found;
                 else diagnostics.Add("Owner: no typed link to this asset");
             });
@@ -129,10 +132,10 @@ public sealed class AssetConnectionReader(PackageCatalog catalog)
         {
             context = (context ?? new()) with { EntityTag = owner.Tag };
             entityCandidates.Add(owner.Tag);
-            if (entry.Reference is EntityClass or ModelClass or ConfigClass or 0x80808F49 or 0x808036F6)
+            if (entry.Reference is EntityClass or ModelClass or ConfigClass or SAnimationClip.Class or SAnimationDefinition.Class)
                 preview = owner.Tag;
             if (owner.Skeletons.Length != 0) animationEntity = owner.Tag;
-            if (entry.Reference == 0x80808F49 && owner.Clips.Any(clip => clip.ClipTag == tag)) selectedClip = tag;
+            if (entry.Reference == SAnimationClip.Class && owner.Clips.Any(clip => clip.ClipTag == tag)) selectedClip = tag;
             Add(owner.Tag, AssetRelationshipKind.Owner, "Entity owner", owner.Tag, -1, new(owner.Tag));
             foreach (var model in owner.Models)
                 Add(model.Model, AssetRelationshipKind.Model, "Model", model.Config, model.Offset,
@@ -148,9 +151,11 @@ public sealed class AssetConnectionReader(PackageCatalog catalog)
                 Safe(() =>
                 {
                     var attachments = new AssetSceneLoader(catalog).DescribeEntityAttachments(owner.Tag);
+                    // SourceOffset is a weapon reference row; the link names its entity field.
+                    int entityField = TagView.FieldOffset<UnknownWeaponReference>("WeaponEntity");
                     foreach (var weapon in attachments.Loadouts.SelectMany(loadout => loadout.Weapons))
                         Add(weapon.EntityTag, AssetRelationshipKind.Attachment, "Weapon option", weapon.ConfigTag,
-                            weapon.SourceOffset + 8, new(weapon.EntityTag));
+                            weapon.SourceOffset + entityField, new(weapon.EntityTag));
                 });
         }
         Safe(() => links.AddRange(ReadDirect(tag, context, token).Select(edge => edge with { Name = Name(edge.TagHash) })));
@@ -210,38 +215,50 @@ public sealed class AssetConnectionReader(PackageCatalog catalog)
     private ModelLink? ReadModelConfig(uint tag)
     {
         if (Class(tag) != ConfigClass) return null;
-        var data = new TagReader(catalog.Read(tag));
-        int resource = data.Relative(0x18);
-        if (resource < 4 || !data.Has(resource, 0x1E0) || data.U32(resource - 4) is not (0x808072BD or 0x80807286)) return null;
-        if (data.U32(resource) != tag) throw new InvalidDataException("Model component has the wrong config owner.");
-        if (data.U32(resource - 4) == 0x80807286)
+        byte[] data = catalog.Read(tag);
+        int resource = TagPointer.Checked(data, TagView.FieldOffset<SEntityConfig>("Definition"));
+        uint? resourceClass = resource < 4 ? null : TagView.ClassAt(data, resource);
+        bool cloth = resourceClass == SClothModelComponent.Class;
+        // The component needs to hold only the bytes through Model.
+        if (resourceClass is not (SModelComponent.Class or SClothModelComponent.Class)
+            || !(cloth ? TagView.FitsThrough<SClothModelComponent>(data, resource, "Model")
+                : TagView.FitsThrough<SModelComponent>(data, resource, "Model"))) return null;
+        int Member(string name) => resource
+            + (cloth ? TagView.FieldOffset<SClothModelComponent>(name) : TagView.FieldOffset<SModelComponent>(name));
+        if (TagRead.U32(data, Member("OwnerConfig.Tag")) != tag)
+            throw new InvalidDataException("Model component has the wrong config owner.");
+        if (cloth)
         {
-            int primary = data.Relative(0x10);
-            if (primary < 4 || data.U32(primary - 4) != 0x80807273)
+            int primary = TagPointer.Checked(data, TagView.FieldOffset<SEntityConfig>("DefaultInstance"));
+            if (primary < 4 || TagView.ClassAt(data, primary) != SClothModelPrimary.Class)
                 throw new InvalidDataException("Cloth model component has the wrong primary class.");
         }
-        uint model = data.U32(resource + 0x1DC);
-        return Class(model) == ModelClass ? new(tag, model, resource + 0x1DC) : null;
+        int modelAt = Member("Model");
+        uint model = TagRead.U32(data, modelAt);
+        return Class(model) == ModelClass ? new(tag, model, modelAt) : null;
     }
 
     /** Entity config membership keeps shared models and clip lists tied to their original owner. */
     private EntityLinks ReadEntity(uint tag, CancellationToken token)
     {
         if (Class(tag) != EntityClass) throw new InvalidDataException("Animation owner is not an entity definition.");
-        var data = new TagReader(catalog.Read(tag));
-        var rows = data.Array(0x10, 0x80809C04, 12);
+        byte[] data = catalog.Read(tag);
+        int stride = Unsafe.SizeOf<SPatternComponent>();
+        var rows = TagArray.Checked(data, TagView.FieldOffset<SEntity>("Components"), SPatternComponent.Class, stride);
         var configs = new List<uint>(); var models = new List<ModelLink>(); var skeletons = new List<uint>();
         for (int index = 0; index < rows.Count; index++)
         {
             token.ThrowIfCancellationRequested();
-            uint config = data.U32(rows.Data + index * 12);
+            uint config = TagView.At<SPatternComponent>(data, rows.Data + index * stride).Config;
             if (Class(config) != ConfigClass) continue;
             configs.Add(config);
             if (ReadModelConfig(config) is { } model) models.Add(model);
-            var configData = new TagReader(catalog.Read(config));
-            int primary = configData.Relative(0x10), secondary = configData.Relative(0x18);
-            if (primary >= 4 && secondary >= 4 && configData.Has(primary - 4, 4) && configData.Has(secondary - 4, 4)
-                && configData.U32(primary - 4) == 0x80808545 && configData.U32(secondary - 4) == 0x80808546)
+            byte[] configData = catalog.Read(config);
+            int primary = TagPointer.Checked(configData, TagView.FieldOffset<SEntityConfig>("DefaultInstance"));
+            int secondary = TagPointer.Checked(configData, TagView.FieldOffset<SEntityConfig>("Definition"));
+            if (primary >= 4 && secondary >= 4
+                && TagView.ClassAt(configData, primary) == SSkeletonPrimary.Class
+                && TagView.ClassAt(configData, secondary) == SSkeletonResource.Class)
                 skeletons.Add(config);
         }
         return new(tag, configs.ToArray(), models.ToArray(), new EntityAnimationCatalog(catalog).Read(tag).ToArray(), skeletons.ToArray());
@@ -265,55 +282,88 @@ public sealed class AssetConnectionReader(PackageCatalog catalog)
             && payload.Type == entry.Type + 8 && payload.SubType == entry.SubType)
             Add(entry.Reference, AssetRelationshipKind.Data, "Data", -1);
         if (!AssetCategories.IsStructured(entry)) return result;
-        var data = new TagReader(catalog.Read(tag));
-        void Array(int field, uint type, int stride, Action<int, int> action)
+        byte[] data = catalog.Read(tag);
+        void Array<T>(int field, uint type, Action<int, int> action) where T : unmanaged
         {
-            var rows = data.Array(field, type, stride);
+            int stride = Unsafe.SizeOf<T>();
+            var rows = TagArray.Checked(data, field, type, stride);
             for (int index = 0; index < rows.Count; index++) { token.ThrowIfCancellationRequested(); action(rows.Data + index * stride, index); }
         }
+        void Reference(ref readonly uint target, AssetRelationshipKind kind, string role, uint expected = 0,
+            int? expectedType = null, int? expectedSubtype = null) =>
+            Add(target, kind, role, TagView.OffsetOf(data, in target), expected, expectedType, expectedSubtype);
+        // Reads one word; the tag need not hold the whole struct around it.
+        void Word(int at, AssetRelationshipKind kind, string role, uint expected = 0, int? expectedType = null,
+            int? expectedSubtype = null) => Add(TagRead.U32(data, at), kind, role, at, expected, expectedType, expectedSubtype);
         switch (entry.Reference)
         {
             case EntityClass:
-                Array(0x10, 0x80809C04, 12, (p, i) => Add(data.U32(p), AssetRelationshipKind.Component, $"Component {i}", p, ConfigClass));
+                Array<SPatternComponent>(TagView.FieldOffset<SEntity>("Components"), SPatternComponent.Class, (p, i) =>
+                    Reference(in TagView.At<SPatternComponent>(data, p).Config, AssetRelationshipKind.Component, $"Component {i}", ConfigClass));
                 break;
             case ConfigClass:
+            {
                 if (ReadModelConfig(tag) is { } model) Add(model.Model, AssetRelationshipKind.Model, "Model", model.Offset, ModelClass);
-                int primary = data.Relative(0x10);
-                if (primary >= 4 && data.Has(primary, 0xD4) && data.U32(primary - 4) == 0x808036E2)
-                    Add(data.U32(primary + 0xD0), AssetRelationshipKind.AnimationDefinition, "Animation definition", primary + 0xD0, 0x808036F6);
+                const string definition = "H624f85f9.AnimationDefinition";
+                int primary = TagPointer.Checked(data, TagView.FieldOffset<SEntityConfig>("DefaultInstance"));
+                if (primary >= 4 && TagView.FitsThrough<SAnimationComponent>(data, primary, definition)
+                    && TagView.ClassAt(data, primary) == SAnimationComponent.Class)
+                    Word(primary + TagView.FieldOffset<SAnimationComponent>(definition),
+                        AssetRelationshipKind.AnimationDefinition, "Animation definition", SAnimationDefinition.Class);
                 break;
-            case 0x808071A7:
-                Add(data.U32(8), AssetRelationshipKind.Model, "Mesh data", 8, 0x80807194);
-                Array(0x10, 0x80800014, 4, (p, _) => Add(data.U32(p), AssetRelationshipKind.Material, "Material", p, 0x808071E8));
+            }
+            case SStaticMesh.Class:
+                Word(TagView.FieldOffset<SStaticMesh>("MeshData"), AssetRelationshipKind.Model, "Mesh data", SStaticMeshData.Class);
+                Array<TagReferenceElement>(TagView.FieldOffset<SStaticMesh>("Materials"), TagReferenceElement.Class, (p, _) =>
+                    Reference(in TagView.At<TagReferenceElement>(data, p).Tag, AssetRelationshipKind.Material, "Material", STechnique.Class));
                 break;
-            case 0x80807194:
-                Array(0x28, 0x80807199, 16, (p, i) =>
+            case SStaticMeshData.Class:
+            {
+                Array<SStaticBufferGroup>(TagView.FieldOffset<SStaticMeshData>("Buffers"), SStaticBufferGroup.Class, (p, i) =>
                 {
-                    Add(data.U32(p), AssetRelationshipKind.Buffer, $"Indices {i}", p, expectedType: 32, expectedSubtype: 6);
-                    Add(data.U32(p + 4), AssetRelationshipKind.Buffer, $"Positions {i}", p + 4, expectedType: 32, expectedSubtype: 4);
-                    Add(data.U32(p + 8), AssetRelationshipKind.Buffer, $"Attributes {i}", p + 8, expectedType: 32, expectedSubtype: 4);
+                    ref readonly var buffers = ref TagView.At<SStaticBufferGroup>(data, p);
+                    Reference(in buffers.IndexBuffer, AssetRelationshipKind.Buffer, $"Indices {i}", expectedType: 32, expectedSubtype: 6);
+                    Reference(in buffers.PositionBuffer[0].Unk0, AssetRelationshipKind.Buffer, $"Positions {i}", expectedType: 32, expectedSubtype: 4);
+                    Reference(in buffers.PositionBuffer[1].Unk0, AssetRelationshipKind.Buffer, $"Attributes {i}", expectedType: 32, expectedSubtype: 4);
                 });
                 break;
+            }
             case ModelClass:
-                Array(0x10, 0x80807378, 0x88, (p, i) =>
+            {
+                Array<SEntityModelMesh>(TagView.FieldOffset<SEntityModel>("Meshes"), SEntityModelMesh.Class, (p, i) =>
                 {
-                    foreach (var (field, role) in new[] { (0, "Positions"), (4, "Attributes"), (8, "Skin weights"), (16, "Indices") })
-                        Add(data.U32(p + field), AssetRelationshipKind.Buffer, $"{role} {i}", p + field,
-                            expectedType: 32, expectedSubtype: field == 16 ? 6 : 4);
-                    Array(p + 0x18, 0x8080737E, 0x20, (part, _) => Add(data.U32(part), AssetRelationshipKind.Material, "Material", part, 0x808071E8));
+                    ref readonly var mesh = ref TagView.At<SEntityModelMesh>(data, p);
+                    Reference(in mesh.VertexBuffer0[0].Unk0, AssetRelationshipKind.Buffer, $"Positions {i}", expectedType: 32, expectedSubtype: 4);
+                    Reference(in mesh.VertexBuffer0[1].Unk0, AssetRelationshipKind.Buffer, $"Attributes {i}", expectedType: 32, expectedSubtype: 4);
+                    Reference(in mesh.VertexBuffer0[2].Unk0, AssetRelationshipKind.Buffer, $"Skin weights {i}", expectedType: 32, expectedSubtype: 4);
+                    Reference(in mesh.IndexBuffer, AssetRelationshipKind.Buffer, $"Indices {i}", expectedType: 32, expectedSubtype: 6);
+                    Array<SEntityModelPart>(TagView.OffsetOf(data, in mesh.Parts), SEntityModelPart.Class, (part, _) =>
+                        Reference(in TagView.At<SEntityModelPart>(data, part).Material, AssetRelationshipKind.Material, "Material", STechnique.Class));
                 });
                 break;
-            case 0x808071E8:
-                foreach (var (start, stage, subtype) in new[] { (0x48, "Vertex", 1), (0x2C8, "Pixel", 0), (0x368, "Compute", 6) })
+            }
+            case STechnique.Class:
+            {
+                foreach (var (field, stage, subtype) in new[] { ("VertexShader", "Vertex", 1), ("PixelShader", "Pixel", 0), ("ComputeShader", "Compute", 6) })
                 {
-                    Add(data.U32(start), AssetRelationshipKind.Shader, stage + " shader", start, expectedType: 33, expectedSubtype: subtype);
-                    Array(start + 8, 0x80807211, 8, (p, _) => Add(data.U32(p + 4), AssetRelationshipKind.Texture,
-                        $"{stage} texture {data.U32(p)}", p + 4, expectedType: 32));
+                    int start = TagView.FieldOffset<STechnique>(field);
+                    Word(start + TagView.FieldOffset<ShaderStage>("Shader"), AssetRelationshipKind.Shader, stage + " shader",
+                        expectedType: 33, expectedSubtype: subtype);
+                    Array<SMaterialTextureAssignment>(start + TagView.FieldOffset<ShaderStage>("State.StaticTextures.Textures"),
+                        SMaterialTextureAssignment.Class, (p, _) =>
+                    {
+                        ref readonly var texture = ref TagView.At<SMaterialTextureAssignment>(data, p);
+                        Reference(in texture.Texture, AssetRelationshipKind.Texture, $"{stage} texture {texture.TextureSlot}", expectedType: 32);
+                    });
                 }
                 break;
-            case 0x808036F6:
-                Array(8, 0x80808F48, 4, (p, i) => Add(data.U32(p), AssetRelationshipKind.AnimationClip, $"Clip {i}", p, 0x80808F49));
+            }
+            case SAnimationDefinition.Class:
+            {
+                Array<SAnimationClipSlot>(TagView.FieldOffset<SAnimationDefinition>("Animations"), SAnimationClipSlot.Class, (p, i) =>
+                    Reference(in TagView.At<SAnimationClipSlot>(data, p).Clip, AssetRelationshipKind.AnimationClip, $"Clip {i}", SAnimationClip.Class));
                 break;
+            }
         }
         return result;
     }

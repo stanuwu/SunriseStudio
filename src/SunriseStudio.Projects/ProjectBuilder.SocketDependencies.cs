@@ -1,5 +1,8 @@
-using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using PackageManifest = SunriseStudio.Packages.PackageManifest;
 
 namespace SunriseStudio.Projects;
 
@@ -7,7 +10,7 @@ public static partial class ProjectBuilder
 {
     private const uint SocketDependencyManifest = 0x81A2926F;
     private const uint SocketItemIndex = 0x81327CCB, SocketDisplayIndex = 0x81613CF1;
-    private const uint SocketPlugSets = 0x81319349, SocketItemClass = 0x80807BEA;
+    private const uint SocketPlugSets = 0x81319349, SocketItemClass = ItemDefinition.Class;
 
     /** The Collections constructor reads plug definitions before its later plug-load pass. */
     private static Dictionary<uint, uint> PlanSocketDependencies(PackageCatalog catalog,
@@ -20,38 +23,44 @@ public static partial class ProjectBuilder
         if (items.Length == 0 || !added.Any(asset => asset.Class == SocketItemClass)) return [];
         byte[] Read(uint tag) => edited.TryGetValue(tag, out var current) ? current : catalog.Read(tag);
         byte[] definitions = Read(SocketItemIndex), displays = Read(SocketDisplayIndex), sets = Read(SocketPlugSets);
-        int[] definitionRows = SocketRows(definitions, 8, 0x80807BE8, 24);
-        int[] displayRows = SocketRows(displays, 8, 0x80805CDF, 24);
-        int[] sharedRows = SocketRows(sets, 8, 0x80802DFF, 24);
+        int[] definitionRows = SocketRows<ItemIndexRow>(definitions, TagView.FieldOffset<ItemIndexTable>("Table"), ItemIndexRow.Class);
+        int[] displayRows = SocketRows<ItemStringsIndexRow>(displays, TagView.FieldOffset<C80805cdb>("Table"), ItemStringsIndexRow.Class);
+        int[] sharedRows = SocketRows<SPlugSetRow>(sets, TagView.FieldOffset<C80802cb6>("Table"), SPlugSetRow.Class);
         if (definitionRows.Length != displayRows.Length)
             throw new InvalidDataException("Socket dependency item tables do not match.");
         var result = new Dictionary<uint, uint>();
-        var pending = new Queue<(uint Tag, byte[] Data)>(items.Where(item => item.Data.Length < 188 || item.Data[184] <= 2));
+        const string ShortestItemEnd = "InventoryItemBlock.Instanced";
+        var pending = new Queue<(uint Tag, byte[] Data)>(items.Where(item =>
+            !TagView.FitsThrough<ItemDefinition>(item.Data, 0, ShortestItemEnd)
+            || SocketField<ItemDefinition, byte>(item.Data, 0, "InventoryItemBlock.InventoryBucket") <= 2));
         var visited = new HashSet<uint>();
         while (pending.TryDequeue(out var current))
         {
             var (owner, data) = current;
             if (!visited.Add(owner)) continue;
-            if (data.Length < 188 || SocketI64(data, 0) != data.Length)
+            if (!TagView.FitsThrough<ItemDefinition>(data, 0, ShortestItemEnd)
+                || SocketField<ItemDefinition, long>(data, 0, "TagSize") != data.Length)
                 throw new InvalidDataException("A socket dependency item is truncated.");
-            long relative = SocketI64(data, 104);
-            if (relative == 0) continue;
-            int block = checked((int)(104 + relative));
-            if (block < 4 || block > data.Length - 32 || SocketU32(data, block - 4) != 0x808077C1)
+            ref readonly var socketBlock = ref TagView.At<RelativePointer<SItemSocketBlock>>(data,
+                TagView.FieldOffset<ItemDefinition>("SocketsItemBlock"));
+            if (TagView.TargetOffset(data, in socketBlock) is not { } block) continue;
+            if (block < 4 || !TagView.Fits<SItemSocketBlock>(data, block)
+                || TagView.TargetClass(data, in socketBlock) != SItemSocketBlock.Class)
                 throw new InvalidDataException("A socket dependency block has an unsupported type.");
-            int[] sockets = SocketRows(data, block, 0x808077C4, 80);
+            int[] sockets = SocketRows<ItemOrdinarySocketEntry>(data, block + TagView.FieldOffset<SItemSocketBlock>("Sockets"),
+                ItemOrdinarySocketEntry.Class);
             if (sockets.Length > 12) throw new InvalidDataException("A socket dependency item exceeds twelve lanes.");
             foreach (int socket in sockets)
             {
-                Add(SocketU16(data, socket + 2), owner);
-                Members(data, socket + 64, owner);
-                foreach (int field in new[] { 12, 32 })
+                ref readonly var entry = ref TagView.At<ItemOrdinarySocketEntry>(data, socket);
+                Add(entry.InitialPlugItem, owner);
+                Members(data, TagView.OffsetOf(data, in entry.EmbeddedPlugs), owner);
+                foreach (ushort shared in new[] { entry.ReusablePlugSetRow, entry.RandomizedPlugSetRow })
                 {
-                    ushort shared = SocketU16(data, socket + field);
                     if (shared == ushort.MaxValue) continue;
                     if (shared >= sharedRows.Length)
                         throw new InvalidDataException("A socket dependency plug set is outside its table.");
-                    Members(sets, sharedRows[shared] + 8, owner);
+                    Members(sets, sharedRows[shared] + TagView.FieldOffset<SPlugSetRow>("Entries"), owner);
                 }
             }
         }
@@ -62,19 +71,21 @@ public static partial class ProjectBuilder
 
         void Members(byte[] bytes, int field, uint owner)
         {
-            foreach (int row in SocketRows(bytes, field, 0x80802E03, 32)) Add(SocketU32(bytes, row), owner);
+            foreach (int row in SocketRows<PlugSetMember>(bytes, field, PlugSetMember.Class))
+                Add(TagView.At<PlugSetMember>(bytes, row).PlugItemIndex, owner);
         }
         void Add(uint index, uint owner)
         {
             if (index is ushort.MaxValue or uint.MaxValue) return;
             if (index >= 0x8000 || index >= definitionRows.Length)
                 throw new InvalidDataException("A socket dependency names an unreachable item index.");
-            int row = definitionRows[index], display = displayRows[index];
-            uint tag = SocketU32(definitions, row + 16);
+            ref readonly var definition = ref TagView.At<ItemIndexRow>(definitions, definitionRows[index]);
+            ref readonly var display = ref TagView.At<ItemStringsIndexRow>(displays, displayRows[index]);
+            uint tag = definition.ItemDefinition;
             if (!authored.TryGetValue(tag, out var item)) return;
-            uint displayTag = SocketU32(displays, display + 16);
-            if (item.Class != SocketItemClass || SocketU32(definitions, row) != SocketU32(displays, display)
-                || !authored.TryGetValue(displayTag, out var label) || label.Class != 0x80805CE1)
+            uint displayTag = display.ItemDisplay;
+            if (item.Class != SocketItemClass || definition.ItemHash != display.ItemHash
+                || !authored.TryGetValue(displayTag, out var label) || label.Class != ItemDisplayStrings.Class)
                 throw new InvalidDataException("An authored socket plug has no matching definition and display.");
             if (result.TryAdd(tag, owner)) pending.Enqueue((tag, item.Data));
             result.TryAdd(displayTag, owner);
@@ -82,22 +93,25 @@ public static partial class ProjectBuilder
     }
 
     /** Dependency indexes are read only from bounded arrays with the native element class. */
-    private static int[] SocketRows(byte[] data, int field, uint type, int stride)
+    private static int[] SocketRows<T>(byte[] data, int field, uint type) where T : unmanaged
     {
-        if (field < 0 || field > data.Length - 16)
+        int stride = Unsafe.SizeOf<T>();
+        if (field < 0 || field > data.Length - Unsafe.SizeOf<TagArray<T>>())
             throw new InvalidDataException("A socket dependency array is truncated.");
-        long count = SocketI64(data, field);
+        var array = new TagArray(data, field);
+        long count = array.Count;
         if (count == 0) return [];
-        long header = field + 8 + SocketI64(data, field + 8);
-        if (count < 0 || count > 32768 || header < 4 || header > data.Length - 16
-            || count > (data.Length - header - 16) / stride
-            || SocketU32(data, (int)header - 4) != 0x80809FBD
-            || SocketI64(data, (int)header) != count || SocketU32(data, (int)header + 8) != type)
+        var header = array.Header;
+        if (count < 0 || count > 32768 || header.Offset < 4 || header.Offset > data.Length - TagArray.HeaderSize
+            || count > (data.Length - header.DataOffset) / stride
+            || !TagArray.MarkerAt(data, header.Offset)
+            || header.Count != count || header.ElementClass != type)
             throw new InvalidDataException("A socket dependency array has an invalid native layout.");
-        return Enumerable.Range(0, (int)count).Select(index => checked((int)header + 16 + index * stride)).ToArray();
+        int first = checked((int)header.DataOffset);
+        return Enumerable.Range(0, (int)count).Select(index => checked(first + index * stride)).ToArray();
     }
 
-    private static ushort SocketU16(byte[] data, int at) => BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(at));
-    private static uint SocketU32(byte[] data, int at) => BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(at));
-    private static long SocketI64(byte[] data, int at) => BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(at));
+    /** @return The `member` of a TOwner at `owner`, read as T; the caller checks that it fits. */
+    private static T SocketField<TOwner, T>(byte[] data, int owner, string member) where TOwner : unmanaged where T : unmanaged =>
+        TagView.At<T>(data, owner + TagView.FieldOffset<TOwner>(member));
 }

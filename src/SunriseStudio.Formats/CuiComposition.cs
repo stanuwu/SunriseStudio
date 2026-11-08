@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Numerics;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Formats;
 
@@ -44,7 +45,7 @@ public sealed class CuiComposition
 
     public static CuiComposition Read(CuiDocument program, Func<uint, CuiDocument> readResource)
     {
-        if (program.ClassHash != 0x8080496A) throw new InvalidDataException("Select a CUI hierarchy.");
+        if (program.ClassHash != SCuiHierarchy.Class) throw new InvalidDataException("Select a CUI hierarchy.");
         Dictionary<uint, CuiDocument> resources = [];
         Dictionary<int, CuiComposedNode> nodes = [];
         Dictionary<int, Dictionary<string, CuiAuthoredProperty>> values = [];
@@ -57,7 +58,7 @@ public sealed class CuiComposition
             {
                 if (resources.Count >= 5120) throw new InvalidDataException("CUI import graph exceeds the native node limit.");
                 resource = readResource(tag);
-                if (resource.ClassHash != 0x80804825) throw new InvalidDataException("CUI import is not a widget resource.");
+                if (resource.ClassHash != CuiResource.Class) throw new InvalidDataException("CUI import is not a widget resource.");
                 resources.Add(tag, resource);
             }
             return resource;
@@ -149,7 +150,7 @@ public sealed class CuiComposition
                 {
                     uint mode = 1;
                     foreach (var property in child.Properties.Where(p => p.Property.Direct && p.Property.Selector == 0x20F))
-                        if (property.Property.ValueClass == 0x80804696)
+                        if (property.Property.ValueClass == CuiIntegerValue.Class)
                             mode = BinaryPrimitives.ReadUInt32LittleEndian(property.Source.Data.Span[property.Property.ValueOffset..]);
                     if (mode == 0)
                     {
@@ -185,9 +186,9 @@ public sealed class CuiComposition
 
     private static float? Float(CuiAuthoredProperty property)
     {
-        if (property.Property.ValueClass != 0x80804694) return null;
+        if (property.Property.ValueClass != SCuiFloatValue.Class) return null;
         float value = BinaryPrimitives.ReadSingleLittleEndian(property.Source.Data.Span[property.Property.ValueOffset..]);
-        return property.Property.PoolDescriptor == 200 && value != float.MaxValue ? MathF.Round(value * 1080) : value;
+        return property.Property.PoolDescriptor == CuiDocument.FloatsB && value != float.MaxValue ? MathF.Round(value * 1080) : value;
     }
 
     /** Unknown or dynamic constraint values stop composition instead of supplying guessed defaults. */
@@ -199,7 +200,7 @@ public sealed class CuiComposition
             var property = source.Property;
             var path = property.Path;
             var bytes = source.Source.Data.Span[property.ValueOffset..];
-            if (path.Count == 2 && path[1] <= 1 && property.ValueClass == 0x80804696)
+            if (path.Count == 2 && path[1] <= 1 && property.ValueClass == CuiIntegerValue.Class)
             {
                 uint value = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
                 if (value > 4) return null;

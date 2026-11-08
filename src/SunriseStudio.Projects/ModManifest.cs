@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Projects;
 
@@ -9,7 +10,10 @@ namespace SunriseStudio.Projects;
 public static partial class ModManifest
 {
     public const string FileName = "mod.json";
-    public const int ManifestVersion = 3;
+    /** Newest format: version 3 added config bindings, version 4 the own package list. */
+    public const int ManifestVersion = 4, BindingsVersion = 3;
+    /** Own package ids one manifest may list; the loader keeps them in fixed storage. */
+    public const int PackageLimit = 256;
     // Loader limits. Ids and config keys count characters; text fields count UTF-8 bytes.
     private const int IdMinimum = 3, IdMaximum = 64, NameBytes = 64, DescriptionBytes = 512;
     private const int AuthorBytes = 64, AuthorLimit = 8, SourceBytes = 256, ListLimit = 32, KeyMaximum = 32;
@@ -108,17 +112,23 @@ public static partial class ModManifest
     /** UTF-8 without a BOM, camelCase keys, LF line ends; empty optional fields are omitted. */
     public static byte[] Serialize(ModMetadata metadata) => Serialize(metadata, null);
 
-    /** Serializes the details and compiled config sites; any site raises manifestVersion to 3. */
-    public static byte[] Serialize(ModMetadata metadata, IReadOnlyList<ModConfigSite>? bindings)
+    /**
+     * Serializes the details, compiled config sites and the new package ids the mod ships. Any site
+     * raises manifestVersion to 3; any package id raises it to 4.
+     */
+    public static byte[] Serialize(ModMetadata metadata, IReadOnlyList<ModConfigSite>? bindings, IReadOnlyCollection<ushort>? packages = null)
     {
         Require(metadata);
         RequireBindings(metadata, bindings ?? []);
+        var own = (packages ?? []).Order().ToArray();
+        if (own.Length > PackageLimit || own.Distinct().Count() != own.Length || own.Any(id => !PackageWriter.IsNewPackageId(id)))
+            throw new InvalidDataException($"A mod lists at most {PackageLimit} distinct package ids from {PackageWriter.NewPackageIdRange}.");
         using var stream = new MemoryStream();
         using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions
             { Indented = true, NewLine = "\n", Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
         {
             json.WriteStartObject();
-            json.WriteNumber("manifestVersion", bindings is { Count: > 0 } ? ManifestVersion : 2);
+            json.WriteNumber("manifestVersion", own.Length > 0 ? ManifestVersion : bindings is { Count: > 0 } ? BindingsVersion : 2);
             json.WriteString("id", metadata.Id);
             json.WriteString("version", metadata.Version);
             json.WriteString("name", metadata.Name);
@@ -147,6 +157,12 @@ public static partial class ModManifest
                 json.WriteEndArray();
             }
             WriteBindings(json, bindings ?? []);
+            if (own.Length > 0)
+            {
+                json.WriteStartArray("packages");
+                foreach (ushort id in own) json.WriteStringValue($"0x{id:X4}");
+                json.WriteEndArray();
+            }
             json.WriteEndObject();
         }
         stream.WriteByte((byte)'\n');

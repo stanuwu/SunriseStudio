@@ -1,7 +1,8 @@
-using System.Buffers.Binary;
 using System.Numerics;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene.Collision;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -14,7 +15,6 @@ internal sealed class StaticCollisionRule : IObjectEditRule
 {
     // Join tolerance: per translation axis, per quaternion component (q or -q), relative scale.
     internal const float TranslationTolerance = 2e-3f, RotationTolerance = 1e-3f, ScaleTolerance = 1e-3f;
-    private const uint InstanceTableClass = 0x8080966D, InstanceRowClass = 0x808071A3, OwnerRecordClass = 0x80806EF4;
 
     public ObjectEditLayout Layout => ObjectEditLayout.StaticInstance;
 
@@ -80,14 +80,12 @@ internal sealed class StaticCollisionRule : IObjectEditRule
         var owners = index.TableOwners(tableTag);
         if (owners.Count == 0)
             throw new InvalidDataException("The instance table has no placement in its package, so its collision cannot be found.");
-        var originalTable = new NativeRows(context.Original(tableTag));
-        var currentTable = new NativeRows(context.Current(tableTag));
-        var installedRow = Row(originalTable, originalTable.Rows(0x40, InstanceRowClass, 48)[edit.Target.Index]);
-        var editedRow = Row(currentTable, currentTable.Rows(0x40, InstanceRowClass, 48)[edit.Target.Index]);
+        var installedRow = Row(InstanceRows(context.Original(tableTag))[edit.Target.Index]);
+        var editedRow = Row(InstanceRows(context.Current(tableTag))[edit.Target.Index]);
         foreach (var owner in owners)
         {
-            var installedOwner = Placement(new NativeRows(context.Original(owner.ListTag)), owner.Row);
-            var editedOwner = Placement(new NativeRows(context.Current(owner.ListTag)), owner.Row);
+            var installedOwner = Placement(context.Original(owner.ListTag), owner.Row);
+            var editedOwner = Placement(context.Current(owner.ListTag), owner.Row);
             var world = Compose(editedOwner, editedRow);
             // Components unchanged by the render row keep the current raw collision values.
             bool sameOwner = installedOwner == editedOwner;
@@ -126,13 +124,19 @@ internal sealed class StaticCollisionRule : IObjectEditRule
     private static ushort PackageOf(ObjectEditContext context, uint tag) =>
         context.Catalog.TryGetEntry(tag, out var entry) ? entry.PackageId : throw new InvalidDataException("Placement source is missing.");
 
-    /** An instance row: quaternion at +0x00, translation at +0x10, uniform scale at +0x1C. */
-    private static QsTransform Row(NativeRows data, int row) =>
-        new(data.V3(row + 0x10), data.Q4(row), new Vector3(data.F32(row + 0x1C)));
+    /** The instance rows of a static instance table. */
+    private static ReadOnlySpan<SStaticInstanceTransform> InstanceRows(byte[] table) =>
+        SceneEdits.FieldRows<SStaticMeshInstances, SStaticInstanceTransform>(table, 0, "Instances.Transforms", SStaticInstanceTransform.Class);
 
-    /** A placement row: quaternion at +0x10, translation at +0x20, uniform scale at +0x2C. */
-    private static QsTransform Placement(NativeRows data, int row) =>
-        new(data.V3(row + 0x20), data.Q4(row + 0x10), new Vector3(data.F32(row + 0x2C)));
+    /** An instance row's stored rotation, translation and uniform scale. */
+    private static QsTransform Row(in SStaticInstanceTransform row) =>
+        new(row.Position, row.Rotation, new Vector3(row.Scale));
+
+    /** An object list placement row's stored rotation, translation and uniform scale; only those fields must fit. */
+    private static QsTransform Placement(byte[] list, int row) =>
+        new(InstanceTagReads.Field<AuthoredPlacementEntry, Vector3>(list, row, nameof(AuthoredPlacementEntry.Position)),
+            InstanceTagReads.Field<AuthoredPlacementEntry, Quaternion>(list, row, nameof(AuthoredPlacementEntry.Rotation)),
+            new Vector3(InstanceTagReads.Field<AuthoredPlacementEntry, float>(list, row, nameof(AuthoredPlacementEntry.UniformScale))));
 
     /** The renderer's composition: owner rotation on the left, owner scale on the translation. */
     internal static QsTransform Compose(QsTransform owner, QsTransform row) =>
@@ -219,8 +223,8 @@ internal sealed class StaticCollisionRule : IObjectEditRule
             foreach (uint list in lists)
                 foreach (var payload in StaticCollisionReader.PlacedPayloads(context.Original(list), list))
                 {
-                    if (payload.Marker == StaticCollisionReader.InstancesMarker) AddTableOwner(context, payload);
-                    else if (payload.Marker == StaticCollisionReader.CollisionMarker) AddEntity(context, payload);
+                    if (payload.Marker == SStaticInstancesPayload.Class) AddTableOwner(context, payload);
+                    else if (payload.Marker == SStaticCollisionPayload.Class) AddEntity(context, payload);
                 }
         }
 
@@ -260,14 +264,13 @@ internal sealed class StaticCollisionRule : IObjectEditRule
             var grid = new Dictionary<(int X, int Y, int Z), List<(uint Table, int Row, QsTransform World)>>();
             foreach (var (table, owners) in tableOwners.OrderBy(pair => pair.Key))
             {
-                var data = new NativeRows(context.Original(table));
-                int[] offsets = data.Rows(0x40, InstanceRowClass, 48);
+                var tableRows = InstanceRows(context.Original(table));
                 foreach (var owner in owners)
                 {
-                    var placement = Placement(new NativeRows(context.Original(owner.ListTag)), owner.Row);
-                    for (int i = 0; i < offsets.Length; i++)
+                    var placement = Placement(context.Original(owner.ListTag), owner.Row);
+                    for (int i = 0; i < tableRows.Length; i++)
                     {
-                        var world = Compose(placement, Row(data, offsets[i]));
+                        var world = Compose(placement, Row(in tableRows[i]));
                         var cell = Cell(world.Translation);
                         if (!grid.TryGetValue(cell, out var list)) grid[cell] = list = [];
                         list.Add((table, i, world));
@@ -323,14 +326,14 @@ internal sealed class StaticCollisionRule : IObjectEditRule
             return same;
         }
 
-        /** A 0x808071B3 payload names the table, or a 0x80806EF4 record naming it at +8. */
+        /** The payload names the instance table itself or an owner record that names it. */
         private void AddTableOwner(ObjectEditContext context, PlacedPayload payload)
         {
             if (!context.Catalog.TryGetEntry(payload.Tag, out var entry)) return;
             uint table = entry.Reference switch
             {
-                InstanceTableClass => payload.Tag,
-                OwnerRecordClass => new NativeRows(context.Original(payload.Tag)).U32(8),
+                SStaticMeshInstances.Class => payload.Tag,
+                SMapResourceLink.Class => InstanceTagReads.Field<SMapResourceLink, uint>(context.Original(payload.Tag), 0, "InstanceTable"),
                 _ => 0
             };
             if (table == 0) return;
@@ -371,14 +374,9 @@ internal sealed class StaticCollisionRule : IObjectEditRule
             foreach (var (index, transform) in Transforms)
             {
                 var instance = current.Instances[index];
-                var q = transform.Rotation;
                 uint flags = StaticCompoundShape.Flags(transform, (compound.Instances[index].Flags & StaticCompoundShape.ConvexFlag) != 0);
                 int at = current.File.Absolute(instance.Offset);
-                WriteVector(bytes, at, transform.Translation);
-                BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at + 12), StaticCompoundShape.FlagBase | flags);
-                NativeRows.Write(bytes, at + 0x10, q.X, q.Y, q.Z, q.W);
-                WriteVector(bytes, at + 0x20, transform.Scale);
-                BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at + 0x2C), StaticCompoundShape.FlagBase);
+                CollisionCompoundWriter.WriteInstanceTransform(bytes, at, transform, flags);
                 leaves[index] = MovedBounds(context, current, instance, transform);
             }
             var (nodes, domainMin, domainMax) = current.Refit(leaves);
@@ -406,6 +404,7 @@ internal sealed class StaticCollisionRule : IObjectEditRule
             return CollisionShapes.Bounds(file, file.RootOffset);
         }
 
-        private static void WriteVector(byte[] bytes, int at, Vector3 value) => NativeRows.Write(bytes, at, value.X, value.Y, value.Z);
+        private static void WriteVector(byte[] bytes, int at, Vector3 value) =>
+            CollisionCompoundWriter.WriteFloats(bytes, at, value.X, value.Y, value.Z);
     }
 }

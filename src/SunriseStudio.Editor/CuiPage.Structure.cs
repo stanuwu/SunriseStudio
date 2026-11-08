@@ -5,6 +5,8 @@ using ImGuiNET;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Editor;
 
@@ -202,7 +204,7 @@ public sealed partial class CuiPage
             int available = Enumerable.Range(SunriseStudio.Packages.PackageWriter.LastNewPackageId - 0xFF, 0x100)
                 .FirstOrDefault(id => !catalog.ContainsInstalledPackage((ushort)id)
                     && project.AddedAssets.Where(asset => asset.Native?.PackageId == id).Select(asset => asset.Native!.EntryIndex!.Value)
-                        .DefaultIfEmpty(-1).Max() < 8191, -1);
+                        .DefaultIfEmpty(-1).Max() < TagHashes.EntriesPerPackage - 1, -1);
             if (available < 0) throw new InvalidDataException("No unused authoring package slot is available.");
             ushort package = checked((ushort)available);
             additions.Add(new(RootName(document.TagHash), mutation.Resource,
@@ -213,7 +215,8 @@ public sealed partial class CuiPage
         {
             var hierarchyBytes = mutation.Hierarchy.ToArray();
             Dictionary<uint, byte[]> edits = [];
-            if (isolate) BinaryPrimitives.WriteUInt32LittleEndian(hierarchyBytes.AsSpan(28), Tag(allocated[0]));
+            if (isolate) BinaryPrimitives.WriteUInt32LittleEndian(
+                hierarchyBytes.AsSpan(TagView.FieldOffset<SCuiHierarchy>(nameof(SCuiHierarchy.CuiResource))), Tag(allocated[0]));
             else edits.Add(root.TagHash, mutation.Resource);
             edits.Add(document.TagHash, hierarchyBytes);
             return new ProjectAssetEdits(edits, changeLabels && labelAsset is not null ? new Dictionary<string, byte[]> { [labelAsset.Id] = labelBytes } : null);

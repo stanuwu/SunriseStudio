@@ -1,7 +1,10 @@
-using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -18,14 +21,6 @@ public static class WeaponReloadEffectAuthoring
     private const byte PointLocation = 3, PointFlags = 0x22;
     // Starts on spawn and retires when done, like the stock gated slot sequences.
     private const byte Lifecycle = 0x0B;
-    private const uint FlowClass = 0x808093E6, NodeWrapperClass = 0x80806CC6;
-    // Row classes of the template sequence's typed arrays.
-    private const uint ChannelRow = 0x80809789, LocationRow = 0x80808617, SourceRow = 0x80808615, NameRow = 0x80808614,
-        FlagRow = 0x80808618, SystemRow = 0x80806CC8, SlotRow = 0x80800009;
-    // Array fields of the sequence resource.
-    private const int Flows = 0x158, Works = 0x168, Channels = 0x188, Locations = 0x1B0, Sources = 0x1C0, Names = 0x1D0;
-    // The per-location flag array is anchored before the sequence resource.
-    private const int LocationFlags = 0x220;
     private const byte GateNode = 6, ParticleNode = 4, PointSource = 2;
 
     /**
@@ -65,46 +60,63 @@ public static class WeaponReloadEffectAuthoring
         byte[] bytes = WeaponConfigEdits.RetagConfig(template, SequenceTemplate, destination).Bytes;
         int resource = WeaponParticleBinding.SequenceResource(bytes);
         if (resource < 0) throw new InvalidDataException("The reload effect template is not a sequence.");
-        int[] gates = NativeRows.Rows(bytes, resource + Flows, FlowClass, 24).Select(row => Body(bytes, row))
-            .Where(body => bytes[body + 0x20] == GateNode).ToArray();
-        int[] works = NativeRows.Rows(bytes, resource + Works, FlowClass, 24);
-        int[] channels = NativeRows.Rows(bytes, resource + Channels, ChannelRow, 40);
-        int[] locations = NativeRows.Rows(bytes, resource + Locations, LocationRow, 6);
-        int[] sources = NativeRows.Rows(bytes, resource + Sources, SourceRow, 16);
-        int[] names = NativeRows.Rows(bytes, resource + Names, NameRow, 4);
-        int[] flags = NativeRows.Rows(bytes, LocationFlags, FlagRow, 2);
-        if (gates.Length != 1 || works.Length != 1 || channels.Length != 1 || locations.Length != 1
-            || sources.Length != 1 || names.Length != 1 || flags.Length != 1 || bytes[sources[0]] != PointSource)
+        // The resource is checked only through its lifecycle word, so each member is viewed alone.
+        int gates = 0;
+        foreach (ref readonly var row in Rows(bytes, in Member<TagArray<SSequenceFlowRow>>(bytes, resource,
+                     nameof(SParticleSequenceResource.FlowNodes)), SSequenceFlowRow.Class))
+            if (TagView.At<SEffectNode>(bytes, TagView.TargetOrSelf(bytes, in row.OwnerPointer)).NodeKind == GateNode) gates++;
+        var works = Rows(bytes, in Member<TagArray<SSequenceFlowRow>>(bytes, resource, nameof(SParticleSequenceResource.WorkNodes)),
+            SSequenceFlowRow.Class);
+        var channels = EditRows(bytes, in Member<TagArray<SModelValueBankResource>>(bytes, resource,
+            nameof(SParticleSequenceResource.InputChannels)), SModelValueBankResource.Class);
+        ref readonly var table = ref Member<C8080860d>(bytes, resource, nameof(SParticleSequenceResource.H846fde3f));
+        var locations = EditRows(bytes, in table.Locations, SSequenceLocationMask.Class);
+        var sources = EditRows(bytes, in table.Update, SSequenceLocationSource.Class);
+        var names = EditRows(bytes, in table.Debug, SSequenceLocationName.Class);
+        int flagsField = WeaponParticleBinding.InstanceFlagsField(bytes);
+        Span<SSequenceLocationFlags> flags = flagsField < 0 ? []
+            : EditRows(bytes, in TagView.At<TagArray<SSequenceLocationFlags>>(bytes, flagsField), SSequenceLocationFlags.Class);
+        if (flagsField < 0 || gates != 1 || works.Length != 1 || channels.Length != 1 || locations.Length != 1
+            || sources.Length != 1 || names.Length != 1 || flags.Length != 1
+            || sources[0].LocationKind0Object2WorldWeapon3FirstPersonPoint != PointSource)
             throw new InvalidDataException("The reload effect template is no longer one gate over one point burst.");
-        int node = Body(bytes, works[0]);
-        int[] systems = NativeRows.Rows(bytes, node + 0x30, SystemRow, 24);
-        if (U32(bytes, node - 20) != NodeWrapperClass || bytes[node + 0x20] != ParticleNode || systems.Length != 1
-            || NativeRows.Rows(bytes, systems[0], SlotRow, 1) is not [var slot] || bytes[slot] != 0)
+        int wrapper = TagView.TargetOrSelf(bytes, in works[0].OwnerPointer);
+        ref var node = ref TagView.Edit<SEffectNode>(bytes, wrapper);
+        var systems = EditRows(bytes, in node.SystemRows, SEffectNodeRow.Class);
+        if (TagView.ClassAt(bytes, wrapper) != SEffectNode.Class || node.NodeKind != ParticleNode
+            || systems.Length != 1
+            || Rows(bytes, in systems[0].LocationIndices, ExpressionCode.Class) is not [var slot] || slot.Value != 0)
             throw new InvalidDataException("The reload effect template node is no longer one timed particle system.");
 
-        Put32(bytes, channels[0] + 0x20, ReloadingChannel);
-        Put32(bytes, systems[0] + 16, system);
+        channels[0].ChannelHashReloading0xecde609e = ReloadingChannel;
+        systems[0].ParticleSystem = system;
         // The location kind and flags are written in its source row and in both side arrays.
-        int source = sources[0];
-        bytes[source] = PointLocation;
-        Put32(bytes, source + 4, PointFlags);
-        bytes[locations[0] + 4] = PointFlags;
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(flags[0]), PointFlags);
-        Put32(bytes, source + 8, pointHash);
-        Put32(bytes, names[0], pointHash);
-        PutFloat(bytes, node + 0x0C, delay); PutFloat(bytes, node + 0x10, delay);
-        PutFloat(bytes, node + 0x14, duration); PutFloat(bytes, node + 0x18, duration);
-        bytes[resource + WeaponParticleBinding.LifecycleOffset] = Lifecycle;
+        ref var source = ref sources[0];
+        source.LocationKind0Object2WorldWeapon3FirstPersonPoint = PointLocation;
+        source.LocationMask0x3fObject0x22Point = PointFlags;
+        locations[0].LocationMask = PointFlags;
+        flags[0].LocationFlags = PointFlags;
+        source.AttachmentHash = pointHash;
+        names[0].AttachmentHash = pointHash;
+        node.StartMin = delay; node.StartMax = delay;
+        node.DurationMin = duration; node.DurationMax = duration;
+        Member<byte>(bytes, resource, nameof(SParticleSequenceResource.LifecycleBit0StartOnSpawnBit1Retire)) = Lifecycle;
         return bytes;
     }
 
-    /** The node body of a flow or work row: 16 bytes into the wrapper the row points at. */
-    private static int Body(byte[] bytes, int row) => Pointer(bytes, row + 16) + 16;
+    /** A member of the sequence resource at `resource`, viewed alone and writable. */
+    private static ref M Member<M>(byte[] bytes, int resource, string member) where M : unmanaged =>
+        ref Unsafe.AsRef(in TagView.Member<SParticleSequenceResource, M>(bytes, resource, member));
 
-    private static uint Tag(ushort package, int entry) => checked(0x80800000u + ((uint)package << 13) + (uint)entry);
-    private static int Pointer(byte[] bytes, int at) => checked(at + (int)I64(bytes, at));
-    private static uint U32(byte[] bytes, int at) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
-    private static long I64(byte[] bytes, int at) => BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(at));
-    private static void Put32(byte[] bytes, int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), value);
-    private static void PutFloat(byte[] bytes, int at, float value) => BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(at), value);
+    private static ReadOnlySpan<T> Rows<T>(byte[] bytes, ref readonly TagArray<T> array, uint elementClass) where T : unmanaged =>
+        TagView.CheckedRows(bytes, in array, elementClass, TagArray.MaximumReaderRows);
+
+    /** Checked rows of an array field read from `bytes`, writable. */
+    private static Span<T> EditRows<T>(byte[] bytes, ref readonly TagArray<T> array, uint elementClass) where T : unmanaged
+    {
+        var rows = Rows(bytes, in array, elementClass);
+        return rows.IsEmpty ? [] : MemoryMarshal.CreateSpan(ref Unsafe.AsRef(in rows[0]), rows.Length);
+    }
+
+    private static uint Tag(ushort package, int entry) => TagHashes.Make(package, entry);
 }

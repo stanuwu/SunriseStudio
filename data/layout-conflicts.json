@@ -1,0 +1,2832 @@
+[
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80800007",
+    "name": [
+      "s_i32_element"
+    ],
+    "off": "0x0",
+    "types": [
+      "i32",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080000B",
+    "name": [
+      "u32_array_row"
+    ],
+    "off": "0x0",
+    "types": [
+      "flags",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80800014",
+    "name": [
+      "s_audio_stream_ref"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<any>",
+      "tagref<stream26/6>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80800070",
+    "name": [
+      "s_u32_hash_element"
+    ],
+    "off": "0x0",
+    "types": [
+      "strhash",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80800090",
+    "name": [
+      "expression_constant"
+    ],
+    "off": "0x0",
+    "types": [
+      "f32[4]",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80800094",
+    "name": [
+      "s_vec4_point"
+    ],
+    "off": "0x0",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808058EE",
+    "name": [
+      "s_investment_vendor_display"
+    ],
+    "off": "0x40",
+    "types": [
+      "locstring",
+      "u16"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x808058EE",
+    "name": [
+      "s_investment_vendor_display"
+    ],
+    "off": "0x48",
+    "types": [
+      "locstring",
+      "u16"
+    ]
+  },
+  {
+    "areas": [
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80805C9D",
+    "name": [
+      "s_sandbox_perk_display_row"
+    ],
+    "off": "0x0",
+    "types": [
+      "strhash",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80805C9F",
+    "name": [
+      "s_sandbox_perk_display_text"
+    ],
+    "off": "0x4",
+    "types": [
+      "locstring",
+      "strhash"
+    ]
+  },
+  {
+    "areas": [
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80805C9F",
+    "name": [
+      "s_sandbox_perk_display_text"
+    ],
+    "off": "0xc",
+    "types": [
+      "locstring",
+      "strhash"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80805CE1",
+    "name": [
+      "item_display_strings"
+    ],
+    "off": "0x84",
+    "types": [
+      "locstring",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80805CE1",
+    "name": [
+      "item_display_strings"
+    ],
+    "off": "0x90",
+    "types": [
+      "locstring",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80805CE1",
+    "name": [
+      "item_display_strings"
+    ],
+    "off": "0x98",
+    "types": [
+      "locstring",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80805DFE",
+    "name": [
+      "s_arrangement_holder"
+    ],
+    "off": "0x0",
+    "types": [
+      "relptr<art_group>",
+      "relptr<untyped:arrangement_group>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80805F98",
+    "name": [
+      "string_bank_index"
+    ],
+    "off": "0x8",
+    "types": [
+      "array<0x80805f9e>",
+      "array<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80806CC6",
+    "name": [
+      "s_effect_node"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<self>",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80806CC6",
+    "name": [
+      "s_effect_node"
+    ],
+    "off": "0x4",
+    "types": [
+      "tagref<0x80809c36>",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80806E28",
+    "name": [
+      "s_particle_system"
+    ],
+    "off": "0x18",
+    "types": [
+      "tagref<0x80806e2e>",
+      "tagref<any>",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80806E2C",
+    "name": [
+      "s_particle_emitter"
+    ],
+    "off": "0x8",
+    "types": [
+      "array<0x80800090>",
+      "array<constant_vec4>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080713E",
+    "name": [
+      "s_light_row"
+    ],
+    "off": "0x8c",
+    "types": [
+      "bytes",
+      "tagref<0x808071dc>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807164",
+    "name": [
+      "s_decorator_payload"
+    ],
+    "off": "0x70",
+    "types": [
+      "bytes[32]",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080716B",
+    "name": [
+      "s_decorator_quantization"
+    ],
+    "off": "0x0",
+    "types": [
+      "bytes",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807170",
+    "name": [
+      "s_decorator_instance_header"
+    ],
+    "off": "0x14",
+    "types": [
+      "tagref<0x8080716b>",
+      "tagref<0x80807173>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807170",
+    "name": [
+      "s_decorator_instance_header"
+    ],
+    "off": "0x18",
+    "types": [
+      "tagref<any>",
+      "tagref<untyped:decorator_vertex_buffer>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807170",
+    "name": [
+      "s_decorator_instance_header"
+    ],
+    "off": "0x1c",
+    "types": [
+      "tagref<0x8080716b>",
+      "tagref<0x80807173>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807175",
+    "name": [
+      "s_decorator_record"
+    ],
+    "off": "0x0",
+    "types": [
+      "bytes[16]",
+      "i16"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807199",
+    "name": [
+      "s_static_buffer_group"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<any>",
+      "tagref<indexheader32/6>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807199",
+    "name": [
+      "s_static_buffer_group"
+    ],
+    "off": "0x4",
+    "types": [
+      "tagref<any>",
+      "tagref<vertexheader32/4stride8>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807199",
+    "name": [
+      "s_static_buffer_group"
+    ],
+    "off": "0x8",
+    "types": [
+      "tagref<any>",
+      "tagref<vertexheader32/4stride20>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080719A",
+    "name": [
+      "s_static_mesh_part"
+    ],
+    "off": "0xa",
+    "types": [
+      "flags",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080719B",
+    "name": [
+      "s_static_mesh_group"
+    ],
+    "off": "0x4",
+    "types": [
+      "bytes[4]",
+      "i16"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071A3",
+    "name": [
+      "s_static_instance_transform"
+    ],
+    "off": "0x0",
+    "types": [
+      "quat",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071A3",
+    "name": [
+      "s_static_instance_transform"
+    ],
+    "off": "0x10",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071A3",
+    "name": [
+      "s_static_instance_transform"
+    ],
+    "off": "0x20",
+    "types": [
+      "f32",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071A7",
+    "name": [
+      "s_static_mesh"
+    ],
+    "off": "0x60",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071A7",
+    "name": [
+      "s_static_mesh"
+    ],
+    "off": "0x70",
+    "types": [
+      "f32",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071B3",
+    "name": [
+      "s_static_instances_payload"
+    ],
+    "off": "0x10",
+    "types": [
+      "tagref<0x80806ef4>",
+      "tagref<0x8080966d|0x80806ef4>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071E8",
+    "name": [
+      "s_technique"
+    ],
+    "off": "0x20",
+    "types": [
+      "flags",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071E8",
+    "name": [
+      "s_technique"
+    ],
+    "off": "0x48",
+    "types": [
+      "bytes[0xa0]",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071E8",
+    "name": [
+      "s_technique"
+    ],
+    "off": "0xe8",
+    "types": [
+      "bytes[0xa0]",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071E8",
+    "name": [
+      "s_technique"
+    ],
+    "off": "0x188",
+    "types": [
+      "bytes[0xa0]",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071E8",
+    "name": [
+      "s_technique"
+    ],
+    "off": "0x228",
+    "types": [
+      "bytes[0xa0]",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071E8",
+    "name": [
+      "s_technique"
+    ],
+    "off": "0x2c8",
+    "types": [
+      "bytes[0xa0]",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071E8",
+    "name": [
+      "s_technique"
+    ],
+    "off": "0x34c",
+    "types": [
+      "tagref<any>",
+      "tagref<constantbuffer32/7>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808071E8",
+    "name": [
+      "s_technique"
+    ],
+    "off": "0x368",
+    "types": [
+      "bytes[0xa0]",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807211",
+    "name": [
+      "s_material_texture_assignment"
+    ],
+    "off": "0x4",
+    "types": [
+      "tagref<any>",
+      "tagref<texturetype32/1-3>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808072AC",
+    "name": [
+      "s_vertex_declaration_row"
+    ],
+    "off": "0x2",
+    "types": [
+      "bytes[4]",
+      "u8[4]"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808072AC",
+    "name": [
+      "s_vertex_declaration_row"
+    ],
+    "off": "0x8",
+    "types": [
+      "bytes[16]",
+      "i32[4]"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808072BD",
+    "name": [
+      "s_model_component"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<0x80809c36>",
+      "tagref<configself>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807378",
+    "name": [
+      "s_entity_model_mesh"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<any>",
+      "tagref<untyped:vertex_buffer_header>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807378",
+    "name": [
+      "s_entity_model_mesh"
+    ],
+    "off": "0x4",
+    "types": [
+      "tagref<any>",
+      "tagref<vertexheader32/4>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807378",
+    "name": [
+      "s_entity_model_mesh"
+    ],
+    "off": "0x8",
+    "types": [
+      "tagref<any>",
+      "tagref<untyped:vertex_buffer_header>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807378",
+    "name": [
+      "s_entity_model_mesh"
+    ],
+    "off": "0x10",
+    "types": [
+      "tagref<any>",
+      "tagref<indexheader32/6>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807378",
+    "name": [
+      "s_entity_model_mesh"
+    ],
+    "off": "0x28",
+    "types": [
+      "u16",
+      "u16[24]"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807378",
+    "name": [
+      "s_entity_model_mesh"
+    ],
+    "off": "0x58",
+    "types": [
+      "i16",
+      "i16[23]"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808073A5",
+    "name": [
+      "s_entity_model"
+    ],
+    "off": "0x50",
+    "types": [
+      "f32[3]",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808073A5",
+    "name": [
+      "s_entity_model"
+    ],
+    "off": "0x60",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808073A5",
+    "name": [
+      "s_entity_model"
+    ],
+    "off": "0x70",
+    "types": [
+      "f32",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808073F3",
+    "name": [
+      "s_sampler_reference"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<any>",
+      "tagref<samplertype34/1>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808077B5",
+    "name": [
+      "item_art_row"
+    ],
+    "off": "0x0",
+    "types": [
+      "i8",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80807850",
+    "name": [
+      "s_investment_vendor"
+    ],
+    "off": "0x20",
+    "types": [
+      "array<0x80807860>",
+      "i64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80807850",
+    "name": [
+      "s_investment_vendor"
+    ],
+    "off": "0x30",
+    "types": [
+      "array<0x80807861>",
+      "array<untyped:vendor_sale_row>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807BEA",
+    "name": [
+      "item_definition"
+    ],
+    "off": "0x30",
+    "types": [
+      "relptr<0x808077eb>",
+      "relptr<objectives_block>",
+      "relptr<objectivesblock>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807BEA",
+    "name": [
+      "item_definition"
+    ],
+    "off": "0x40",
+    "types": [
+      "relptr<plug_block>",
+      "relptr<plugblock>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807BEA",
+    "name": [
+      "item_definition"
+    ],
+    "off": "0x58",
+    "types": [
+      "relptr<0x808077cc>",
+      "relptr<sack_block>",
+      "relptr<sackblock>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807BEA",
+    "name": [
+      "item_definition"
+    ],
+    "off": "0x70",
+    "types": [
+      "relptr<0x808077b9>",
+      "relptr<stat_block>",
+      "relptr<stats_block>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807BEA",
+    "name": [
+      "item_definition"
+    ],
+    "off": "0x88",
+    "types": [
+      "relptr<art_block>",
+      "relptr<item_art_block>",
+      "relptr<untyped:item_gear_block>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807BEA",
+    "name": [
+      "item_definition"
+    ],
+    "off": "0xba",
+    "types": [
+      "enum",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80807BEA",
+    "name": [
+      "item_definition"
+    ],
+    "off": "0x68",
+    "types": [
+      "relptr<0x808077c1>",
+      "relptr<socket_block>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers"
+    ],
+    "cls": "0x80807BEA",
+    "name": [
+      "item_definition"
+    ],
+    "off": "0x90",
+    "types": [
+      "relptr<0x808077ab>",
+      "u16"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807D53",
+    "name": [
+      "map_bubble_ref"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<0x80807dae>",
+      "tagref<any>",
+      "wideref"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio"
+    ],
+    "cls": "0x80807D53",
+    "name": [
+      "map_bubble_ref"
+    ],
+    "off": "0x8",
+    "types": [
+      "u64",
+      "wideref"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80807EBF",
+    "name": [
+      "squad_inline_placement"
+    ],
+    "off": "0x10",
+    "types": [
+      "0x808099d8",
+      "bytes[144]"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80808356",
+    "name": [
+      "squad_member"
+    ],
+    "off": "0x8",
+    "types": [
+      "array<0x80808358>",
+      "array<0x80808358>[6]"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808084C1",
+    "name": [
+      "s_bubble_child_ref"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<any>",
+      "wideref"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808084E9",
+    "name": [
+      "s_particle_sequence_resource"
+    ],
+    "off": "0x2e0",
+    "types": [
+      "flags",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80808615",
+    "name": [
+      "s_sequence_location_source"
+    ],
+    "off": "0x4",
+    "types": [
+      "u32",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80808617",
+    "name": [
+      "s_sequence_location_mask"
+    ],
+    "off": "0x4",
+    "types": [
+      "flags",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80808A15",
+    "name": [
+      "s_collision_owner"
+    ],
+    "off": "0x48",
+    "types": [
+      "array<0x80800014>",
+      "array<u32>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80808A15",
+    "name": [
+      "s_collision_owner"
+    ],
+    "off": "0x58",
+    "types": [
+      "tagref<any>",
+      "tagref<havokcompound26/7>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80808BB0",
+    "name": [
+      "container_member"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<0x808099d6>",
+      "tagref<0x808099d6|any>",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80808F49",
+    "name": [
+      "s_animation_clip"
+    ],
+    "off": "0x90",
+    "types": [
+      "array<0x80800070>",
+      "i64"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809033",
+    "name": [
+      "s_animation_audio_event"
+    ],
+    "off": "0x18",
+    "types": [
+      "tagref<0x80809802>",
+      "tagref<0x80809c0f>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808091A4",
+    "name": [
+      "placed_config_component_row"
+    ],
+    "off": "0x0",
+    "types": [
+      "i32",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080924F",
+    "name": [
+      "slice_set_state"
+    ],
+    "off": "0xc",
+    "types": [
+      "u32",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080924F",
+    "name": [
+      "slice_set_state"
+    ],
+    "off": "0x1c",
+    "types": [
+      "u16",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809252",
+    "name": [
+      "s_runtime_name_row"
+    ],
+    "off": "0x4",
+    "types": [
+      "tagref<0x808040b5>",
+      "tagref<0x80809c0f>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080925B",
+    "name": [
+      "class_8080925B"
+    ],
+    "off": "0x14",
+    "types": [
+      "tagref<0x8080925e>",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809260",
+    "name": [
+      "registry_object_ref"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<0x80809462>",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080929B",
+    "name": [
+      "trigger_shape_reference"
+    ],
+    "off": "0x18",
+    "types": [
+      "i32",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808093E6",
+    "name": [
+      "s_sequence_flow_row"
+    ],
+    "off": "0x10",
+    "types": [
+      "relptr<0x80806cc6wrapper>",
+      "relptr<sequence_node_wrapper>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x8080941E",
+    "name": [
+      "object_behavior_root"
+    ],
+    "off": "0x8",
+    "types": [
+      "array<0x80809420>",
+      "array<nodeptr,16>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809466",
+    "name": [
+      "placed_handle"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<0x80809468>",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809468",
+    "name": [
+      "s_authored_object_set"
+    ],
+    "off": "0x8",
+    "types": [
+      "tagref<0x808099d6|any>",
+      "tagref<any>",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080948F",
+    "name": [
+      "s_squad_component_peer"
+    ],
+    "off": "0x98",
+    "types": [
+      "clientref",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080948F",
+    "name": [
+      "s_squad_component_peer"
+    ],
+    "off": "0xa0",
+    "types": [
+      "clientref",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080966D",
+    "name": [
+      "s_static_mesh_instances"
+    ],
+    "off": "0x18",
+    "types": [
+      "tagref<0x80809671>",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080966D",
+    "name": [
+      "s_static_mesh_instances"
+    ],
+    "off": "0x80",
+    "types": [
+      "bytes[32]",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809671",
+    "name": [
+      "s_instance_bounds_table"
+    ],
+    "off": "0x8",
+    "types": [
+      "array<0x80809673>",
+      "array<any>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809673",
+    "name": [
+      "s_instance_bounds_row"
+    ],
+    "off": "0x0",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809673",
+    "name": [
+      "s_instance_bounds_row"
+    ],
+    "off": "0x10",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x8080967D",
+    "name": [
+      "s_static_instance_resource"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<0x808071a7>",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809789",
+    "name": [
+      "s_model_value_bank_resource"
+    ],
+    "off": "0x20",
+    "types": [
+      "strhash",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809802",
+    "name": [
+      "s_wwise_event"
+    ],
+    "off": "0x8",
+    "types": [
+      "strhash",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809802",
+    "name": [
+      "s_wwise_event"
+    ],
+    "off": "0x14",
+    "types": [
+      "tagref<any>",
+      "tagref<wwise_bank26/4|26/5>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809840",
+    "name": [
+      "squad_rule_point"
+    ],
+    "off": "0x0",
+    "types": [
+      "bytes[72]",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808099C8",
+    "name": [
+      "s_trigger_component"
+    ],
+    "off": "0x0",
+    "types": [
+      "i32",
+      "tagref<0x80809c36>",
+      "tagref<ownerconfig>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808099C8",
+    "name": [
+      "s_trigger_component"
+    ],
+    "off": "0x8",
+    "types": [
+      "u32",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808099D0",
+    "name": [
+      "s_trigger_volume_row"
+    ],
+    "off": "0x10",
+    "types": [
+      "identity{u8,u8,u16}",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808099D0",
+    "name": [
+      "s_trigger_volume_row"
+    ],
+    "off": "0xb0",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808099D0",
+    "name": [
+      "s_trigger_volume_row"
+    ],
+    "off": "0xc0",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808099D8",
+    "name": [
+      "authored_placement_entry"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<0x80809c0f>",
+      "tagref<classlist>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x808099D8",
+    "name": [
+      "authored_placement_entry"
+    ],
+    "off": "0x78",
+    "types": [
+      "relptr<0x808071b3>",
+      "relptr<payload>",
+      "relptr<placementpayload>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809B13",
+    "name": [
+      "s_authored_object_set_target"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref<0x80809b14>",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809B92",
+    "name": [
+      "trigger_volume_triangle"
+    ],
+    "off": "0x0",
+    "types": [
+      "u8",
+      "u8[3]"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809C00",
+    "name": [
+      "s_weapon_barrel_point"
+    ],
+    "off": "0x4",
+    "types": [
+      "bytes[44]",
+      "i32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809C0F",
+    "name": [
+      "s_entity"
+    ],
+    "off": "0x20",
+    "types": [
+      "array<0x80809bc9>",
+      "i64"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809C0F",
+    "name": [
+      "s_entity"
+    ],
+    "off": "0x30",
+    "types": [
+      "array<0x80809bc9>",
+      "i64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio"
+    ],
+    "cls": "0x80809C0F",
+    "name": [
+      "s_entity"
+    ],
+    "off": "0x38",
+    "types": [
+      "bytes[4]",
+      "i64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio"
+    ],
+    "cls": "0x80809C0F",
+    "name": [
+      "s_entity"
+    ],
+    "off": "0x88",
+    "types": [
+      "tagref<0x80809bb6>",
+      "tagref<weaponclassrecord>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809C22",
+    "name": [
+      "actor_descriptor_row"
+    ],
+    "off": "0x10",
+    "types": [
+      "tagref<0x80809c36>",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809C22",
+    "name": [
+      "actor_descriptor_row"
+    ],
+    "off": "0x20",
+    "types": [
+      "tagref<any>",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809C36",
+    "name": [
+      "s_entity_config"
+    ],
+    "off": "0x10",
+    "types": [
+      "relptr<any>",
+      "relptr<component>",
+      "relptr<nativecomponent>",
+      "relptr<resource>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809C36",
+    "name": [
+      "s_entity_config"
+    ],
+    "off": "0x18",
+    "types": [
+      "relptr<0x808072bd|0x80807286>",
+      "relptr<component>",
+      "relptr<resource>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809C36",
+    "name": [
+      "s_entity_config"
+    ],
+    "off": "0xb0",
+    "types": [
+      "bytes[24]",
+      "bytes[32]"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "0x80809C42",
+    "name": [
+      "client_ref"
+    ],
+    "off": "0x8",
+    "types": [
+      "u32",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:index_buffer_header",
+    "name": [
+      "index buffer header (type 32/6)"
+    ],
+    "off": "0x8",
+    "types": [
+      "i64",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "St:Formats/Packages",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:investment_index_row",
+    "name": [
+      "investment_index_row"
+    ],
+    "off": "0x0",
+    "types": [
+      "strhash",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:sequence_node_body",
+    "name": [
+      "sequence node body (wrapper 0x80806CC6 +16)"
+    ],
+    "off": "0x8",
+    "types": [
+      "flags",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:sequence_node_body",
+    "name": [
+      "sequence node body (wrapper 0x80806CC6 +16)"
+    ],
+    "off": "0x20",
+    "types": [
+      "enum",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:sequence_node_body",
+    "name": [
+      "sequence node body (wrapper 0x80806CC6 +16)"
+    ],
+    "off": "0x30",
+    "types": [
+      "array<0x80806cc8>",
+      "array<u8>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpBvCompressedMeshShape",
+    "name": [
+      "hkpBvCompressedMeshShape"
+    ],
+    "off": "0x0",
+    "types": [
+      "bytes[0x70]",
+      "bytes[112]"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpBvCompressedMeshShape",
+    "name": [
+      "hkpBvCompressedMeshShape"
+    ],
+    "off": "0x38",
+    "types": [
+      "array<u32>",
+      "hkarray<u32>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpBvCompressedMeshShape",
+    "name": [
+      "hkpBvCompressedMeshShape"
+    ],
+    "off": "0x48",
+    "types": [
+      "array<u32>",
+      "hkarray<u32>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpBvCompressedMeshShape",
+    "name": [
+      "hkpBvCompressedMeshShape"
+    ],
+    "off": "0x70",
+    "types": [
+      "bytes[160]",
+      "hkarray"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpBvCompressedMeshShape",
+    "name": [
+      "hkpBvCompressedMeshShape"
+    ],
+    "off": "0x80",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpBvCompressedMeshShape",
+    "name": [
+      "hkpBvCompressedMeshShape"
+    ],
+    "off": "0x90",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpConvexVerticesShape",
+    "name": [
+      "hkpConvexVerticesShape"
+    ],
+    "off": "0x30",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpConvexVerticesShape",
+    "name": [
+      "hkpConvexVerticesShape"
+    ],
+    "off": "0x40",
+    "types": [
+      "vec3",
+      "vec4"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpConvexVerticesShape",
+    "name": [
+      "hkpConvexVerticesShape"
+    ],
+    "off": "0x50",
+    "types": [
+      "array<bytes[48]>",
+      "hkarray<48-bytesoablock>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpConvexVerticesShape",
+    "name": [
+      "hkpConvexVerticesShape"
+    ],
+    "off": "0x68",
+    "types": [
+      "array<vec4>",
+      "hkarray<vec4>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpStaticCompoundShape",
+    "name": [
+      "hkpStaticCompoundShape"
+    ],
+    "off": "0x38",
+    "types": [
+      "array<untyped:havok_hkpstaticcompoundshape_instance>",
+      "hkarray<instance0x50>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_hkpStaticCompoundShape",
+    "name": [
+      "hkpStaticCompoundShape"
+    ],
+    "off": "0x70",
+    "types": [
+      "array<bytes[6]>",
+      "hkarray<treenode>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_packfile",
+    "name": [
+      "havok_packfile"
+    ],
+    "off": "0xc",
+    "types": [
+      "i32",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_packfile",
+    "name": [
+      "havok_packfile"
+    ],
+    "off": "0x14",
+    "types": [
+      "i32",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Scene/Rendering/Viewport"
+    ],
+    "cls": "untyped:havok_packfile",
+    "name": [
+      "havok_packfile"
+    ],
+    "off": "0x40",
+    "types": [
+      "array<untyped:havok_section_header>",
+      "bytes[48]"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809D02",
+    "name": [
+      "hash64_reference_row"
+    ],
+    "off": "0x8",
+    "types": [
+      "tagref",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809EF9",
+    "name": [
+      "package_manifest"
+    ],
+    "off": "0x8",
+    "types": [
+      "tagref<0x80809ef9>",
+      "tagref<any>",
+      "tagref<self>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809EF9",
+    "name": [
+      "package_manifest"
+    ],
+    "off": "0xc",
+    "types": [
+      "tagref<any>",
+      "tagref<anyroot>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809EF9",
+    "name": [
+      "package_manifest"
+    ],
+    "off": "0x18",
+    "types": [
+      "array<0x80809efb>",
+      "relptr<0x80809efb>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809EFB",
+    "name": [
+      "manifest_group"
+    ],
+    "off": "0x8",
+    "types": [
+      "u32",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809EFB",
+    "name": [
+      "manifest_group"
+    ],
+    "off": "0x10",
+    "types": [
+      "array<0x8080000b>",
+      "relptr<0x8080000b>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809EFB",
+    "name": [
+      "manifest_group"
+    ],
+    "off": "0x20",
+    "types": [
+      "array<0x8080000a>",
+      "relptr<0x8080000a>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "untyped:texture_header_type32",
+    "name": [
+      "s_texture_header"
+    ],
+    "off": "0x4",
+    "types": [
+      "enum",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "untyped:texture_header_type32",
+    "name": [
+      "s_texture_header"
+    ],
+    "off": "0x24",
+    "types": [
+      "tagref<any>",
+      "tagref<type48largebuffer>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809A8E",
+    "name": [
+      "s_string_combination"
+    ],
+    "off": "0x0",
+    "types": [
+      "relptr<0x80809a90>",
+      "relptr<0x80809a90[]>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809A8E",
+    "name": [
+      "s_string_combination"
+    ],
+    "off": "0x8",
+    "types": [
+      "i64",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809A90",
+    "name": [
+      "s_string_part"
+    ],
+    "off": "0x8",
+    "types": [
+      "relptr<bytes>",
+      "relptr<u8>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80804A55",
+    "name": [
+      "s_icon_library"
+    ],
+    "off": "0x8",
+    "types": [
+      "array<0x80804a59>",
+      "array<variant112>"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x808077B9",
+    "name": [
+      "s_item_sandbox_perk_block"
+    ],
+    "off": "0x10",
+    "types": [
+      "array<0x808077bc>",
+      "array<untyped:item_perk_row>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x808077C4",
+    "name": [
+      "item_ordinary_socket_entry"
+    ],
+    "off": "0x40",
+    "types": [
+      "array<0x80802e03>",
+      "array<plug_member>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80802E03",
+    "name": [
+      "plug_set_member"
+    ],
+    "off": "0x0",
+    "types": [
+      "u16",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80802E03",
+    "name": [
+      "plug_set_member"
+    ],
+    "off": "0x8",
+    "types": [
+      "array<0x80807d31>",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80805CF1",
+    "name": [
+      "s_item_display_stat_block"
+    ],
+    "off": "0x14",
+    "types": [
+      "i8",
+      "u8"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80802951",
+    "name": [
+      "icon_map"
+    ],
+    "off": "0x8",
+    "types": [
+      "array<row24>",
+      "array<untyped:investment_index_row>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80803475",
+    "name": [
+      "collectible_row"
+    ],
+    "off": "0x28",
+    "types": [
+      "strhash",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "untyped:collectible_display_row",
+    "name": [
+      "collectible_display_row"
+    ],
+    "off": "0x8",
+    "types": [
+      "locstring",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "untyped:collectible_display_row",
+    "name": [
+      "collectible_display_row"
+    ],
+    "off": "0x10",
+    "types": [
+      "locstring",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "untyped:collectible_display_row",
+    "name": [
+      "collectible_display_row"
+    ],
+    "off": "0x18",
+    "types": [
+      "locstring",
+      "u32"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio"
+    ],
+    "cls": "untyped:presentation_node_row",
+    "name": [
+      "presentation_node_row"
+    ],
+    "off": "0x30",
+    "types": [
+      "array",
+      "unlock_expression_field"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio"
+    ],
+    "cls": "untyped:presentation_node_row",
+    "name": [
+      "presentation_node_row"
+    ],
+    "off": "0x40",
+    "types": [
+      "array",
+      "unlock_expression_field"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio"
+    ],
+    "cls": "untyped:presentation_node_row",
+    "name": [
+      "presentation_node_row"
+    ],
+    "off": "0x88",
+    "types": [
+      "array<4>",
+      "array<u16row,u16gate>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809310",
+    "name": [
+      "behavior_condition_group"
+    ],
+    "off": "0x8",
+    "types": [
+      "array<0x80809311|0x80809316>",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80804E10",
+    "name": [
+      "behavior_target"
+    ],
+    "off": "0x8",
+    "types": [
+      "relptr<any>",
+      "relptr<node>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80804E3D",
+    "name": [
+      "behavior_filter"
+    ],
+    "off": "0x18",
+    "types": [
+      "array<0x80809311|0x80809316>",
+      "u64"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80804D7D",
+    "name": [
+      "behavior_channel_comparison"
+    ],
+    "off": "0x8",
+    "types": [
+      "behavior_expression",
+      "untyped:behavior_expression"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80804D7D",
+    "name": [
+      "behavior_channel_comparison"
+    ],
+    "off": "0x48",
+    "types": [
+      "behavior_expression",
+      "untyped:behavior_expression"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Authoring/Editor/Anim/Audio",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80809C20",
+    "name": [
+      "actor_descriptor_metadata"
+    ],
+    "off": "0x0",
+    "types": [
+      "tagref",
+      "tagref<0x80809c36>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers"
+    ],
+    "cls": "0x80807D84",
+    "name": [
+      "investment_root"
+    ],
+    "off": "0x708",
+    "types": [
+      "tagref<0x80807d49>",
+      "tagref<any>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80804858",
+    "name": [
+      "cui_property_row"
+    ],
+    "off": "0x0",
+    "types": [
+      "relptr<0x80804943>",
+      "relptr<0x80804949[]>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x80804858",
+    "name": [
+      "cui_property_row"
+    ],
+    "off": "0x10",
+    "types": [
+      "relptr<any>",
+      "relptr<poolvalue>"
+    ]
+  },
+  {
+    "areas": [
+      "S:content readers",
+      "St:Formats/Packages"
+    ],
+    "cls": "0x808046D8",
+    "name": [
+      "cui_binding_row"
+    ],
+    "off": "0x30",
+    "types": [
+      "relptr<0x808046e0|0x808046dc|0x808046db|0x808046da>",
+      "relptr<transform>"
+    ]
+  }
+]

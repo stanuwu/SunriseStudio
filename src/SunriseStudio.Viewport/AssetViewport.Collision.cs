@@ -1,3 +1,4 @@
+using SunriseStudio.Tags.Generated;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -75,7 +76,7 @@ public sealed partial class AssetViewport
         if (Catalog is not { } catalog) return false;
         if (ReferenceEquals(possibleScene, scene) && ReferenceEquals(possibleCatalog, catalog)) return possible;
         possible = catalog.TryGetEntry(scene.TagHash, out var entry)
-            && (entry is { Type: 26, SubType: 7 } || entry.Reference is StaticCollisionReader.OwnerClass or 0x808071A7 or 0x80809C0F)
+            && (entry is { Type: 26, SubType: 7 } || entry.Reference is StaticCollisionReader.OwnerClass or SStaticMesh.Class or SEntity.Class)
             || scene.ReadTags.Any(tag => catalog.TryGetEntry(tag, out var list) && list.Reference == StaticCollisionReader.ObjectListClass);
         (possibleScene, possibleCatalog) = (scene, catalog);
         return possible;

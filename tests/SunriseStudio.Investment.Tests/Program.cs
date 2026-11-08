@@ -5,6 +5,8 @@ using SunriseStudio.Editor;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 string root = Path.Combine(Path.GetTempPath(), "sunrise-investment-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(Path.Combine(root, "install", "packages"));
@@ -19,14 +21,18 @@ try
     InvestmentSocketChecks.Run(root);
     const uint first = 0x80A00000;
     var text = Strings(first + 8, ["Fixture rifle", "Auto Rifle", "Owned flavor", "Fixture plug", "Damage", "Quartermaster", "Range"]);
-    byte[] item = new byte[768]; I(item, 180, 1); item[184] = 0; item[186] = 4; item[187] = 1;
+    int bucketAt = TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.InventoryBucket");
+    int tierAt = TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.Tier");
+    int stackAt = TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.MaximumStack");
+    int instancedAt = TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.Instanced");
+    byte[] item = new byte[768]; I(item, stackAt, 1); item[bucketAt] = 0; item[tierAt] = 4; item[instancedAt] = 1;
     Q(item, 0, item.Length); U(item, 204, 0x808077B9);
     Q(item, 112, 208 - 112); Array(item, 208, 256, 1, 0x80803033); item[272] = 0; I(item, 276, 45);
     Array(item, 224, 336, 1, 0x808077BC); S(item, 352, 17);
     Q(item, 104, 400 - 104); Array(item, 400, 432, 1, 0x808077C4);
     S(item, 448, 3); S(item, 450, 1); S(item, 460, ushort.MaxValue); S(item, 480, ushort.MaxValue);
     Array(item, 512, 560, 1, 0x808077C6); U(item, 576, 1);
-    byte[] plug = new byte[200]; I(plug, 180, 999); plug[184] = 21; plug[186] = 2;
+    byte[] plug = new byte[200]; I(plug, stackAt, 999); plug[bucketAt] = 21; plug[tierAt] = 2;
     Q(plug, 0, plug.Length);
     byte[] display = new byte[192]; Pair(display, 132, 1); Pair(display, 144, 2); Pair(display, 152, 3);
     byte[] plugDisplay = new byte[192]; Pair(plugDisplay, 132, 4); S(plugDisplay, 128, ushort.MaxValue);
@@ -93,7 +99,7 @@ try
         Reject(() => data.Edit(first + 2, item, detail.Fields[0], "-1"));
         Reject(() => data.Edit(first + 2, item, detail.Sockets[0].PlugField, "3"));
         Reject(() => data.Edit(first + 2, item, detail.Sockets[0].PlugField, "0"));
-        Reject(() => data.Edit(first + 2, item, detail.Fields.Single(row => row.Offset == 186), "6"));
+        Reject(() => data.Edit(first + 2, item, detail.Fields.Single(row => row.Offset == tierAt), "6"));
         Reject(() => data.Edit(first + 2, changed, detail.Stats[0].Field, "12"));
         Reject(() => data.Edit(first + 12, vendor, seller.Sales[0].CategoryField, "0"));
         Reject(() => data.Edit(first + 2, item, detail.Stats[0].Field with { Offset = 116 }, "67"));
@@ -193,7 +199,7 @@ static void Owned(string install, string temporary)
     workspace.Redo(); Wait(workspace); Check(workspace.Project!.Changes.Count == 1, "Investment redo failed.");
     Check(workspace.Catalog.ReadOriginal(weapon.Item.Tag).SequenceEqual(original), "Owned package changed.");
     workspace.LoadInvestment(); Wait(workspace); workspace.LoadInvestmentDetail(); Wait(workspace);
-    workspace.ApplyInvestmentEdit(workspace.SelectedInvestmentItem!.Fields.Single(row => row.Offset == 186), "5"); Wait(workspace);
+    workspace.ApplyInvestmentEdit(workspace.SelectedInvestmentItem!.Fields.Single(row => row.Offset == TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.Tier")), "5"); Wait(workspace);
     workspace.LoadInvestment(); Wait(workspace);
     Check(workspace.Investment!.FindItem(weapon.Item.Tag)!.Tier == 5, "Rarity filter retained the old project value.");
     workspace.Undo(); Wait(workspace); workspace.LoadInvestment(); Wait(workspace);

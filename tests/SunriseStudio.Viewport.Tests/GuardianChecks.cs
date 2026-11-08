@@ -1,21 +1,24 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using SunriseStudio.Animation;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using SunriseStudio.Viewport;
 
 /** Guardian tables, armor art and one assembled loadout against the installed packages. */
 internal static class GuardianChecks
 {
     private const uint HelmetItem = 0x8131934E, WeaponItem = 0x8132017D;
-    // Investment item table: rows at +8, 24 bytes, definition tag at +16; definition byte 184 is the bucket.
+    // Investment item table: rows at +8, 24 bytes, definition tag at +16.
     private const uint ItemTable = 0x81327CCB;
-    private const int BucketByte = 184;
+    private static readonly int BucketByte = TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.InventoryBucket");
     // Bucket 7 is the class item; the assembler labels its parts "Class item".
     private const int ClassItemBucket = 7;
     private const string ClassItemLabel = "Class item";
@@ -28,8 +31,10 @@ internal static class GuardianChecks
     // Hair with a stage-2 hairline decal; the decal dye forces blend byte 0x97, which is blend 23.
     private const uint HairlineHair = 0x80BB1080;
     private const int DecalBlend = 23;
-    // Cloth asset draw set 0 holds one int array per stage from +160, 16 bytes apart; 23 stages.
-    private const int ClothSetZeroLists = 160, ClothStages = 23;
+    // Cloth asset draw set 0 holds one part index array per stage.
+    private const string ClothSetZeroLists = "HC250af49.ClothDrawSets[0].StagePartLists";
+    private const int ClothStages = 23;
+    private static readonly int BindsPlatesByte = TagView.FieldOffset<SPlatedTextureSet>(nameof(SPlatedTextureSet.BindsPlates));
     // A part posed by the stance moves at least this far from bind, in metres.
     private const float StanceMove = 0.001f;
     // The rifle-family hold pose. It moves every body part, so the checks that need a pose use it.
@@ -416,7 +421,7 @@ internal static class GuardianChecks
         {
             if (keyed.TryGetValue(entity, out bool found)) return found;
             byte[] definition = catalog.Read(entity);
-            found = NativeGearPlating.Rows(definition, 0x10, 0x80809C04, 12).Select(row => NativeGearPlating.U32(definition, row))
+            found = EntityConfigs(definition)
                 .Any(config => Labels(config)?.Any(set => set.Any(label => label.Key == EntityPartLabels.HelmetShownKey)) == true);
             keyed.Add(entity, found);
             return found;
@@ -546,22 +551,33 @@ internal static class GuardianChecks
         return null;
     }
 
+    /** The config tag of each component row of an entity. */
+    private static IEnumerable<uint> EntityConfigs(byte[] entity) =>
+        NativeGearPlating.Rows(entity, TagView.FieldOffset<SEntity>(nameof(SEntity.Components)), SPatternComponent.Class,
+            Unsafe.SizeOf<SPatternComponent>()).Select(row => TagView.At<SPatternComponent>(entity, row).Config);
+
     /** Stage and index range of each part that draw set 0 of a cloth config's asset lists, read from the packages. */
     private static HashSet<(int, uint, uint)> ClothSetZero(PackageCatalog catalog, uint configTag)
     {
-        byte[] config = NativeGearPlating.Require(catalog, configTag, 0x80809C36);
-        int resource = checked((int)(0x18 + BinaryPrimitives.ReadInt64LittleEndian(config.AsSpan(0x18))));
-        byte[] model = NativeGearPlating.Require(catalog, NativeGearPlating.U32(config, resource + 0x1DC), 0x808073A5);
-        byte[] asset = NativeGearPlating.Require(catalog, NativeGearPlating.U32(config, resource + 0x358), 0x8080727A);
-        int mesh = NativeGearPlating.Rows(model, 0x10, 0x80807378, 0x88).Single();
-        int[] rows = NativeGearPlating.Rows(model, mesh + 0x18, 0x8080737E, 0x20);
+        byte[] config = NativeGearPlating.Require(catalog, configTag, SEntityConfig.Class);
+        int resource = TagView.TargetOrSelf(config,
+            in TagView.Member<SEntityConfig, RelativePointer<Unknown>>(config, 0, nameof(SEntityConfig.Definition)));
+        uint ClothMember(string member) => TagView.Member<SClothModelComponent, uint>(config, resource, member);
+        byte[] model = NativeGearPlating.Require(catalog, ClothMember(nameof(SClothModelComponent.Model)), SEntityModel.Class);
+        byte[] asset = NativeGearPlating.Require(catalog, ClothMember(nameof(SClothModelComponent.HavokClothAsset)), SSkeletonAsset.Class);
+        int mesh = NativeGearPlating.Rows(model, TagView.FieldOffset<SEntityModel>(nameof(SEntityModel.Meshes)),
+            SEntityModelMesh.Class, Unsafe.SizeOf<SEntityModelMesh>()).Single();
+        int[] rows = NativeGearPlating.Rows(model, mesh + TagView.FieldOffset<SEntityModelMesh>(nameof(SEntityModelMesh.Parts)),
+            SEntityModelPart.Class, Unsafe.SizeOf<SEntityModelPart>());
         var listed = new HashSet<(int, uint, uint)>();
         for (int stage = 0; stage < ClothStages; stage++)
-            foreach (int at in NativeGearPlating.Rows(asset, ClothSetZeroLists + 16 * stage, 0x80800007, 4))
+            foreach (int at in NativeGearPlating.Rows(asset, TagView.FieldOffset<SSkeletonAsset>($"{ClothSetZeroLists}[{stage}].PartIndices"),
+                SI32Element.Class, Unsafe.SizeOf<SI32Element>()))
             {
-                int part = BinaryPrimitives.ReadUInt16LittleEndian(model.AsSpan(mesh + 0x28 + 2 * stage))
-                    + BinaryPrimitives.ReadInt32LittleEndian(asset.AsSpan(at));
-                listed.Add((stage, NativeGearPlating.U32(model, rows[part] + 8), NativeGearPlating.U32(model, rows[part] + 12)));
+                int part = TagView.Member<SEntityModelMesh, ushort>(model, mesh, $"StageIndexBoundaries[{stage}]")
+                    + TagView.Member<SI32Element, int>(asset, at, nameof(SI32Element.Value));
+                listed.Add((stage, TagView.Member<SEntityModelPart, uint>(model, rows[part], nameof(SEntityModelPart.IndexStart)),
+                    TagView.Member<SEntityModelPart, uint>(model, rows[part], nameof(SEntityModelPart.IndexCount))));
             }
         return listed;
     }
@@ -839,13 +855,12 @@ internal static class GuardianChecks
             foreach (uint entity in entities)
             {
                 byte[] definition = catalog.Read(entity);
-                foreach (int row in NativeGearPlating.Rows(definition, 0x10, 0x80809C04, 12))
+                foreach (uint config in EntityConfigs(definition))
                 {
-                    uint config = NativeGearPlating.U32(definition, row);
-                    if (!catalog.TryGetEntry(config, out var entry) || entry.Reference != 0x80809C36) continue;
+                    if (!catalog.TryGetEntry(config, out var entry) || entry.Reference != SEntityConfig.Class) continue;
                     if (!records.TryGetValue(config, out var read)) records.Add(config, read = NativeGearPlating.ReadRecord(catalog, config));
-                    // The plan builds atlases from the same records: byte 21 set means the record binds plates.
-                    if (read.Record is { } record && record[21] != 0) found.Add(record);
+                    // The plan builds atlases from the same records that bind plates.
+                    if (read.Record is { } record && record[BindsPlatesByte] != 0) found.Add(record);
                 }
             }
             var atlases = NativePlateAtlases.Build(catalog, found, kind);
@@ -858,15 +873,17 @@ internal static class GuardianChecks
                     if (failures.Count < 6) failures.Add($"{where} kind {kind}: {error}");
                     continue;
                 }
-                for (int plate = 0; plate < Math.Min(NativeGearPlating.U32(record, 0x20), 3); plate++)
+                uint plates = TagView.Member<SPlatedTextureSet, uint>(record, 0, nameof(SPlatedTextureSet.PlateCount));
+                for (int plate = 0; plate < Math.Min(plates, 3); plate++)
                 {
-                    byte[] descriptor = NativeGearPlating.Require(catalog, NativeGearPlating.U32(record, 0x24 + plate * 4),
-                        NativeGearPlating.DescriptorClass);
-                    int set = BinaryPrimitives.ReadUInt16LittleEndian(descriptor.AsSpan(10));
-                    foreach (int at in NativeGearPlating.Rows(descriptor, 0x10, NativeGearPlating.DescriptorRowClass, 20))
+                    uint descriptorTag = TagView.Member<SPlatedTextureSet, uint>(record, 0, $"PlateDescriptor0[{plate}].Unk0");
+                    byte[] descriptor = NativeGearPlating.Require(catalog, descriptorTag, NativeGearPlating.DescriptorClass);
+                    int set = TagView.Member<STextureDescriptor, ushort>(descriptor, 0, nameof(STextureDescriptor.PlateSet));
+                    foreach (int at in NativeGearPlating.Rows(descriptor, TagView.FieldOffset<STextureDescriptor>(nameof(STextureDescriptor.Rows)),
+                        NativeGearPlating.DescriptorRowClass, Unsafe.SizeOf<UnknownTextureDescriptorRow>()))
                     {
-                        int edge = (int)Math.Max(NativeGearPlating.U32(descriptor, at + 4) + NativeGearPlating.U32(descriptor, at + 12),
-                            NativeGearPlating.U32(descriptor, at + 8) + NativeGearPlating.U32(descriptor, at + 16));
+                        ref readonly var cell = ref TagView.At<UnknownTextureDescriptorRow>(descriptor, at);
+                        int edge = (int)Math.Max(unchecked((uint)cell.X + (uint)cell.Width), unchecked((uint)cell.Y + (uint)cell.Height));
                         edges[(bucket, set)] = Math.Max(edges.GetValueOrDefault((bucket, set)), edge);
                     }
                 }

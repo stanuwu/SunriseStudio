@@ -1,3 +1,6 @@
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+
 namespace SunriseStudio.Scene;
 
 public sealed partial class StudioNameIndex
@@ -10,7 +13,7 @@ public sealed partial class StudioNameIndex
     private void LoadOwners(CancellationToken token, Action<string>? progress)
     {
         var entries = catalog.Entries.Where(x => x.Type is 32 or 33 or 34 || x.Type is 8 or 16
-            && x.Reference is 0x80809C0F or 0x808071A7 or 0x80807194 or 0x808073A5 or 0x808071E8).ToArray();
+            && x.Reference is SEntity.Class or SStaticMesh.Class or SStaticMeshData.Class or SEntityModel.Class or STechnique.Class).ToArray();
         var modelTags = new Dictionary<uint, uint>();
         for (int i = 0; i < entries.Length; i++)
         {
@@ -25,56 +28,52 @@ public sealed partial class StudioNameIndex
             }
             TryRead($"Asset owners {entry.TagHash:X8}", () =>
             {
-                var data = new TagData(catalog.Read(entry.TagHash));
+                byte[] data = catalog.Read(entry.TagHash);
                 switch (entry.Reference)
                 {
-                    case 0x80809C0F:
-                        foreach (int p in data.Rows(0x10, 0x80809C04, 12))
+                    case SEntity.Class:
+                        foreach (ref readonly var component in EntityFields.Rows<SEntity, SPatternComponent>(data, 0,
+                                     nameof(SEntity.Components), SPatternComponent.Class))
                         {
-                            uint configTag = data.U32(p);
-                            if (!catalog.TryGetEntry(configTag, out var configEntry) || configEntry.Reference != 0x80809C36) continue;
+                            uint configTag = component.Config;
+                            if (!catalog.TryGetEntry(configTag, out var configEntry) || configEntry.Reference != SEntityConfig.Class) continue;
                             if (modelTags.TryGetValue(configTag, out uint modelTag)
                                 || GameNames?.Components?.TryGetModelTag(configTag, out modelTag) == true)
-                            { if (modelTag != 0) Link(modelTag, entry.TagHash, "Model", 0, 0x808073A5); continue; }
-                            var config = new TagData(catalog.Read(configTag));
-                            if (!config.Has(0x18, 8) || config.I64(0x18) == 0) { modelTags[configTag] = 0; continue; }
-                            int resource = config.Relative(0x18);
-                            if (!config.Has(resource - 4, 0x1E4) || config.U32(resource - 4) is not (0x808072BD or 0x80807286)
-                                || config.U32(resource) != configTag) { modelTags[configTag] = 0; continue; }
-                            modelTags[configTag] = modelTag = config.U32(resource + 0x1DC);
-                            Link(modelTag, entry.TagHash, "Model", 0, 0x808073A5);
+                            { if (modelTag != 0) Link(modelTag, entry.TagHash, "Model", 0, SEntityModel.Class); continue; }
+                            if (ConfigModel(configTag, catalog.Read(configTag)) is not { } model) { modelTags[configTag] = 0; continue; }
+                            modelTags[configTag] = model;
+                            Link(model, entry.TagHash, "Model", 0, SEntityModel.Class);
                         }
                         break;
-                    case 0x808071A7:
-                        Link(data.U32(8), entry.TagHash, "Mesh data", 0, 0x80807194);
+                    case SStaticMesh.Class:
+                        uint meshData = TagView.Member<SStaticMesh, uint>(data, 0, nameof(SStaticMesh.MeshData));
+                        Link(meshData, entry.TagHash, "Mesh data", 0, SStaticMeshData.Class);
                         int n = 0;
-                        foreach (int p in data.Rows(0x10, 0x80800014, 4))
-                            Link(data.U32(p), entry.TagHash, "Material", n++, 0x808071E8);
+                        foreach (ref readonly var material in EntityFields.Rows<SStaticMesh, TagReferenceElement>(data, 0,
+                                     nameof(SStaticMesh.Materials), TagReferenceElement.Class))
+                            Link(material.Tag, entry.TagHash, "Material", n++, STechnique.Class);
                         break;
-                    case 0x808073A5:
+                    case SEntityModel.Class:
                         int ordinal = 0;
-                        foreach (int mesh in data.Rows(0x10, 0x80807378, 0x88))
-                            foreach (int p in data.Rows(mesh + 0x18, 0x8080737E, 0x20))
-                                Link(data.U32(p), entry.TagHash, "Material", ordinal++, 0x808071E8);
+                        foreach (ref readonly var mesh in EntityFields.Rows<SEntityModel, SEntityModelMesh>(data, 0,
+                                     nameof(SEntityModel.Meshes), SEntityModelMesh.Class))
+                            foreach (ref readonly var part in EntityFields.Rows(data, in mesh.Parts, SEntityModelPart.Class))
+                                Link(part.Material, entry.TagHash, "Material", ordinal++, STechnique.Class);
                         break;
-                    case 0x80807194:
+                    case SStaticMeshData.Class:
                         int group = 0;
-                        foreach (int p in data.Rows(0x28, 0x80807199, 16))
+                        foreach (ref readonly var buffer in EntityFields.Rows<SStaticMeshData, SStaticBufferGroup>(data, 0,
+                                     nameof(SStaticMeshData.Buffers), SStaticBufferGroup.Class))
                         {
-                            BufferLink(data.U32(p), entry.TagHash, "Indices", group, 6);
-                            BufferLink(data.U32(p + 4), entry.TagHash, "Positions", group, 4);
-                            BufferLink(data.U32(p + 8), entry.TagHash, "Attributes", group++, 4);
+                            BufferLink(buffer.IndexBuffer, entry.TagHash, "Indices", group, 6);
+                            BufferLink(buffer.PositionBuffer[0].Unk0, entry.TagHash, "Positions", group, 4);
+                            BufferLink(buffer.PositionBuffer[1].Unk0, entry.TagHash, "Attributes", group++, 4);
                         }
                         break;
-                    case 0x808071E8:
-                        foreach (var (stage, field, shaderSubtype) in new[] { ("Vertex", 0x50, 1), ("Pixel", 0x2D0, 0), ("Compute", 0x370, 6) })
-                        {
-                            uint shader = data.U32(field - 8);
-                            if (catalog.TryGetEntry(shader, out var shaderEntry) && shaderEntry.Type == 33 && shaderEntry.SubType == shaderSubtype)
-                                LinkAny(shader, entry.TagHash, stage + " shader", 0);
-                            foreach (int p in data.Rows(field, 0x80807211, 8))
-                                Link(data.U32(p + 4), entry.TagHash, stage + " texture", checked((int)data.U32(p)), 0);
-                        }
+                    case STechnique.Class:
+                        LinkStage(data, nameof(STechnique.VertexShader), entry.TagHash, "Vertex", 1);
+                        LinkStage(data, nameof(STechnique.PixelShader), entry.TagHash, "Pixel", 0);
+                        LinkStage(data, nameof(STechnique.ComputeShader), entry.TagHash, "Compute", 6);
                         break;
                 }
             });
@@ -84,6 +83,41 @@ public sealed partial class StudioNameIndex
             }
         }
         Stage("Asset owners", progress, entries.Length, entries.Length);
+    }
+
+    /** @return The model tag of the config's own model or cloth component, or null. */
+    private static uint? ConfigModel(uint configTag, byte[] config)
+    {
+        if (!TagView.FitsThrough<SEntityConfig>(config, 0, nameof(SEntityConfig.Definition))) return null;
+        ref readonly var definition = ref TagView.Member<SEntityConfig, RelativePointer<Unknown>>(config, 0,
+            nameof(SEntityConfig.Definition));
+        if (TagView.TargetOffset(config, in definition) is not { } resource) return null;
+        uint? resourceClass = TagView.ClassAt(config, resource);
+        if (resourceClass == SModelComponent.Class
+            && TagView.FitsThrough<SModelComponent>(config, resource, nameof(SModelComponent.Model)))
+            return OwnModel<SModelComponent>(config, resource, configTag);
+        if (resourceClass == SClothModelComponent.Class
+            && TagView.FitsThrough<SClothModelComponent>(config, resource, nameof(SClothModelComponent.Model)))
+            return OwnModel<SClothModelComponent>(config, resource, configTag);
+        return null;
+    }
+
+    /** @return The component's model when the component names `configTag` as its owner, else null. */
+    private static uint? OwnModel<T>(byte[] config, int resource, uint configTag) where T : unmanaged =>
+        TagView.Member<T, TagOffsetPointer>(config, resource, nameof(SModelComponent.OwnerConfig)).Tag == configTag
+            ? TagView.Member<T, uint>(config, resource, nameof(SModelComponent.Model)) : null;
+
+    /** Links a technique stage's shader and its static textures; `stage` names an STechnique ShaderStage member. */
+    private void LinkStage(ReadOnlySpan<byte> data, string stage, uint owner, string name, int shaderSubtype)
+    {
+        uint shader = TagView.Member<STechnique, uint>(data, 0, $"{stage}.{nameof(ShaderStage.Shader)}");
+        if (catalog.TryGetEntry(shader, out var shaderEntry) && shaderEntry.Type == 33 && shaderEntry.SubType == shaderSubtype)
+            LinkAny(shader, owner, name + " shader", 0);
+        string textures =
+            $"{stage}.{nameof(ShaderStage.State)}.{nameof(C80807207.StaticTextures)}.{nameof(StageTextures.Textures)}";
+        foreach (ref readonly var texture in EntityFields.Rows<STechnique, SMaterialTextureAssignment>(data, 0, textures,
+                     SMaterialTextureAssignment.Class))
+            Link(texture.Texture, owner, name + " texture", checked((int)texture.TextureSlot), 0);
     }
 
     private void Link(uint child, uint owner, string role, int ordinal, uint expectedClass)
@@ -106,4 +140,5 @@ public sealed partial class StudioNameIndex
         var link = new OwnerLink(owner, role, ordinal);
         owners.AddOrUpdate(child, [link], (_, prior) => prior.Contains(link) || prior.Length >= 16 ? prior : [.. prior, link]);
     }
+
 }

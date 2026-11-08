@@ -1,4 +1,8 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -8,7 +12,11 @@ public sealed record InvestmentVendorSaleDraft(int SourceIndex, ushort Item, int
 
 public sealed partial class InvestmentCatalog
 {
-    private const uint CostSelectorClass = 0x808028B2;
+    private const uint CostSelectorClass = C808028b2.Class;
+    private static readonly int SelectorStride = Unsafe.SizeOf<C808028b2>();
+    private static readonly int SaleSelectorsField = TagView.FieldOffset<SVendorSaleDisplay>(nameof(SVendorSaleDisplay.CostDisplaySelectors));
+    private static readonly int VendorSizeField = TagView.FieldOffset<SInvestmentVendor>(nameof(SInvestmentVendor.TagSize));
+
     /** Selected sale policies retain their nested data; the paired rows and each payment array detach together. */
     public IReadOnlyDictionary<uint, byte[]> RewriteVendorStock(uint tag, ReadOnlyMemory<byte> current,
         uint displayTag, ReadOnlyMemory<byte> display, IReadOnlyList<InvestmentVendorSaleDraft> drafts)
@@ -19,12 +27,15 @@ public sealed partial class InvestmentCatalog
             throw new InvalidDataException("The vendor stock does not fit its paired definition.");
         var before = ReadVendor(tag, current);
         if (before.Diagnostics.Count != 0) throw new InvalidDataException(string.Join("\n", before.Diagnostics));
-        var game = new TagReader(current); var text = new TagReader(display);
-        if (game.U64(0) != (ulong)current.Length || text.U64(0) != (ulong)display.Length)
+        if (!TagView.FitsThrough<SInvestmentVendor>(current.Span, 0, nameof(SInvestmentVendor.TagSize))
+            || !TagView.FitsThrough<SInvestmentVendorDisplay>(display.Span, 0, nameof(SInvestmentVendorDisplay.TagSize))
+            || TagRead.U64(current.Span, VendorSizeField) != (ulong)current.Length
+            || TagRead.U64(display.Span, DisplaySizeField) != (ulong)display.Length)
             throw new InvalidDataException("Vendor payload size header is invalid.");
-        var rows = game.Array(48, SaleRowClass, SaleStride);
-        var twins = text.Array(48, SaleDisplayRowClass, SaleDisplayStride);
-        int categories = game.Array(32, 0x80807860, 24).Count;
+        var rows = TagArray.Checked(current.Span, VendorSalesField, SaleRowClass, SaleStride);
+        var twins = TagArray.Checked(display.Span, DisplaySalesField, SaleDisplayRowClass, SaleDisplayStride);
+        int categories = TagArray.Checked(current.Span, VendorCategoriesField, VendorInstalledRow.Class,
+            Unsafe.SizeOf<VendorInstalledRow>()).Count;
         if (rows.Count != twins.Count) throw new InvalidDataException("Vendor display sales are unpaired.");
         InvestmentVendorAuthoring.ValidateSaleOrder(current, rows.Count, drafts.Select(draft => draft.SourceIndex).ToArray());
         bool relocate = drafts.Count != rows.Count || drafts.Where((draft, index) => draft.SourceIndex != index).Any();
@@ -36,9 +47,10 @@ public sealed partial class InvestmentCatalog
                 throw new InvalidDataException("Choose valid sale, category and cost rows.");
             var costs = before.Sales[draft.SourceIndex].Costs;
             int sourceRow = rows.Data + draft.SourceIndex * SaleStride;
-            if (relocate && (game.U64(sourceRow + 48) != 0 || game.U64(sourceRow + 56) != 0))
+            if (relocate && HasAdditionalField(current.Span, sourceRow))
                 throw new NotSupportedException("The selected sale has an additional typed field that cannot yet be relocated.");
-            if (text.Array(twins.Data + draft.SourceIndex * SaleDisplayStride + 32, CostSelectorClass, 2).Count != costs.Count)
+            if (TagArray.Checked(display.Span, twins.Data + draft.SourceIndex * SaleDisplayStride + SaleSelectorsField,
+                CostSelectorClass, SelectorStride).Count != costs.Count)
                 throw new InvalidDataException("Cost display selectors are unpaired with the gameplay prices.");
             if (draft.Costs.Any(cost => cost is null || cost.Item >= Items.Count || cost.SourceIndex < -1
                 || cost.SourceIndex >= costs.Count))
@@ -53,36 +65,28 @@ public sealed partial class InvestmentCatalog
                 && cost.Quantity == before.Sales[index].Costs[slot].Quantity).All(value => value)).All(value => value))
             return new Dictionary<uint, byte[]>();
 
-        byte[] gameplay = relocate ? SelectedRows(current, game, rows.Data, SaleStride, SaleRowClass, SaleRowArrays, drafts)
-            : current.ToArray();
-        byte[] presentation = relocate ? SelectedRows(display, text, twins.Data, SaleDisplayStride, SaleDisplayRowClass,
-            SaleDisplayArrays, drafts) : display.ToArray();
-        int first = new TagReader(gameplay).Array(48, SaleRowClass, SaleStride).Data;
-        int cursor = gameplay.Length, length = cursor;
-        foreach (var draft in drafts.Where(draft => draft.Costs.Count != 0))
-            length = checked(((length + 11) & ~7) + 16 + draft.Costs.Count * CostStride);
-        Array.Resize(ref gameplay, length); Q(gameplay, 0, length);
-        int displayCursor = presentation.Length, displayLength = displayCursor;
-        foreach (var draft in drafts.Where(draft => draft.Costs.Count != 0))
-            displayLength = checked(((displayLength + 11) & ~7) + 16 + draft.Costs.Count * 2);
-        Array.Resize(ref presentation, displayLength); Q(presentation, 0, displayLength);
-        int displayFirst = new TagReader(presentation).Array(48, SaleDisplayRowClass, SaleDisplayStride).Data;
+        byte[] gameplay = relocate ? SelectedRows(current, VendorSizeField, VendorSalesField, rows.Data, SaleStride, SaleRowClass,
+            SaleRowArrays, drafts) : current.ToArray();
+        byte[] presentation = relocate ? SelectedRows(display, DisplaySizeField, DisplaySalesField, twins.Data, SaleDisplayStride,
+            SaleDisplayRowClass, SaleDisplayArrays, drafts) : display.ToArray();
+        int first = TagArray.Checked(gameplay, VendorSalesField, SaleRowClass, SaleStride).Data;
+        int displayFirst = TagArray.Checked(presentation, DisplaySalesField, SaleDisplayRowClass, SaleDisplayStride).Data;
         for (int i = 0; i < drafts.Count; i++)
         {
             var draft = drafts[i]; int sale = first + i * SaleStride;
-            var selectors = text.Array(twins.Data + draft.SourceIndex * SaleDisplayStride + 32, CostSelectorClass, 2);
-            WriteCostSelectors(presentation, displayFirst + i * SaleDisplayStride, ref displayCursor,
-                draft.Costs.Select(cost => cost.SourceIndex < 0 ? ushort.MaxValue : text.U16(selectors.Data + cost.SourceIndex * 2)).ToArray());
-            BinaryPrimitives.WriteUInt16LittleEndian(gameplay.AsSpan(sale + 70), draft.Item);
-            BinaryPrimitives.WriteInt32LittleEndian(gameplay.AsSpan(sale + 100), draft.Category);
+            var selectors = TagArray.Checked(display.Span, twins.Data + draft.SourceIndex * SaleDisplayStride + SaleSelectorsField,
+                CostSelectorClass, SelectorStride);
+            WriteCostSelectors(ref presentation, displayFirst + i * SaleDisplayStride,
+                draft.Costs.Select(cost => cost.SourceIndex < 0 ? ushort.MaxValue
+                    : SelectorAt(display.Span, selectors.Data, cost.SourceIndex)).ToArray());
+            ref var row = ref TagView.Edit<SVendorSale>(gameplay, sale);
+            row.SaleItemIndex = draft.Item;
+            row.CategoryIndex = draft.Category;
             var costs = before.Sales[draft.SourceIndex].Costs;
-            int header = checked((cursor + 11) & ~7), start = checked(header + 16);
-            Q(gameplay, sale + 32, draft.Costs.Count);
-            Q(gameplay, sale + 40, draft.Costs.Count == 0 ? 0 : header - sale - 40);
-            if (draft.Costs.Count == 0) continue;
-            cursor = checked(start + draft.Costs.Count * CostStride);
-            U(gameplay, header - 4, 0x80809FBD); Q(gameplay, header, draft.Costs.Count);
-            Q(gameplay, header + 8, CostRowClass);
+            int costsField = sale + SaleCostsField;
+            if (draft.Costs.Count == 0) { gameplay.AsSpan(costsField, TagArray.FieldSize).Clear(); continue; }
+            int start = TagRelocator.AppendArray(ref gameplay, costsField, CostRowClass, draft.Costs.Count,
+                checked(draft.Costs.Count * CostStride), VendorArrayAlignment);
             for (int k = 0; k < draft.Costs.Count; k++)
             {
                 var cost = draft.Costs[k]; int target = start + k * CostStride;
@@ -90,18 +94,22 @@ public sealed partial class InvestmentCatalog
                 {
                     int source = costs[cost.SourceIndex].ItemField.Offset;
                     current.Span.Slice(source, CostStride).CopyTo(gameplay.AsSpan(target));
-                    foreach (int field in new[] { 8, 24 })
+                    foreach (int field in CostArrays)
                     {
-                        game.Array(source + field, 0x80807D31, 8);
-                        int address = game.Relative(source + field + 8);
-                        Q(gameplay, target + field + 8, address < 0 ? 0 : address - target - field - 8);
+                        TagArray.Checked(current.Span, source + field, InvestmentExpressionRow.Class, Unsafe.SizeOf<InvestmentExpressionRow>());
+                        int address = TagPointer.Checked(current.Span, source + field + TagArray.RelativeOffset);
+                        int copied = target + field + TagArray.RelativeOffset;
+                        Q(gameplay, copied, address < 0 ? 0 : address - copied);
                     }
                 }
-                else U(gameplay, target + 40, 100000);
-                BinaryPrimitives.WriteUInt16LittleEndian(gameplay.AsSpan(target), cost.Item);
-                U(gameplay, target + 4, cost.Quantity);
+                else TagView.Edit<SVendorCost>(gameplay, target).Scale = 100000;
+                ref var written = ref TagView.Edit<SVendorCost>(gameplay, target);
+                written.CostItemIndex = cost.Item;
+                written.Quantity = cost.Quantity;
             }
         }
+        Q(gameplay, VendorSizeField, gameplay.Length);
+        Q(presentation, DisplaySizeField, presentation.Length);
         return new Dictionary<uint, byte[]> { [tag] = gameplay, [displayTag] = presentation };
     }
 
@@ -120,59 +128,55 @@ public sealed partial class InvestmentCatalog
         VerifySaleDisplay(tag, current, displayTag, display, sale);
         int position = sale.Costs.ToList().IndexOf(cost);
         if (position < 0) throw new InvalidDataException("The payment does not belong to this sale.");
-        var text = new TagReader(display);
-        int row = text.Array(48, SaleDisplayRowClass, SaleDisplayStride).Data + sale.Index * SaleDisplayStride;
-        var source = text.Array(row + 32, CostSelectorClass, 2);
+        int row = TagArray.Checked(display.Span, DisplaySalesField, SaleDisplayRowClass, SaleDisplayStride).Data + sale.Index * SaleDisplayStride;
+        var source = TagArray.Checked(display.Span, row + SaleSelectorsField, CostSelectorClass, SelectorStride);
         if (source.Count != sale.Costs.Count) throw new InvalidDataException("Cost display selectors are unpaired.");
-        var selectors = Enumerable.Range(0, source.Count).Select(index => text.U16(source.Data + index * 2)).ToList();
+        var selectors = Enumerable.Range(0, source.Count)
+            .Select(index => SelectorAt(display.Span, source.Data, index)).ToList();
         if (remove) selectors.RemoveAt(position);
         else selectors.Add(selectors[position]);
         if (selectors.Count > InvestmentVendorAuthoring.MaximumCosts)
             throw new InvalidDataException("The runtime supports at most four payment items per sale.");
         byte[] game = remove ? RemoveCost(tag, current, sale, cost) : DuplicateCost(tag, current, sale, cost);
-        int cursor = display.Length;
-        int length = selectors.Count == 0 ? cursor : checked(((cursor + 11) & ~7) + 16 + selectors.Count * 2);
-        byte[] presentation = new byte[length]; display.Span.CopyTo(presentation);
-        Q(presentation, 0, length);
-        WriteCostSelectors(presentation, row, ref cursor, selectors);
+        byte[] presentation = display.ToArray();
+        WriteCostSelectors(ref presentation, row, selectors);
+        Q(presentation, DisplaySizeField, presentation.Length);
         return new Dictionary<uint, byte[]> { [tag] = game, [displayTag] = presentation };
     }
 
-    private static void WriteCostSelectors(byte[] bytes, int sale, ref int cursor, IReadOnlyList<ushort> values)
+    /** Points the sale's selector field at new rows appended to `bytes`; no rows nulls the field. */
+    private static void WriteCostSelectors(ref byte[] bytes, int sale, IReadOnlyList<ushort> values)
     {
-        Q(bytes, sale + 32, values.Count);
-        if (values.Count == 0) { Q(bytes, sale + 40, 0); return; }
-        int header = checked((cursor + 11) & ~7), start = checked(header + 16);
-        Q(bytes, sale + 40, header - sale - 40);
-        U(bytes, header - 4, 0x80809FBD); Q(bytes, header, values.Count); Q(bytes, header + 8, CostSelectorClass);
+        int field = sale + SaleSelectorsField;
+        if (values.Count == 0) { bytes.AsSpan(field, TagArray.FieldSize).Clear(); return; }
+        int start = TagRelocator.AppendArray(ref bytes, field, CostSelectorClass, values.Count,
+            checked(values.Count * SelectorStride), VendorArrayAlignment);
         for (int index = 0; index < values.Count; index++)
-            BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(start + index * 2), values[index]);
-        cursor = checked(start + values.Count * 2);
+            TagView.Edit<C808028b2>(bytes, start + index * SelectorStride).Value = values[index];
     }
 
-    private static byte[] SelectedRows(ReadOnlyMemory<byte> current, TagReader reader, int sourceRows,
+    private static byte[] SelectedRows(ReadOnlyMemory<byte> current, int sizeField, int field, int sourceRows,
         int stride, uint rowClass, int[] arrays, IReadOnlyList<InvestmentVendorSaleDraft> drafts)
     {
-        int header = checked((current.Length + 11) & ~7), start = checked(header + 16);
-        byte[] result = new byte[checked(start + drafts.Count * stride)]; current.Span.CopyTo(result);
-        Q(result, 0, result.Length); Q(result, 48, drafts.Count);
-        Q(result, 56, drafts.Count == 0 ? 0 : header - 56);
+        var (result, start) = WithNewArray(current, sizeField, field, rowClass, drafts.Count, stride);
         if (drafts.Count == 0) return result;
-        U(result, header - 4, 0x80809FBD); Q(result, header, drafts.Count); Q(result, header + 8, rowClass);
         for (int index = 0; index < drafts.Count; index++)
         {
             int source = sourceRows + drafts[index].SourceIndex * stride, target = start + index * stride;
             current.Span.Slice(source, stride).CopyTo(result.AsSpan(target));
-            foreach (int field in arrays)
+            foreach (int array in arrays)
             {
-                reader.Array(source + field);
-                int address = reader.Relative(source + field + 8);
-                Q(result, target + field + 8, address < 0 ? 0 : address - target - field - 8);
+                TagArray.Checked(current.Span, source + array);
+                int address = TagPointer.Checked(current.Span, source + array + TagArray.RelativeOffset);
+                int copied = target + array + TagArray.RelativeOffset;
+                Q(result, copied, address < 0 ? 0 : address - copied);
             }
         }
         return result;
     }
 
+    private static ushort SelectorAt(ReadOnlySpan<byte> display, int data, int index) =>
+        TagView.At<C808028b2>(display, data + index * SelectorStride).Value;
+
     private static void Q(byte[] bytes, int at, long value) => BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at), value);
-    private static void U(byte[] bytes, int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), value);
 }

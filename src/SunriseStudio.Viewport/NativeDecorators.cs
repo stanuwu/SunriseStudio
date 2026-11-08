@@ -1,11 +1,13 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Viewport;
 
@@ -202,12 +204,13 @@ public sealed class NativeDecoratorPayload
 
     /**
      * A record's TEXCOORD7 and BLENDINDICES0 as its vertex shader reads them.
-     * @return Record: bytes 12 to 15 as unorm times extern 72 row 6 plus row 7. Occlusion: the first four AO bytes as unorm.
+     * @return Record: the z axis and its pad byte as unorm times extern 72 row 6 plus row 7. Occlusion: the first four AO bytes as unorm.
      */
     public (Vector4 Record, Vector4 Occlusion) ShaderInputs(int record)
     {
-        byte[] bytes = Records[record], ao = Occlusion[record];
-        var raw = new Vector4(bytes[12], bytes[13], bytes[14], bytes[15]) / 255f;
+        ref readonly var row = ref TagView.At<SDecoratorRecord>(Records[record]);
+        byte[] ao = Occlusion[record];
+        var raw = new Vector4(row.ZAxisUnorm8[0], row.ZAxisUnorm8[1], row.ZAxisUnorm8[2], row.ZAxisPad) / 255f;
         return (raw * Extern72[6] + Extern72[7], new Vector4(ao[0], ao[1], ao[2], ao[3]) / 255f);
     }
 
@@ -343,7 +346,7 @@ public sealed class NativeDecorators(PackageCatalog catalog)
         float first = Curve(0);
         return new(first * direction.X, first * direction.Y, Curve(1), Curve(2));
     }
-    private const uint AoClass = 0x80807268, TableClass = 0x80809780;
+    private const uint AoClass = SOcclusionMap.Class, TableClass = SRuntimeNameMap.Class;
     private readonly Dictionary<(uint Payload, Matrix4x4 Placement, uint Bubble), NativeDecoratorPayload> payloads = [];
     private readonly Dictionary<uint, NativeDecoratorType> types = [];
     private readonly Dictionary<uint, uint> windByMap = [];
@@ -416,20 +419,22 @@ public sealed class NativeDecorators(PackageCatalog catalog)
     {
         var tags = DecoratorTags.Read(catalog, tag);
         byte[] data = catalog.Read(tag);
-        if (data.Length < 0x92) throw new InvalidDataException("Decorator payload is truncated.");
-        var typeTags = U32s(data, 0x08);
-        var groups = U32s(data, 0x18);
-        var cellStarts = U32s(data, 0x38).Select(v => (int)v).ToArray();
+        if (!TagView.FitsThrough<SDecoratorPayload>(data, 0, nameof(SDecoratorPayload.Placed)))
+            throw new InvalidDataException("Decorator payload is truncated.");
+        var typeTags = U32s<SDecoratorPayload, UnknownDecoratorTypeHandle>(data, nameof(SDecoratorPayload.Types), UnknownDecoratorTypeHandle.Class);
+        var groups = U32s<SDecoratorPayload, SI32Element>(data, nameof(SDecoratorPayload.X7ff74339b650), SI32Element.Class);
+        var cellStarts = U32s<SDecoratorPayload, SI32Element>(data, nameof(SDecoratorPayload.CellStarts), SI32Element.Class).Select(v => (int)v).ToArray();
         var typeData = typeTags.Select(ReadType).ToArray();
         bool ground = typeData.Length == 1 && typeData[0].Ground;
         if (typeData.Any(t => t.Ground) && !ground) throw new NotSupportedException("Ground decorator payload has several types.");
         if (!ground && groups.Length != typeTags.Length + 1) throw new InvalidDataException("Decorator groups do not match the types.");
         byte[] header = catalog.Read(tags.Header);
-        ulong key = BinaryPrimitives.ReadUInt64LittleEndian(header.AsSpan(0x08));
-        byte form = header[0x10];
+        ulong key = TagView.Member<SDecoratorInstanceHeader, ulong>(header, 0, nameof(SDecoratorInstanceHeader.AoKey));
+        byte form = header[TagView.FieldOffset<SDecoratorInstanceHeader>(nameof(SDecoratorInstanceHeader.Form))];
         var quantization = catalog.Read(tags.Quantization);
         var block = catalog.Read(tags.Block);
-        var (recordData, recordCount) = ArrayData(block, 0x08, DecoratorRecords.Size);
+        var recordRows = ArrayRows<SDecoratorBlock, SDecoratorRecord>(block, nameof(SDecoratorBlock.Records), SDecoratorRecord.Class);
+        int recordCount = recordRows.Length;
         if (groups[0] != 0 || groups[^1] != recordCount) throw new InvalidDataException("Decorator groups do not cover the records.");
         var quant = DecoratorQuantization.Read(quantization);
         var records = new byte[recordCount][];
@@ -448,20 +453,21 @@ public sealed class NativeDecorators(PackageCatalog catalog)
                 recordCell[r] = cell;
                 if (r >= Boundary(next)) { cell++; next++; }
                 recordType[r] = t;
-                records[r] = recordData.Slice(r * DecoratorRecords.Size, DecoratorRecords.Size).ToArray();
+                records[r] = MemoryMarshal.AsBytes(recordRows.Slice(r, 1)).ToArray();
                 var instance = DecoratorRecords.Decode(records[r], quant);
                 positions[r] = new(instance.Position, instance.Scale);
             }
         byte[] cells = catalog.Read(tags.Cells);
-        var (cellData, cellCount) = ArrayData(cells, 0x08, 48);
+        var boxes = ArrayRows<SInstanceBoundsTable, SInstanceBoundsRow>(cells, nameof(SInstanceBoundsTable.Boxes), SInstanceBoundsRow.Class);
+        int cellCount = boxes.Length;
         var extents = new float[cellCount];
         var centers = new Vector3[cellCount];
 
         for (int c = 0; c < cellCount; c++)
         {
-            var row = cellData.Slice(48 * c, 32);
-            var min = new Vector3(F32(row, 0), F32(row, 4), F32(row, 8));
-            var max = new Vector3(F32(row, 16), F32(row, 20), F32(row, 24));
+            ref readonly var box = ref boxes[c];
+            var min = new Vector3(box.MinimumW1.X, box.MinimumW1.Y, box.MinimumW1.Z);
+            var max = new Vector3(box.MaximumW1.X, box.MaximumW1.Y, box.MaximumW1.Z);
             extents[c] = Length(max - min);
             // 0x7FF742F11020 measures from (min - max) * 0.5 + max.
             centers[c] = (min - max) * 0.5f + max;
@@ -469,7 +475,7 @@ public sealed class NativeDecorators(PackageCatalog catalog)
         // Ground bands: cell c lies in the last band starting at or before its first record.
         var cellBand = ground ? cellStarts.Select(start => Array.FindLastIndex(groups, g => g <= start)).ToArray() : [];
         if (recordCell.Any(c => c >= cellCount)) throw new InvalidDataException("A decorator record has no cell.");
-        bool placed = data[0x91] != 0;
+        bool placed = data[TagView.FieldOffset<SDecoratorPayload>(nameof(SDecoratorPayload.Placed))] != 0;
         var extern72 = new Vector4[8];
         if (placed)
         {
@@ -482,7 +488,9 @@ public sealed class NativeDecorators(PackageCatalog catalog)
             extern72[1] = new(rotation.X, rotation.Y, rotation.Z, rotation.W);
         }
         else extern72[1] = new(0, 0, 0, 1);
-        for (int i = 0; i < 6; i++) extern72[2 + i] = Row(quantization, i);
+        ref readonly var quantRows = ref TagView.At<SDecoratorQuantization>(quantization);
+        extern72[2] = quantRows.HalfRange; extern72[3] = quantRows.Middle; extern72[4] = quantRows.XAxisScale; extern72[5] = quantRows.XAxisOffset;
+        extern72[6] = new(quantRows.ZAxisScale, quantRows.Unk4c); extern72[7] = new(quantRows.ZAxisOffset, quantRows.ZAxisOffsetW);
         var (wind, windSource) = Wind(tag);
         return new()
         {
@@ -498,49 +506,54 @@ public sealed class NativeDecorators(PackageCatalog catalog)
     /** 0x7FF742ED87F0 binds the texture at +0x08 of the class-0x80806D36 noise resource. */
     private uint NoiseTexture(NativeWindSettings? wind)
     {
-        if (wind is null || !catalog.TryGetEntry(wind.NoiseResource, out var entry) || entry.Reference != 0x80806D36) return 0;
+        if (wind is null || !catalog.TryGetEntry(wind.NoiseResource, out var entry) || entry.Reference != UnknownWindNoiseResource.Class) return 0;
         byte[] resource = catalog.Read(wind.NoiseResource);
-        uint texture = resource.Length >= 12 ? BinaryPrimitives.ReadUInt32LittleEndian(resource.AsSpan(8)) : 0;
-        return catalog.TryGetEntry(texture, out _) && catalog.Read(texture).Length == 40 ? texture : 0;
+        uint texture = TagView.FitsThrough<UnknownWindNoiseResource>(resource, 0, nameof(UnknownWindNoiseResource.NoiseTexture))
+            ? TagView.Member<UnknownWindNoiseResource, uint>(resource, 0, nameof(UnknownWindNoiseResource.NoiseTexture)) : 0;
+        return catalog.TryGetEntry(texture, out _) && catalog.Read(texture).Length == Unsafe.SizeOf<TextureHeader>() ? texture : 0;
     }
 
     private NativeDecoratorType ReadType(uint tag)
     {
         if (types.TryGetValue(tag, out var known)) return known;
         byte[] data = catalog.Read(tag);
-        if (data.Length < 0x48) throw new InvalidDataException("Decorator type is truncated.");
-        if (data[0x0C] != 0) return Remember(tag, ReadGroundType(tag, data));
-        uint model = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0x08));
-        byte[] lod = catalog.Read(BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0x10)));
-        var (distances, distanceCount) = ArrayData(lod, 0x18, 16);
-        var (weights, weightCount) = ArrayData(lod, 0x28, 4);
-        if (distanceCount < 1 || weightCount < 1) throw new InvalidDataException("Decorator LOD distances are missing.");
-        byte[] meshTag = catalog.Read(BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0x14)));
-        var (meshData, meshCount) = ArrayData(meshTag, 0x08, 80);
-        var meshRows = new Vector4[meshCount][];
-        for (int m = 0; m < meshCount; m++)
-            meshRows[m] = Enumerable.Range(0, 5).Select(i => Vector(meshData, 80 * m + 16 * i)).ToArray();
-        var (parameters, parameterCount) = ArrayData(data, 0x18, 4);
-        var (options, optionCount) = ArrayData(data, 0x28, 1);
-        if (parameterCount != SpeedTreeWind.ParameterCount || optionCount != SpeedTreeWind.OptionCount)
+        if (!TagView.FitsThrough<SDecoratorType>(data, 0, nameof(SDecoratorType.TypeScopeRows)))
+            throw new InvalidDataException("Decorator type is truncated.");
+        if (TagView.Member<SDecoratorType, byte>(data, 0, nameof(SDecoratorType.IsGround)) != 0) return Remember(tag, ReadGroundType(tag, data));
+        uint model = TagView.Member<SDecoratorType, uint>(data, 0, nameof(SDecoratorType.Model));
+        byte[] lod = catalog.Read(TagView.Member<SDecoratorType, uint>(data, 0, nameof(SDecoratorType.LodTable)));
+        var distances = ArrayRows<SDecoratorLodTable, ExpressionConstant>(lod, nameof(SDecoratorLodTable.LodVectors), ExpressionConstant.Class);
+        var weights = ArrayRows<SDecoratorLodTable, SF32Column>(lod, nameof(SDecoratorLodTable.LodWeights), SF32Column.Class);
+        if (distances.Length < 1 || weights.Length < 1) throw new InvalidDataException("Decorator LOD distances are missing.");
+        byte[] meshTag = catalog.Read(TagView.Member<SDecoratorType, uint>(data, 0, nameof(SDecoratorType.MeshScopeRows)));
+        var meshSets = ArrayRows<SSpeedtreeScopeRows, SSpeedtreeMeshScopeRowSet>(meshTag, nameof(SSpeedtreeScopeRows.MeshScopeRows), SSpeedtreeMeshScopeRowSet.Class);
+        var meshRows = new Vector4[meshSets.Length][];
+        for (int m = 0; m < meshSets.Length; m++)
+        {
+            ref readonly var set = ref meshSets[m];
+            meshRows[m] = [set.ScopeRow0, set.ScopeRow1, set.ScopeRow2, set.ScopeRow3, set.ScopeRow4];
+        }
+        var parameters = ArrayRows<SDecoratorType, SF32Column>(data, nameof(SDecoratorType.WindParameters), SF32Column.Class);
+        var options = ArrayRows<SDecoratorType, C80800004>(data, nameof(SDecoratorType.WindOptions), C80800004.Class);
+        if (parameters.Length != SpeedTreeWind.ParameterCount || options.Length != SpeedTreeWind.OptionCount)
             throw new InvalidDataException("Decorator wind parameters have an unexpected size.");
-        var (rows, rowFloats) = ArrayData(data, 0x38, 4);
+        var rows = ArrayRows<SDecoratorType, SF32Column>(data, nameof(SDecoratorType.TypeScopeRows), SF32Column.Class);
         var typeRows = new Vector4[TypeRowCount];
         // 0x7FF742F15A30 zeroes the 400 bytes when the type has none.
-        if (rowFloats != 0)
+        if (rows.Length != 0)
         {
-            if (rowFloats != TypeRowCount * 4) throw new InvalidDataException("Decorator scope rows have an unexpected size.");
-            for (int i = 0; i < TypeRowCount; i++) typeRows[i] = Vector(rows, 16 * i);
+            if (rows.Length != TypeRowCount * 4) throw new InvalidDataException("Decorator scope rows have an unexpected size.");
+            MemoryMarshal.Cast<SF32Column, Vector4>(rows).CopyTo(typeRows);
         }
         byte[] modelData = Model(model);
-        var (firstMesh, modelMeshes) = ArrayData(modelData, 0x10, 0x88);
-        if (modelMeshes < 1) throw new InvalidDataException("Decorator model has no mesh.");
-        int lodCount = BinaryPrimitives.ReadUInt16LittleEndian(firstMesh[0x2A..]) - BinaryPrimitives.ReadUInt16LittleEndian(firstMesh[0x28..]);
+        var modelMeshes = ArrayRows<SEntityModel, SEntityModelMesh>(modelData, nameof(SEntityModel.Meshes), SEntityModelMesh.Class);
+        if (modelMeshes.Length < 1) throw new InvalidDataException("Decorator model has no mesh.");
+        int lodCount = modelMeshes[0].StageIndexBoundaries[1] - modelMeshes[0].StageIndexBoundaries[0];
         var type = new NativeDecoratorType
         {
-            Tag = tag, Model = model, LastLod = lodCount - 1, Weight = F32(weights, 0), Distances = Vector(distances, 0),
+            Tag = tag, Model = model, LastLod = lodCount - 1, Weight = weights[0].Value, Distances = distances[0].Value,
             MeshRows = meshRows, TypeRows = typeRows,
-            WindParameters = MemoryMarshal.Cast<byte, float>(parameters).ToArray(), WindOptions = options.ToArray()
+            WindParameters = MemoryMarshal.Cast<SF32Column, float>(parameters).ToArray(), WindOptions = MemoryMarshal.AsBytes(options).ToArray()
         };
         return Remember(tag, type);
     }
@@ -550,27 +563,38 @@ public sealed class NativeDecorators(PackageCatalog catalog)
     /** A ground type: bands from the +0x10 tag, three wind expressions and the model's CB11 rows. */
     private NativeDecoratorType ReadGroundType(uint tag, byte[] data)
     {
-        if (data.Length < 0xD8) throw new InvalidDataException("Ground decorator type is truncated.");
-        uint model = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0x08));
-        byte[] lod = catalog.Read(BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0x10)));
-        var (counts, countCount) = ArrayData(lod, 0x08, 1);
-        var (distances, distanceCount) = ArrayData(lod, 0x18, 16);
-        var (weights, weightCount) = ArrayData(lod, 0x28, 4);
+        if (!TagView.Fits<SDecoratorType>(data, 0)) throw new InvalidDataException("Ground decorator type is truncated.");
+        ref readonly var view = ref TagView.At<SDecoratorType>(data);
+        uint model = view.Model;
+        byte[] lod = catalog.Read(view.LodTable);
+        var counts = MemoryMarshal.AsBytes(ArrayRows<SDecoratorLodTable, C80800005>(lod, nameof(SDecoratorLodTable.BandLodCounts), C80800005.Class));
+        var distances = ArrayRows<SDecoratorLodTable, ExpressionConstant>(lod, nameof(SDecoratorLodTable.LodVectors), ExpressionConstant.Class);
+        var weights = ArrayRows<SDecoratorLodTable, SF32Column>(lod, nameof(SDecoratorLodTable.LodWeights), SF32Column.Class);
         // 0x7FF742F11020 walks bands below both array counts.
-        int bandCount = Math.Min(countCount, distanceCount);
-        if (weightCount < bandCount) throw new InvalidDataException("Ground decorator band weights are missing.");
-        var bands = Enumerable.Range(0, bandCount).Select(b => new NativeDecoratorBand((sbyte)counts[b], F32(weights, 4 * b),
-            Vector(distances, 16 * b))).ToArray();
+        int bandCount = Math.Min(counts.Length, distances.Length);
+        if (weights.Length < bandCount) throw new InvalidDataException("Ground decorator band weights are missing.");
+        var bands = new NativeDecoratorBand[bandCount];
+        for (int b = 0; b < bandCount; b++) bands[b] = new((sbyte)counts[b], weights[b].Value, distances[b].Value);
         byte[] modelData = Model(model);
         var rigid = new Vector4[8];
         rigid[0] = Vector4.UnitX; rigid[1] = Vector4.UnitY; rigid[2] = Vector4.UnitZ; rigid[3] = Vector4.UnitW;
-        for (int i = 0; i < 3; i++) rigid[4 + i] = Vector(modelData, 0x50 + 16 * i);
-        long meshCount = BinaryPrimitives.ReadInt64LittleEndian(modelData.AsSpan(0x10));
+        rigid[4] = new(TagView.Member<SEntityModel, Vector3>(modelData, 0, nameof(SEntityModel.PositionScale)),
+            TagView.Member<SEntityModel, float>(modelData, 0, nameof(SEntityModel.Unk5c)));
+        rigid[5] = new(TagView.Member<SEntityModel, Vector3>(modelData, 0, nameof(SEntityModel.PositionOffset)),
+            TagView.Member<SEntityModel, float>(modelData, 0, nameof(SEntityModel.PositionScaleW)));
+        rigid[6] = new(TagView.Member<SEntityModel, float>(modelData, 0, nameof(SEntityModel.UvScaleU)),
+            TagView.Member<SEntityModel, float>(modelData, 0, nameof(SEntityModel.UvScaleV)),
+            TagView.Member<SEntityModel, float>(modelData, 0, nameof(SEntityModel.UvOffsetU)),
+            TagView.Member<SEntityModel, float>(modelData, 0, nameof(SEntityModel.UvOffsetV)));
+        int meshCount = ArrayRows<SEntityModel, SEntityModelMesh>(modelData, nameof(SEntityModel.Meshes), SEntityModelMesh.Class).Length;
+        ref readonly var curves = ref view.WindCurves;
         return new NativeDecoratorType
         {
             Tag = tag, Model = model, LastLod = meshCount - 1, Weight = 0, Distances = Vector4.Zero, MeshRows = [], TypeRows = [],
             WindParameters = [], WindOptions = [], Ground = true, Bands = bands, RigidRows = rigid,
-            WindCurves = [NativeExpression.Read(data, 0x48), NativeExpression.Read(data, 0x78), NativeExpression.Read(data, 0xA8)]
+            WindCurves = [NativeExpression.Read(data, TagView.OffsetOf(data, in curves.HDadf5a77)),
+                NativeExpression.Read(data, TagView.OffsetOf(data, in curves.HBee26751)),
+                NativeExpression.Read(data, TagView.OffsetOf(data, in curves.H94fabe2c))]
         };
     }
 
@@ -578,14 +602,14 @@ public sealed class NativeDecorators(PackageCatalog catalog)
     private int MeshIndex(uint model, int partOffset)
     {
         byte[] data = Model(model);
-        long meshCount = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(0x10));
-        int meshStart = (int)(0x18 + BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(0x18)) + 16);
+        var (meshCount, meshStart) = Checked<SEntityModelMesh>(data, TagView.FieldOffset<SEntityModel>(nameof(SEntityModel.Meshes)),
+            SEntityModelMesh.Class);
         for (int m = 0; m < meshCount; m++)
         {
-            int mesh = meshStart + 0x88 * m;
-            long partCount = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(mesh + 0x18));
-            int partStart = (int)(mesh + 0x20 + BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(mesh + 0x20)) + 16);
-            if (partOffset >= partStart && partOffset < partStart + 0x20 * partCount) return m;
+            int mesh = meshStart + Unsafe.SizeOf<SEntityModelMesh>() * m;
+            var (partCount, partStart) = Checked<SEntityModelPart>(data,
+                mesh + TagView.FieldOffset<SEntityModelMesh>(nameof(SEntityModelMesh.Parts)), SEntityModelPart.Class);
+            if (partOffset >= partStart && partOffset < partStart + Unsafe.SizeOf<SEntityModelPart>() * partCount) return m;
         }
         throw new InvalidDataException("Decorator part is not in its model.");
     }
@@ -596,9 +620,10 @@ public sealed class NativeDecorators(PackageCatalog catalog)
      */
     public (int First, int Last) Levels(uint model, int partOffset, int stage)
     {
-        var (firstMesh, meshes) = ArrayData(Model(model), 0x10, 0x88);
-        if (meshes < 1) throw new InvalidDataException("Decorator model has no mesh.");
-        int lodCount = BinaryPrimitives.ReadUInt16LittleEndian(firstMesh[0x2A..]) - BinaryPrimitives.ReadUInt16LittleEndian(firstMesh[0x28..]);
+        byte[] data = Model(model);
+        var meshes = ArrayRows<SEntityModel, SEntityModelMesh>(data, nameof(SEntityModel.Meshes), SEntityModelMesh.Class);
+        if (meshes.Length < 1) throw new InvalidDataException("Decorator model has no mesh.");
+        int lodCount = meshes[0].StageIndexBoundaries[1] - meshes[0].StageIndexBoundaries[0];
         var (_, first, last) = MeshAndLevels(model, lodCount - 1, partOffset, stage);
         return (first, last);
     }
@@ -610,17 +635,18 @@ public sealed class NativeDecorators(PackageCatalog catalog)
     private (int Mesh, int First, int Last) MeshAndLevels(uint model, int lastLod, int partOffset, int stage)
     {
         byte[] data = Model(model);
-        long meshCount = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(0x10));
-        int meshStart = (int)(0x18 + BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(0x18)) + 16);
+        var (meshCount, meshStart) = Checked<SEntityModelMesh>(data, TagView.FieldOffset<SEntityModel>(nameof(SEntityModel.Meshes)),
+            SEntityModelMesh.Class);
+        int partStride = Unsafe.SizeOf<SEntityModelPart>();
         for (int m = 0; m < meshCount; m++)
         {
-            int mesh = meshStart + 0x88 * m;
-            long partCount = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(mesh + 0x18));
-            int partStart = (int)(mesh + 0x20 + BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(mesh + 0x20)) + 16);
-            if (partOffset < partStart || partOffset >= partStart + 0x20 * partCount || (partOffset - partStart) % 0x20 != 0) continue;
-            int ordinal = (partOffset - partStart) / 0x20;
-            int first = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(mesh + 0x28 + 2 * stage));
-            int end = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(mesh + 0x2A + 2 * stage));
+            int mesh = meshStart + Unsafe.SizeOf<SEntityModelMesh>() * m;
+            var (partCount, partStart) = Checked<SEntityModelPart>(data,
+                mesh + TagView.FieldOffset<SEntityModelMesh>(nameof(SEntityModelMesh.Parts)), SEntityModelPart.Class);
+            if (partOffset < partStart || partOffset >= partStart + partStride * partCount || (partOffset - partStart) % partStride != 0) continue;
+            int ordinal = (partOffset - partStart) / partStride;
+            ref readonly var boundaries = ref TagView.At<SEntityModelMesh>(data, mesh).StageIndexBoundaries;
+            int first = boundaries[stage], end = boundaries[stage + 1];
             if (ordinal < first || ordinal >= end) throw new InvalidDataException("Decorator part is outside its stage range.");
             int part = ordinal - first, parts = end - first, levels = lastLod + 1;
             (int Low, int High) range = m == meshCount - 1 ? (levels, levels) : (0, levels - 1);
@@ -649,16 +675,15 @@ public sealed class NativeDecorators(PackageCatalog catalog)
             {
                 if (entry.Reference != AoClass) continue;
                 byte[] data = catalog.Read(entry.TagHash);
-                uint slice = data.Length >= 0x74 ? BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0x70)) : uint.MaxValue;
-                foreach (var (section, field) in new[] { (1, 0x28), (2, 0x40) })
+                uint slice = TagView.FitsThrough<SOcclusionMap>(data, 0, nameof(SOcclusionMap.Selector))
+                    ? TagView.Member<SOcclusionMap, uint>(data, 0, nameof(SOcclusionMap.Selector)) : uint.MaxValue;
+                foreach (var (section, field) in new[] { (1, nameof(SOcclusionMap.TreeOffsets)), (2, nameof(SOcclusionMap.DecoratorOffsets)) })
                 {
-                    if (data.Length < field + 16) continue;
-                    var (rows, rowCount) = ArrayData(data, field, 16);
-                    for (int i = 0; i < rowCount; i++)
+                    if (!TagView.FitsThrough<SOcclusionMap>(data, 0, field)) continue;
+                    foreach (ref readonly var row in ArrayRows<SOcclusionMap, UnknownOcclusionMapInstance>(data, field, UnknownOcclusionMapInstance.Class))
                     {
-                        ulong rowKey = BinaryPrimitives.ReadUInt64LittleEndian(rows[(16 * i)..]);
-                        if (!index.TryGetValue(rowKey, out var list)) index.Add(rowKey, list = []);
-                        list.Add((entry.TagHash, section, BinaryPrimitives.ReadUInt32LittleEndian(rows[(16 * i + 8)..]), slice));
+                        if (!index.TryGetValue(row.InstanceKey, out var list)) index.Add(row.InstanceKey, list = []);
+                        list.Add((entry.TagHash, section, row.BaseByteOffset, slice));
                     }
                 }
             }
@@ -667,7 +692,7 @@ public sealed class NativeDecorators(PackageCatalog catalog)
         int wanted = form != 0 ? 1 : 2, stride = form != 0 ? 16 : 4;
         var matches = occlusion.GetValueOrDefault(key)?.Where(m => m.Section == wanted).ToArray() ?? [];
         if (ownerMaps.Count != 0) matches = matches.Where(m => ownerMaps.Contains(m.Tag)).ToArray();
-        uint Package(uint tag) => (tag - 0x80800000) >> 13;
+        uint Package(uint tag) => TagHashes.Package(tag);
         if (matches.Length > 1 && matches.Any(m => Package(m.Tag) == Package(payload)))
             matches = matches.Where(m => Package(m.Tag) == Package(payload)).ToArray();
         // 0x7FF742E22BD0 and 0x7FF742E22D70 search the active map first, then the maps above 0x3F.
@@ -676,8 +701,7 @@ public sealed class NativeDecorators(PackageCatalog catalog)
             var active = matches.Where(m => sliceIndices.Contains((int)m.Slice)).ToArray();
             matches = active.Length != 0 ? active : matches.Where(m => m.Slice > 0x3F).ToArray();
         }
-        var buffers = matches.Select(m => (Buffer: BinaryPrimitives.ReadUInt32LittleEndian(catalog.Read(m.Tag).AsSpan(wanted == 1 ? 0x20 : 0x38)),
-            m.Offset)).Distinct().ToArray();
+        var buffers = matches.Select(m => (Buffer: AoBuffer(catalog.Read(m.Tag), wanted), m.Offset)).Distinct().ToArray();
         if (buffers.Length != 1)
             throw new InvalidDataException(buffers.Length == 0 ? "No AO row matches this decorator header."
                 : "Several AO maps match this decorator header; the game picks one by the active slice-set index.");
@@ -685,11 +709,15 @@ public sealed class NativeDecorators(PackageCatalog catalog)
         if (!catalog.TryGetEntry(bufferTag, out var bufferEntry)) throw new InvalidDataException("Decorator AO buffer is missing.");
         byte[] bufferHeader = catalog.Read(bufferTag);
         byte[] bufferData = catalog.Read(bufferEntry.Reference);
-        if (BinaryPrimitives.ReadUInt16LittleEndian(bufferHeader.AsSpan(4)) != stride)
+        if (TagView.At<ushort>(bufferHeader, TagView.FieldOffset<VertexBufferHeader>(nameof(VertexBufferHeader.Stride))) != stride)
             throw new InvalidDataException("Decorator AO buffer stride does not match the header form.");
         if ((offset + count) * stride > bufferData.Length) throw new InvalidDataException("Decorator AO rows leave their buffer.");
         return Enumerable.Range(0, count).Select(r => bufferData.AsSpan((int)((offset + r) * stride), stride).ToArray()).ToArray();
     }
+
+    /** @param wanted 1 for a header form other than zero, 2 for form 0. */
+    private static uint AoBuffer(byte[] data, int wanted) => TagView.Member<SOcclusionMap, uint>(data, 0,
+        wanted == 1 ? nameof(SOcclusionMap.DecoratorAoBufferForm1) : nameof(SOcclusionMap.DecoratorAoBufferForm0));
 
     /**
      * The wind settings 0x7FF742DCDB50 finds by name in the loaded root tables. Only the map root's +0x0C table
@@ -718,15 +746,15 @@ public sealed class NativeDecorators(PackageCatalog catalog)
         if (windByMap.TryGetValue(map, out uint known)) return known;
         uint result = 0;
         byte[] root = catalog.Read(map);
-        uint table = root.Length >= 0x10 ? BinaryPrimitives.ReadUInt32LittleEndian(root.AsSpan(0x0C)) : 0;
+        uint table = TagView.FitsThrough<SMapRoot>(root, 0, nameof(SMapRoot.RootNameTable))
+            ? TagView.Member<SMapRoot, uint>(root, 0, nameof(SMapRoot.RootNameTable)) : 0;
         if (catalog.TryGetEntry(table, out var tableEntry) && tableEntry.Reference == TableClass)
         {
             byte[] data = catalog.Read(table);
-            var (rows, count) = ArrayData(data, 0x08, 8);
-            for (int i = 0; i < count; i++)
+            foreach (ref readonly var row in ArrayRows<SRuntimeNameMap, SRuntimeNameRow>(data, nameof(SRuntimeNameMap.TagEntries), SRuntimeNameRow.Class))
             {
-                if (BinaryPrimitives.ReadUInt32LittleEndian(rows[(8 * i)..]) != NativeWindSettings.NameHash) continue;
-                uint settings = BinaryPrimitives.ReadUInt32LittleEndian(rows[(8 * i + 4)..]);
+                if (row.NameHash != NativeWindSettings.NameHash) continue;
+                uint settings = row.ProgramTag;
                 if (catalog.TryGetEntry(settings, out var entry) && entry.Reference == NativeWindSettings.TagClass) result = settings;
             }
         }
@@ -741,24 +769,22 @@ public sealed class NativeDecorators(PackageCatalog catalog)
     // Placement updates never change AO tags, so the index built at Prepare stays valid.
     internal void ShareOcclusion(NativeDecorators source) => occlusion = source.occlusion;
 
-    private static uint[] U32s(byte[] data, int field)
+    private static uint[] U32s<TOwner, T>(byte[] data, string field, uint elementClass) where TOwner : unmanaged where T : unmanaged =>
+        MemoryMarshal.Cast<T, uint>(ArrayRows<TOwner, T>(data, field, elementClass)).ToArray();
+
+    /** The rows of an array field of the TOwner at the tag start; only the field and the rows must fit. */
+    private static ReadOnlySpan<T> ArrayRows<TOwner, T>(byte[] data, string field, uint elementClass)
+        where TOwner : unmanaged where T : unmanaged
     {
-        var (bytes, _) = ArrayData(data, field, 4);
-        return MemoryMarshal.Cast<byte, uint>(bytes).ToArray();
+        var (count, start) = Checked<T>(data, TagView.FieldOffset<TOwner>(field), elementClass);
+        return count == 0 ? [] : MemoryMarshal.Cast<byte, T>(data.AsSpan(start, count * Unsafe.SizeOf<T>()));
     }
 
-    /** Array data starts 16 bytes past the self-relative link that follows the count. */
-    private static (ArraySegment<byte> Data, int Count) ArrayData(byte[] data, int field, int stride)
+    /** The row count and first row of the T array field at `field`; a malformed header throws. */
+    private static (int Count, int Start) Checked<T>(byte[] data, int field, uint elementClass) where T : unmanaged
     {
-        long count = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(field));
-        if (count == 0) return (ArraySegment<byte>.Empty, 0);
-        long start = field + 8 + BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(field + 8)) + 16;
-        if (count < 0 || start < 0 || start + count * stride > data.Length) throw new InvalidDataException("Decorator array leaves its tag.");
-        return (new ArraySegment<byte>(data, (int)start, (int)(count * stride)), (int)count);
+        var (count, start, _) = TagArray.Checked(data, field, elementClass, Unsafe.SizeOf<T>());
+        return (count, start);
     }
 
-    private static float F32(ReadOnlySpan<byte> data, int offset) => BinaryPrimitives.ReadSingleLittleEndian(data[offset..]);
-    private static Vector4 Vector(ReadOnlySpan<byte> data, int offset) =>
-        new(F32(data, offset), F32(data, offset + 4), F32(data, offset + 8), F32(data, offset + 12));
-    private static Vector4 Row(byte[] data, int index) => Vector(data, 16 * index);
 }

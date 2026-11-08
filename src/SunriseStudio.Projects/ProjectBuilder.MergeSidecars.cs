@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Projects;
 
@@ -16,12 +18,14 @@ public static partial class ProjectBuilder
 internal static class MergeSidecarPlanner
 {
     public const string DumpName = "merge-sidecars.json";
-    private const uint ArrayMarker = 0x80809FBD;
     // A self-relative pointer lands on a typed object, whose class word sits just before it.
     private const uint ClassWordMask = 0xFFFF0000, ClassWordPrefix = 0x80800000;
-    // A tag is 0x80800000 + package << 13 + entry.
-    private const uint TagBase = 0x80800000;
-    private const int EntryBits = 13, EntriesPerPackage = 1 << EntryBits;
+    // Array field and header words, from the generated layout.
+    private static readonly int ArrayRelative = TagView.FieldOffset<TagArray<byte>>(nameof(TagArray<byte>.Relative));
+    private static readonly int ArrayField = Unsafe.SizeOf<TagArray<byte>>();
+    // A header's count word ends where its element class starts.
+    private const int HeaderCount = TagArray.ElementClassOffset;
+    private const int ElementWords = TagArray.HeaderSize - TagArray.ElementClassOffset;
 
     /**
      * Writes one sidecar per built package, except `_unp1_` replacements, then the readable dump.
@@ -48,8 +52,8 @@ internal static class MergeSidecarPlanner
             else
                 foreach (var (tag, bytes) in added.OrderBy(pair => pair.Key))
                 {
-                    if (PackageOf(tag) != artifact.PackageId || bytes.Length == 0) continue;
-                    int index = EntryOf(tag);
+                    if ((ushort)TagHashes.Package(tag) != artifact.PackageId || bytes.Length == 0) continue;
+                    int index = TagHashes.Entry(tag);
                     if (index >= artifact.EntryClasses.Length) throw new InvalidDataException($"Added entry {tag:X8} is not in its package.");
                     var plan = new EntryPlan(tag, (uint)index, artifact.EntryClasses[index], bytes, []) { Kind = SidecarEntryKind.Added };
                     FindSites(context, plan);
@@ -104,7 +108,7 @@ internal static class MergeSidecarPlanner
 
     private readonly record struct View(int Count, int Header, int Stride)
     {
-        public int Rows => Header + 16;
+        public int Rows => Header + TagArray.HeaderSize;
     }
 
     /** A table that cannot be described exactly; its entry is written as opaque with this reason. */
@@ -121,7 +125,7 @@ internal static class MergeSidecarPlanner
         {
             if (counts.TryGetValue((table, descriptor), out var known)) return known;
             // An entry too short for a descriptor is not a table, so nothing can name its rows.
-            if (!Catalog.TryGetEntry(table, out var entry) || entry.Size < descriptor + 16) return counts[(table, descriptor)] = (0, 0);
+            if (!Catalog.TryGetEntry(table, out var entry) || entry.Size < descriptor + ArrayField) return counts[(table, descriptor)] = (0, 0);
             byte[] stock = Catalog.ReadOriginal(table);
             uint before = Count(stock, descriptor);
             uint after = edited.TryGetValue(table, out var built) ? Count(built, descriptor) : before;
@@ -130,7 +134,7 @@ internal static class MergeSidecarPlanner
 
         private static uint Count(byte[] bytes, int descriptor)
         {
-            if (descriptor < 0 || descriptor + 16 > bytes.Length || I64(bytes, descriptor) is < 0 or > uint.MaxValue)
+            if (descriptor < 0 || descriptor + ArrayField > bytes.Length || I64(bytes, descriptor) is < 0 or > uint.MaxValue)
                 throw new InvalidDataException("A merge target array has no readable count.");
             return (uint)I64(bytes, descriptor);
         }
@@ -157,7 +161,7 @@ internal static class MergeSidecarPlanner
         {
             // A same-size edit ships its old bytes, so two mods' edits to other words both survive.
             plan.Kind = SidecarEntryKind.Table;
-            var structural = I64(stock, 0) == stock.Length ? new List<(int, int)> { (0, 8) } : [];
+            var structural = I64(stock, 0) == stock.Length ? new List<(int, int)> { (0, TagView.SizeWordSize) } : [];
             plan.Diffs.AddRange(Diffs(stock, built, structural, [], insideOnly: false));
         }
         else
@@ -237,7 +241,7 @@ internal static class MergeSidecarPlanner
         bool sizeWord = I64(stock, 0) == stock.Length;
         if (sizeWord && I64(built, 0) != built.Length) throw new NotMergeable("its size word does not match its size");
         var spans = new TableSpans();
-        if (sizeWord) spans.Structural.Add((0, 8));
+        if (sizeWord) spans.Structural.Add((0, TagView.SizeWordSize));
         var (stockViews, builtViews) = ReadViews(plan, recipe, spans);
         foreach (var array in recipe.Arrays)
         {
@@ -270,13 +274,14 @@ internal static class MergeSidecarPlanner
             var after = Require(ReadView(plan.Built, array.Descriptor, stride), $"its built {array.Name} array is empty");
             if (after.Count < before.Count) throw new NotMergeable($"rows were removed from {array.Name}");
             if (after.Count > array.Limit) throw new NotMergeable($"{array.Name} holds more than {array.Limit} rows");
-            if (!plan.Built.AsSpan(after.Header + 8, 8).SequenceEqual(plan.Stock.AsSpan(before.Header + 8, 8)))
+            if (!plan.Built.AsSpan(after.Header + TagArray.ElementClassOffset, ElementWords)
+                .SequenceEqual(plan.Stock.AsSpan(before.Header + TagArray.ElementClassOffset, ElementWords)))
                 throw new NotMergeable($"the {array.Name} array changed its row class");
             stockViews[array.Descriptor] = before;
             builtViews[array.Descriptor] = after;
-            spans.Structural.Add((array.Descriptor, array.Descriptor + 16));
-            spans.Structural.Add((before.Header, before.Header + 8));
-            spans.Arrays.Add((before.Header - 4, before.Rows + before.Count * stride));
+            spans.Structural.Add((array.Descriptor, array.Descriptor + ArrayField));
+            spans.Structural.Add((before.Header, before.Header + HeaderCount));
+            spans.Arrays.Add((before.Header - TagView.ClassWordSize, before.Rows + before.Count * stride));
         }
         return (stockViews, builtViews);
     }
@@ -353,17 +358,18 @@ internal static class MergeSidecarPlanner
                         continue;
                     }
                     long stockCount = I64(stock, stockAt), builtCount = I64(built, builtAt);
-                    long stockTarget = Target(stock, stockAt + 8), builtTarget = Target(built, builtAt + 8);
+                    long stockTarget = Target(stock, stockAt + ArrayRelative), builtTarget = Target(built, builtAt + ArrayRelative);
                     if (stockCount == builtCount && stockTarget == builtTarget) continue;
                     if (!field.Nestable || field.ElementStride <= 0)
                         throw new NotMergeable($"installed row {row} of {array.Name} changed its array at +{field.Offset}");
                     if (stockCount <= 0 || builtCount < stockCount || builtCount > TableMergeRecipes.EditorRowLimit)
                         throw new NotMergeable($"installed row {row} of {array.Name} changed an empty or shrunk array");
                     var child = new View((int)stockCount, (int)stockTarget, field.ElementStride);
-                    if (!built.AsSpan((int)builtTarget + 8, 8).SequenceEqual(stock.AsSpan(child.Header + 8, 8)))
+                    if (!built.AsSpan((int)builtTarget + TagArray.ElementClassOffset, ElementWords)
+                        .SequenceEqual(stock.AsSpan(child.Header + TagArray.ElementClassOffset, ElementWords)))
                         throw new NotMergeable($"installed row {row} of {array.Name} changed its array class");
-                    spans.Arrays.Add((child.Header - 4, child.Rows + child.Count * field.ElementStride));
-                    spans.Structural.Add((child.Header, child.Header + 8));
+                    spans.Arrays.Add((child.Header - TagView.ClassWordSize, child.Rows + child.Count * field.ElementStride));
+                    spans.Structural.Add((child.Header, child.Header + HeaderCount));
                     plan.Ops.Add(new($"{array.Name}[{row}]+{field.Offset}", MergeOpKind.Append, field.Offset, (uint)parent,
                         (uint)row, new MergeShape(field.ElementStride, field.Element?.Fields ?? []), (uint)stockCount,
                         (uint)builtCount, TableMergeRecipes.EditorRowLimit, null, 0, -1));
@@ -376,19 +382,19 @@ internal static class MergeSidecarPlanner
     /** Null for an empty array with no header; throws NotMergeable when the descriptor is broken. */
     private static View? ReadView(byte[] bytes, int descriptor, int stride)
     {
-        if (descriptor < 0 || descriptor + 16 > bytes.Length) throw new NotMergeable($"it has no array descriptor at +{descriptor}");
-        long count = I64(bytes, descriptor), relative = I64(bytes, descriptor + 8);
+        if (descriptor < 0 || descriptor + ArrayField > bytes.Length) throw new NotMergeable($"it has no array descriptor at +{descriptor}");
+        long count = I64(bytes, descriptor), relative = I64(bytes, descriptor + ArrayRelative);
         if (count == 0 && relative == 0) return null;
-        long header = descriptor + 8 + relative;
+        long header = descriptor + ArrayRelative + relative;
         if (!ArrayHeaderValid(bytes, header, count, stride)) throw new NotMergeable($"its array at +{descriptor} is malformed");
         return new((int)count, (int)header, stride);
     }
 
     /** @return True when a typed array header repeats `count` behind its marker and, given a stride, its rows fit. */
     private static bool ArrayHeaderValid(byte[] bytes, long header, long count, int stride) =>
-        count >= 0 && count <= TableMergeRecipes.EditorRowLimit && header >= 4 && header + 16 <= bytes.Length
-        && U32(bytes, (int)header - 4) == ArrayMarker && I64(bytes, (int)header) == count
-        && (stride <= 0 || header + 16 + count * stride <= bytes.Length);
+        count >= 0 && count <= TableMergeRecipes.EditorRowLimit && header >= 4 && header + TagArray.HeaderSize <= bytes.Length
+        && TagArray.MarkerAt(bytes, header) && I64(bytes, (int)header) == count
+        && (stride <= 0 || header + TagArray.HeaderSize + count * stride <= bytes.Length);
 
     /** Self-relative target of the i64 at `at`, or -1 for 0. */
     private static long Target(byte[] bytes, int at) => I64(bytes, at) is var relative && relative == 0 ? -1 : at + relative;
@@ -443,18 +449,22 @@ internal static class MergeSidecarPlanner
                 long target = I64(bytes, at);
                 if (target != 0 && (at + target < 0 || at + target >= bytes.Length))
                     throw new NotMergeable($"{where} points outside the entry at +{field.Offset}");
+                // An added object moves with the added bytes, so its own pointers are checked like a row's.
+                if (target == 0 || field.Element is not { } owned || at + target < addedStart) continue;
+                if (at + target + owned.Stride > bytes.Length) throw new NotMergeable($"{where} names an object past the entry end");
+                ValidateFields(bytes, views, owned, (int)(at + target), addedStart, where);
                 continue;
             }
-            declared.Add(at); declared.Add(at + 8);
-            long relative = I64(bytes, at + 8);
+            declared.Add(at); declared.Add(at + ArrayRelative);
+            long relative = I64(bytes, at + ArrayRelative);
             long count = I64(bytes, at);
             if (count == 0)
             {
-                if (relative != 0 && (at + 8 + relative <= 0 || at + 8 + relative > bytes.Length))
+                if (relative != 0 && (at + ArrayRelative + relative <= 0 || at + ArrayRelative + relative > bytes.Length))
                     throw new NotMergeable($"{where} has an empty array pointing outside the entry");
                 continue;
             }
-            long header = at + 8 + relative;
+            long header = at + ArrayRelative + relative;
             if (relative == 0 || !ArrayHeaderValid(bytes, header, count, field.ElementStride))
                 throw new NotMergeable($"{where} has a malformed array at +{field.Offset}");
             if (header < addedStart) continue;
@@ -462,7 +472,7 @@ internal static class MergeSidecarPlanner
             if (element is null || field.ElementStride <= 0) continue;
             for (int index = 0; index < count; index++)
             {
-                int elementStart = (int)header + 16 + index * field.ElementStride;
+                int elementStart = (int)header + TagArray.HeaderSize + index * field.ElementStride;
                 ValidateFields(bytes, views, element, elementStart, addedStart, where);
                 foreach (var local in element.Local) ValidateLocal(bytes, local, elementStart, addedStart, where);
             }
@@ -480,7 +490,7 @@ internal static class MergeSidecarPlanner
         foreach (var field in local.Target.Fields)
         {
             int at = (int)target + field.Offset;
-            long arrayTarget = Target(bytes, at + 8);
+            long arrayTarget = Target(bytes, at + ArrayRelative);
             if (arrayTarget >= 0 && arrayTarget < addedStart) throw new NotMergeable($"{where} owns an array outside its added bytes");
         }
     }
@@ -490,7 +500,8 @@ internal static class MergeSidecarPlanner
         long value = I64(bytes, word);
         if (value == 0) return false;
         long target = word + value;
-        return target >= 4 && target < bytes.Length && (U32(bytes, (int)target - 4) & ClassWordMask) == ClassWordPrefix;
+        return target >= TagView.ClassWordSize && target < bytes.Length
+            && (TagView.ClassAt(bytes, (int)target) & ClassWordMask) == ClassWordPrefix;
     }
 
     private static uint[] Keys(byte[] bytes, View view, MergeArray array) =>
@@ -544,17 +555,24 @@ internal static class MergeSidecarPlanner
         void Owned(long header, long count, int stride, MergeShape? element)
         {
             if (header < added || !visited.Add(header)) return;
-            covered.Add((header - 4, header + 16 + count * Math.Max(stride, 0)));
+            covered.Add((header - TagView.ClassWordSize, header + TagArray.HeaderSize + count * Math.Max(stride, 0)));
             if (element is null || stride <= 0) return;
-            for (long index = 0; index < count; index++) Shape(header + 16 + index * stride, element);
+            for (long index = 0; index < count; index++) Shape(header + TagArray.HeaderSize + index * stride, element);
         }
         void Shape(long start, MergeShape shape)
         {
             foreach (var field in shape.Fields.Where(field => field.Kind == MergeFieldKind.OwnedArray))
             {
                 long count = I64(bytes, (int)(start + field.Offset));
-                long target = Target(bytes, (int)(start + field.Offset + 8));
+                long target = Target(bytes, (int)(start + field.Offset + ArrayRelative));
                 if (count > 0 && target >= 0) Owned(target, count, field.ElementStride, field.Element);
+            }
+            foreach (var field in shape.Fields.Where(field => field.Kind == MergeFieldKind.ObjectPointer && field.Element is not null))
+            {
+                long target = Target(bytes, (int)(start + field.Offset));
+                if (target < added || !visited.Add(target)) continue;
+                covered.Add((target, target + field.Element!.Stride));
+                Shape(target, field.Element);
             }
             foreach (var local in shape.Local)
             {
@@ -567,7 +585,7 @@ internal static class MergeSidecarPlanner
         foreach (var array in recipe.Arrays)
         {
             var view = views[array.Descriptor];
-            covered.Add((view.Header - 4, view.Rows + (long)view.Count * array.Row.Stride));
+            covered.Add((view.Header - TagView.ClassWordSize, view.Rows + (long)view.Count * array.Row.Stride));
             for (int row = 0; row < view.Count; row++) Shape(view.Rows + (long)row * array.Row.Stride, array.Row);
         }
         long reached = 0, cursor = added;
@@ -644,7 +662,7 @@ internal static class MergeSidecarPlanner
                 int at = node + step.Offset;
                 long target = at >= 0 && at + 8 <= bytes.Length ? Target(bytes, at) : -1;
                 if (target >= 0 && target < bytes.Length
-                    && (step.Marker == 0 || target >= 4 && U32(bytes, (int)target - 4) == step.Marker))
+                    && (step.Marker == 0 || TagView.ClassAt(bytes, (int)target) == step.Marker))
                     next = [(int)target];
                 break;
             }
@@ -718,6 +736,8 @@ internal static class MergeSidecarPlanner
             }
             ushort Reference(MergeField field) =>
                 field.Kind == MergeFieldKind.RowPointer ? (ushort)opIndex[field.TargetArray]
+                : field.Kind == MergeFieldKind.ObjectPointer
+                    ? field.Element is { Fields.Count: > 0 } target ? AddShape(target) : MergeSidecarFormat.NoElementShape
                 : field.Element is { Fields.Count: > 0 } element && field.ElementStride > 0
                     ? AddShape(element with { Stride = field.ElementStride })
                     : MergeSidecarFormat.NoElementShape;
@@ -773,8 +793,6 @@ internal static class MergeSidecarPlanner
         })
     };
 
-    private static ushort PackageOf(uint tag) => (ushort)((tag - TagBase) >> EntryBits);
-    private static int EntryOf(uint tag) => (int)((tag - TagBase) & (EntriesPerPackage - 1));
     private static long I64(byte[] bytes, int at) =>
         at >= 0 && at + 8 <= bytes.Length ? BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(at)) : 0;
     private static uint U32(byte[] bytes, int at) =>

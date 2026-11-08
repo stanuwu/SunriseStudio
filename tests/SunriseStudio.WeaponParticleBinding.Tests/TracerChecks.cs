@@ -74,7 +74,7 @@ internal static class TracerChecks
 
     private static int Count(byte[] bytes, uint tag) => Enumerable.Range(0, bytes.Length / 4).Count(index => U32(bytes, index * 4) == tag);
     private static Vector4 Colour(byte[] bytes, int at) => new(F32(bytes, at), F32(bytes, at + 4), F32(bytes, at + 8), F32(bytes, at + 12));
-    private static uint Tag(int entry) => 0x80800000u + ((uint)Package << 13) + (uint)entry;
+    private static uint Tag(int entry) => TagHashes.Make(Package, entry);
     private static void Check(bool value, string message) { if (!value) throw new InvalidDataException(message); }
     private static uint U32(byte[] bytes, int at) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
     private static float F32(byte[] bytes, int at) => BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(at));

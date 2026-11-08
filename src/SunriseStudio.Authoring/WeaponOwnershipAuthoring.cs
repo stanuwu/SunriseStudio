@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -21,8 +23,6 @@ public static class WeaponOwnershipAuthoring
     // A stock plated-texture record shared by 15 components; imported part-3 art already uses it.
     private const uint SharedPlate = 0x80EF422F;
     private const uint TemplateGearKey = 0x44A0B334;
-    // The class record names its gameplay root at +8; the root names its class record at +0x88.
-    private const int RecordRoot = 8, RootRecord = 0x88, GearRowStride = 48, GearKeyField = 16;
     private static readonly ConditionalWeakTable<InvestmentCatalog, Dictionary<ushort, List<uint>>> socketUsers = new();
 
     /**
@@ -42,16 +42,15 @@ public static class WeaponOwnershipAuthoring
         int cursor = firstEntry;
         uint Next()
         {
-            uint tag = checked(0x80800000u + ((uint)packageId << 13) + (uint)cursor);
-            if (cursor > 8191 || catalog.ContainsTag(tag)) throw new InvalidDataException("The weapon's own records need free package entries.");
-            cursor++;
-            return tag;
+            if (cursor > 8191 || catalog.ContainsTag(TagHashes.Make(packageId, cursor)))
+                throw new InvalidDataException("The weapon's own records need free package entries.");
+            return TagHashes.Make(packageId, cursor++);
         }
         void Add(uint tag, uint source, byte[] bytes, string role)
         {
             var entry = catalog.TryGetEntry(source, out var found) ? found : throw new InvalidDataException("A source record is missing.");
             assets.Add(new(weapon.Name + "." + role, bytes,
-                new(packageId, entry.Reference, entry.TypeInfo, null, (int)(tag - 0x80800000u - ((uint)packageId << 13))), source));
+                new(packageId, entry.Reference, entry.TypeInfo, null, TagHashes.Split(tag).EntryIndex), source));
             summary.Add($"{role}: {source:X8} -> {tag:X8}");
         }
 
@@ -84,15 +83,16 @@ public static class WeaponOwnershipAuthoring
         }
 
         // The class record and the root name each other; the server refuses a one-sided link.
-        if (U32(Read(root), RootRecord) == ClassRecord)
+        if (TagView.At<SEntity>(Read(root)).ClassRecordGameplayRoot == ClassRecord)
         {
             uint tag = Next();
             byte[] record = catalog.Read(ClassRecord).ToArray();
-            if (U32(record, RecordRoot) != TemplateRoot) throw new InvalidDataException("The class record no longer names its weapon.");
-            Put32(record, RecordRoot, root);
+            if (TagView.At<SNetworkClassRecord>(record).OwnerDefinition != TemplateRoot)
+                throw new InvalidDataException("The class record no longer names its weapon.");
+            TagView.Edit<SNetworkClassRecord>(record).OwnerDefinition = root;
             Add(tag, ClassRecord, record, "class-record");
             byte[] rootBytes = Read(root).ToArray();
-            Put32(rootBytes, RootRecord, tag);
+            TagView.Edit<SEntity>(rootBytes).ClassRecordGameplayRoot = tag;
             changes[root] = rootBytes;
         }
 
@@ -102,7 +102,7 @@ public static class WeaponOwnershipAuthoring
             byte[] entity = Read(holder);
             for (int at = 0; at + 4 <= entity.Length; at += 4)
             {
-                uint component = U32(entity, at);
+                uint component = TagRead.U32(entity, at);
                 if (!owned.Contains(component) || component == holder) continue;
                 byte[] bytes = Read(component);
                 foreach (uint plate in PlatedTextures)
@@ -138,14 +138,13 @@ public static class WeaponOwnershipAuthoring
         Func<uint, byte[]> read, Dictionary<uint, byte[]> changes, List<string> summary)
     {
         byte[] gear = read(WeaponArchetypeAuthoring.GearTableTag).ToArray();
-        long count = BinaryPrimitives.ReadInt64LittleEndian(gear.AsSpan(8));
-        int rows = checked((int)(16 + BinaryPrimitives.ReadInt64LittleEndian(gear.AsSpan(16)))) + 16;
-        if (art.GearIndex >= count) throw new InvalidDataException("The weapon's gear row is outside the gear table.");
-        int at = rows + art.GearIndex * GearRowStride + GearKeyField;
-        if (U32(gear, at) != TemplateGearKey) return;
-        var used = Enumerable.Range(0, (int)count).Select(row => U32(gear, rows + row * GearRowStride + GearKeyField)).ToHashSet();
-        uint key = InvestmentItemClone.NewDefinitionHash(weapon.Name.ToLowerInvariant(), used);
-        Put32(gear, at, key);
+        var rows = TagView.CheckedRows(gear, in TagView.At<SGearTableTag0x81613D27>(gear).Table, SGearRow.Class);
+        if (art.GearIndex >= rows.Length) throw new InvalidDataException("The weapon's gear row is outside the gear table.");
+        if (rows[art.GearIndex].GearKeyPresentationHudSelector != TemplateGearKey) return;
+        var used = new HashSet<uint>();
+        foreach (ref readonly var row in rows) used.Add(row.GearKeyPresentationHudSelector);
+        uint key = StringHash.NewDefinitionHash(weapon.Name.ToLowerInvariant(), used);
+        TagView.Edit<SGearRow>(gear, TagView.OffsetOf(gear, in rows[art.GearIndex])).GearKeyPresentationHudSelector = key;
         changes[WeaponArchetypeAuthoring.GearTableTag] = gear;
         int configs = 0;
         foreach (uint config in WeaponConfigEdits.ConstructionConfigs(read(root)).Distinct())
@@ -201,7 +200,7 @@ public static class WeaponOwnershipAuthoring
                     if (!owned.Contains(item.Tag)) continue;
                     byte[] plugDefinition = read(item.Tag);
                     if (Count(plugDefinition, category) != 1) continue;
-                    uint fresh = InvestmentItemClone.NewDefinitionHash($"sunrise:plug-category:{item.Hash:X8}",
+                    uint fresh = StringHash.NewDefinitionHash($"sunrise:plug-category:{item.Hash:X8}",
                         InvestmentSocketTypes.Categories(gameplay).ToHashSet());
                     plugDefinition = plugDefinition.ToArray();
                     Replace(plugDefinition, category, fresh, 1);
@@ -210,7 +209,7 @@ public static class WeaponOwnershipAuthoring
                     summary.Add($"plug category: {item.Name} {category:X8} -> {fresh:X8}");
                 }
             }
-            uint hash = InvestmentItemClone.NewDefinitionHash($"sunrise:socket-type:{weapon.Hash:X8}:{socket.Index}",
+            uint hash = StringHash.NewDefinitionHash($"sunrise:socket-type:{weapon.Hash:X8}:{socket.Index}",
                 InvestmentSocketTypes.Hashes(gameplay).ToHashSet());
             (gameplay, display, int index) = InvestmentSocketTypes.Append(gameplay, display, socket.Type, hash, whitelist,
                 catalog.ReadOriginal(InvestmentSocketTypes.GameplayTable).Length);
@@ -245,19 +244,18 @@ public static class WeaponOwnershipAuthoring
     private static int Count(byte[] bytes, uint value)
     {
         int hits = 0;
-        for (int at = 0; at + 4 <= bytes.Length; at += 4) if (U32(bytes, at) == value) hits++;
+        for (int at = 0; at + 4 <= bytes.Length; at += 4) if (TagRead.U32(bytes, at) == value) hits++;
         return hits;
     }
 
     private static void Replace(byte[] bytes, uint from, uint to, int expected)
     {
         if (Count(bytes, from) != expected) throw new InvalidDataException($"Expected {expected} reference(s) to {from:X8}.");
-        for (int at = 0; at + 4 <= bytes.Length; at += 4) if (U32(bytes, at) == from) Put32(bytes, at, to);
+        for (int at = 0; at + 4 <= bytes.Length; at += 4) if (TagRead.U32(bytes, at) == from) Put32(bytes, at, to);
     }
 
     private static uint Tag(ProjectAssetAddition asset) => asset.Native is { } native ? NativeTag(native) : 0;
     private static uint NativeTag(NativeAssetMetadata native) =>
-        checked(0x80800000u + ((uint)native.PackageId << 13) + (uint)native.EntryIndex!.Value);
-    private static uint U32(byte[] bytes, int at) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
+        TagHashes.Make(native.PackageId, native.EntryIndex!.Value);
     private static void Put32(byte[] bytes, int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), value);
 }

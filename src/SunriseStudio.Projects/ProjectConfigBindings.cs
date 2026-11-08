@@ -1,4 +1,5 @@
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Projects;
 
@@ -52,7 +53,7 @@ public sealed partial class StudioProject
                 if (binding.AddedAssetId is { } id)
                 {
                     var asset = source.AddedAssets.SingleOrDefault(value => value.Id == id);
-                    if (asset?.Native is not { } native || NativeTag(native) != binding.TagHash
+                    if (asset?.Native is not { } native || TagHashes.Make(native.PackageId, native.EntryIndex!.Value) != binding.TagHash
                         || native.Reference != binding.ClassHash || asset.Size > ConfigBindingLimits.MaximumEntryBytes)
                         throw new InvalidDataException("A bound added asset changed identity.");
                     if (!PackageWriter.IsNewPackageId(native.PackageId) || catalog.ContainsInstalledPackage(native.PackageId))
@@ -96,7 +97,7 @@ public sealed partial class StudioProject
         if (catalog is null) throw new InvalidOperationException("Open the original installation to validate bound assets.");
         foreach (var binding in affected.Where(value => value.AddedAssetId is not null))
             if (states?.TryGetValue(binding.AddedAssetId!, out var snapshot) == true
-                && (snapshot?.Asset.Native is not { } native || NativeTag(native) != binding.TagHash || native.Reference != binding.ClassHash))
+                && (snapshot?.Asset.Native is not { } native || TagHashes.Make(native.PackageId, native.EntryIndex!.Value) != binding.TagHash || native.Reference != binding.ClassHash))
                 throw new InvalidDataException("Unbind the config settings before removing or replacing this target.");
         _ = CompileConfigBindings(affected, catalog, new Dictionary<uint, byte[]>(), tag =>
         {
@@ -111,9 +112,6 @@ public sealed partial class StudioProject
         });
     }
 
-    internal static uint NativeTag(NativeAssetMetadata native) =>
-        checked(0x80800000U + ((uint)native.PackageId << 13) + (uint)native.EntryIndex!.Value);
-
     /** Unknown profiles and dangling declarations cannot survive persistence or undo. */
     private static void RequireConfigBindings(IReadOnlyList<ProjectConfigBinding> bindings, ModMetadata? mod)
     {
@@ -124,8 +122,8 @@ public sealed partial class StudioProject
         HashSet<string> identities = [];
         foreach (var binding in bindings)
         {
-            if (binding is null || binding.Site is not { } site || binding.ClassHash != 0x80804825
-                || binding.TagHash < 0x80800000 || (binding.TagHash - 0x80800000U) >> 13 > ConfigBindingLimits.MaximumPackageId
+            if (binding is null || binding.Site is not { } site || binding.ClassHash != CuiResource.Class
+                || !TagHashes.IsTag(binding.TagHash) || TagHashes.Package(binding.TagHash) > ConfigBindingLimits.MaximumPackageId
                 || site.RowOffset < 0 || !identities.Add(binding.Identity)
                 || !Enum.IsDefined(binding.Type) || site.Profile is not (ConfigBindingLimits.PropertyProfile or ConfigBindingLimits.ComparisonProfile))
                 throw new InvalidDataException("Invalid or duplicate config binding site.");

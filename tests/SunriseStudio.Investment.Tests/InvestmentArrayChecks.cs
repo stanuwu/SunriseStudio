@@ -1,7 +1,10 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 internal static class InvestmentArrayChecks
 {
@@ -133,11 +136,12 @@ internal static class InvestmentArrayChecks
     public static void Collectibles()
     {
         // One installed collectible whose parent list names node 5, and its display row.
-        const int stride = InvestmentCollections.CollectibleStride, parents = 64 + InvestmentCollections.CollectibleParents;
+        int stride = Unsafe.SizeOf<CollectibleRow>(), parentsField = TagView.FieldOffset<CollectibleRow>(nameof(CollectibleRow.ParentNodes));
+        int parents = 64 + parentsField;
         byte[] stock = new byte[288];
         Q(stock, 0, stock.Length); StatArray(stock, 8, 48, 1, 0x80803963);
         StatArray(stock, parents, 256, 1, 0x80803962); BinaryPrimitives.WriteUInt16LittleEndian(stock.AsSpan(272), 5);
-        U(stock, 64 + InvestmentCollections.CollectibleHash, 0xC0FFEE);
+        TagView.Edit<CollectibleRow>(stock, 64).CollectibleHash = 0xC0FFEE;
         byte[] displays = new byte[144];
         Q(displays, 0, displays.Length); StatArray(displays, 8, 32, 1, 0x80803964);
         byte[] table = stock;
@@ -149,12 +153,12 @@ internal static class InvestmentArrayChecks
             Check(row == added && InvestmentCollections.FindCollectible(table, 100 + added) == row, "A collectible did not land in its row.");
         }
         int data = Target(table, 16) + 16;
-        Check(BinaryPrimitives.ReadInt64LittleEndian(table.AsSpan(data - 16)) == 4 && Target(table, data + InvestmentCollections.CollectibleParents + 8) == 256,
+        Check(BinaryPrimitives.ReadInt64LittleEndian(table.AsSpan(data - 16)) == 4 && Target(table, data + parentsField + 8) == 256,
             "The installed collectible lost its parent list.");
         for (int row = 1; row <= 3; row++)
         {
-            int list = Target(table, data + row * stride + InvestmentCollections.CollectibleParents + 8);
-            Check(BinaryPrimitives.ReadInt64LittleEndian(table.AsSpan(data + row * stride + InvestmentCollections.CollectibleParents)) == 1
+            int list = Target(table, data + row * stride + parentsField + 8);
+            Check(BinaryPrimitives.ReadInt64LittleEndian(table.AsSpan(data + row * stride + parentsField)) == 1
                 && BinaryPrimitives.ReadUInt16LittleEndian(table.AsSpan(list + 16)) == 9 && list < data,
                 $"Collectible {row} lost its own parent list.");
         }

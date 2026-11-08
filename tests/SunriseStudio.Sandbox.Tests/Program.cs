@@ -153,7 +153,7 @@ if (game >= 0 && game + 1 < args.Length)
         for (int index = 0; index < count; index++)
         {
             uint name = U32Read(table, rows + index * 24 + 4);
-            if (name == InvestmentItemClone.EmptyStringHash) { skipped++; continue; }
+            if (name == StringHash.Empty) { skipped++; continue; }
             uint tag = InvestmentSandboxPerkAuthoring.ResolveRuntimeName(
                 catalog.Read(InvestmentSandboxPerkAuthoring.RuntimeNameMapTag), name);
             if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != NativePerkBehavior.Class)
@@ -204,8 +204,8 @@ static void Registration()
         "Registration changed unrelated display or map bytes.");
     Check(BinaryPrimitives.ReadUInt16LittleEndian(added.Displays.AsSpan(text + 16)) == 3
         && BinaryPrimitives.ReadUInt16LittleEndian(added.Displays.AsSpan(text + 18)) == 0
-        && U32Read(added.Displays, text + 20) == InvestmentItemClone.EmptyStringHash
-        && U32Read(added.Displays, text + 24) == InvestmentItemClone.EmptyStringHash,
+        && U32Read(added.Displays, text + 20) == StringHash.Empty
+        && U32Read(added.Displays, text + 24) == StringHash.Empty,
         "Fresh display fields do not match the native default.");
     var second = InvestmentSandboxPerkAuthoring.Register(added.Definitions, added.Displays, added.RuntimeNames,
         14, 23, 0x81FFE001, 8, 1003, 1004, SandboxPerkPresentation.Normal, displays.Length, 4);
@@ -217,8 +217,8 @@ static void Registration()
         && Target(second.Displays, secondRows + 80) == secondTexts + 56,
         "A second registration did not rebase shared display text pointers.");
     var defaults = InvestmentSandboxPerkAuthoring.Register(second.Definitions, second.Displays,
-        second.RuntimeNames, 15, 24, 0x81FFE002, 9, InvestmentItemClone.EmptyStringHash,
-        InvestmentItemClone.EmptyStringHash, SandboxPerkPresentation.Normal, displays.Length);
+        second.RuntimeNames, 15, 24, 0x81FFE002, 9, StringHash.Empty,
+        StringHash.Empty, SandboxPerkPresentation.Normal, displays.Length);
     int defaultRows = Target(defaults.Displays, 16) + 16;
     int defaultText = Target(defaults.Displays, defaultRows + defaults.Index * 24 + 8);
     byte[] nativeDefault = Convert.FromHexString(

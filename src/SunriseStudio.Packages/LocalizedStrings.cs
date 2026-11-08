@@ -1,21 +1,21 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Text;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Packages;
 
-/** English text of every class-0x80809A88 string container, keyed by string hash. */
+/** English text of every SLocalizedStrings container, keyed by string hash. */
 public sealed partial class LocalizedStrings
 {
-    // Container, data, row and array marker classes of this build.
-    private const uint ContainerClass = 0x80809A88;
-    private const uint DataClass = 0x80809A8A;
-    private const uint HashRowClass = 0x80800070;
-    private const uint PartRowClass = 0x80809A90;
-    private const uint CombinationRowClass = 0x80809A8E;
-    private const uint ArrayMarker = 0x80809FBD;
-    // A part with this variable hash holds text; any other value names a runtime variable.
-    private const uint EmptyHash = 0x811C9DC5;
-    private const int PartStride = 0x20;
+    private const uint ContainerClass = SLocalizedStrings.Class;
+    private const uint DataClass = SLocalizedStringsData.Class;
+    private static readonly int PartStride = Unsafe.SizeOf<SStringPart>();
+    private static readonly int PartText = TagView.FieldOffset<SStringPart>(nameof(SStringPart.Text));
+    private static readonly int PartVariable = TagView.FieldOffset<SStringPart>(nameof(SStringPart.VariableHash));
+    private static readonly int PartBytes = TagView.FieldOffset<SStringPart>(nameof(SStringPart.ByteLength));
+    private static readonly int PartShift = TagView.FieldOffset<SStringPart>(nameof(SStringPart.CipherShift));
 
     private readonly Dictionary<uint, string> unique = [];
     private readonly Dictionary<uint, string[]> ambiguous = [];
@@ -107,28 +107,34 @@ public sealed partial class LocalizedStrings
     private static Dictionary<uint, string> ReadContainer(PackageCatalog catalog, uint tag, Dictionary<uint, uint>? dataTags = null)
     {
         var container = catalog.Read(tag);
-        var hashes = Rows(container, 0x08, HashRowClass, 4);
-        uint english = container.Length >= 0x1C ? U32(container, 0x18) : 0;
-        if (dataTags is not null && container.Length >= 0x1C) dataTags[tag] = english;
+        var hashes = Rows<SU32HashElement>(container, TagView.FieldOffset<SLocalizedStrings>(nameof(SLocalizedStrings.Ids)),
+            SU32HashElement.Class);
+        const string englishSlot = nameof(SLocalizedStrings.LanguageData);
+        bool hasEnglish = TagView.FitsThrough<SLocalizedStrings>(container, 0, englishSlot);
+        uint english = hasEnglish ? TagRead.U32(container, TagView.FieldOffset<SLocalizedStrings>(englishSlot)) : 0;
+        if (dataTags is not null && hasEnglish) dataTags[tag] = english;
         if (hashes.Length == 0) return [];
         if (!catalog.TryGetEntry(english, out var dataEntry) || dataEntry.Reference != DataClass)
             throw new InvalidDataException($"English data 0x{english:X8} has the wrong class.");
         var data = catalog.Read(english);
-        Rows(data, 0x08, PartRowClass, PartStride);
-        var combinations = Rows(data, 0x48, CombinationRowClass, 16);
+        Rows<SStringPart>(data, TagView.FieldOffset<SLocalizedStringsData>(nameof(SLocalizedStringsData.Strands)), SStringPart.Class);
+        var combinations = Rows<SStringCombination>(data,
+            TagView.FieldOffset<SLocalizedStringsData>(nameof(SLocalizedStringsData.Strings)), SStringCombination.Class);
+        int firstPart = TagView.FieldOffset<SStringCombination>(nameof(SStringCombination.FirstPart));
+        int partCount = TagView.FieldOffset<SStringCombination>(nameof(SStringCombination.PartCount));
         if (combinations.Length != hashes.Length)
             throw new InvalidDataException("String combination count differs from the hash count.");
         var map = new Dictionary<uint, string>(hashes.Length);
         var text = new StringBuilder();
         for (var i = 0; i < hashes.Length; i++)
         {
-            var hash = U32(container, hashes[i]);
-            if (hash == EmptyHash) continue;
+            var hash = TagRead.U32(container, hashes[i]);
+            if (hash == StringHash.Empty) continue;
             text.Clear();
             var row = combinations[i];
-            var first = Relative(data, row);
-            var count = I64(data, row + 8);
-            if (count < 0 || first < 0 || first + count * PartStride > data.Length)
+            var first = Relative(data, row + firstPart);
+            var count = TagRead.I64(data, row + partCount);
+            if (count < 0 || first < 0 || first > data.Length || count > (data.Length - first) / PartStride)
                 throw new InvalidDataException("String combination points outside its data tag.");
             for (var p = 0; p < count; p++) AppendPart(data, first + p * PartStride, text);
             if (text.Length != 0) map.TryAdd(hash, text.ToString());
@@ -139,11 +145,12 @@ public sealed partial class LocalizedStrings
     /** The cipher shift is added to each decoded code point, not to a byte. */
     private static void AppendPart(byte[] data, int part, StringBuilder text)
     {
-        var variable = U32(data, part + 0x10);
-        if (variable != EmptyHash) { text.Append($"<{variable:X8}>"); return; }
-        var start = Relative(data, part + 8);
-        int length = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(part + 0x14));
-        int shift = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(part + 0x18));
+        var variable = TagRead.U32(data, part + PartVariable);
+        // A part whose variable hash is Empty holds text; any other value names a runtime variable.
+        if (variable != StringHash.Empty) { text.Append($"<{variable:X8}>"); return; }
+        var start = Relative(data, part + PartText);
+        int length = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(part + PartBytes));
+        int shift = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(part + PartShift));
         if (start < 0 || start + length > data.Length)
             throw new InvalidDataException("String part points outside its data tag.");
         var bytes = data.AsSpan(start, length);
@@ -168,20 +175,20 @@ public sealed partial class LocalizedStrings
     }
 
     /** Tiger array links point to the repeated count, sixteen bytes before the rows. */
-    private static int[] Rows(byte[] data, int descriptor, uint rowClass, int stride)
+    private static int[] Rows<T>(byte[] data, int descriptor, uint rowClass) where T : unmanaged
     {
-        var count = I64(data, descriptor);
-        var relative = I64(data, descriptor + 8);
+        var count = TagRead.I64(data, descriptor);
+        var relative = TagRead.I64(data, descriptor + TagArray.RelativeOffset);
         if (count == 0) return [];
-        var header = descriptor + 8 + relative;
-        if (count < 0 || count > 1_000_000 || header < 4 || header + 16 > data.Length
-            || U32(data, (int)header - 4) != ArrayMarker || I64(data, (int)header) != count
-            || U32(data, (int)header + 8) != rowClass || header + 16 + count * stride > data.Length)
+        // The header's zero word is not checked.
+        var header = new TagArrayHeader(data, descriptor + TagArray.RelativeOffset + relative);
+        int stride = Unsafe.SizeOf<T>();
+        if (count < 0 || count > TagArray.MaximumReaderRows || !header.IsWellFormed || header.Count != count
+            || header.ElementClass != rowClass || !header.RowsFit(stride))
             throw new InvalidDataException($"Array 0x{descriptor:X} does not match class 0x{rowClass:X8}.");
-        return Enumerable.Range(0, (int)count).Select(i => (int)header + 16 + i * stride).ToArray();
+        int start = (int)header.DataOffset;
+        return Enumerable.Range(0, (int)count).Select(i => start + i * stride).ToArray();
     }
 
-    private static uint U32(byte[] data, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset));
-    private static long I64(byte[] data, int offset) => BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(offset));
-    private static int Relative(byte[] data, int offset) => checked((int)(offset + I64(data, offset)));
+    private static int Relative(byte[] data, int offset) => checked((int)(offset + TagRead.I64(data, offset)));
 }

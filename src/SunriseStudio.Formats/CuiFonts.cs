@@ -1,6 +1,9 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -37,9 +40,9 @@ internal sealed class CuiFonts
     public const uint DefaultStyle = 0xDCE0E62D;
     // The native text constructor selects the default foreground palette identity.
     private const uint DefaultColor = 0xBD77BB98;
-    private const uint SheetClass = 0x808047C5, ManifestClass = 0x808047C7, HeaderClass = 0x808047CA;
+    private const uint SheetClass = SFontSheet.Class, ManifestClass = SFontManifest.Class, HeaderClass = SFontHeader.Class;
     private sealed record FontRange(string Name, int Minimum, int Maximum);
-    private sealed record Style(uint Source, uint Hash, byte Size, FontRange[] Fonts, byte[] Definition, TagReader Reader);
+    private sealed record Style(uint Source, uint Hash, byte Size, FontRange[] Fonts, byte[] Definition, byte[] Sheet);
     private sealed record Header(uint Tag, uint Data, string Name, int Length);
     private readonly PackageCatalog catalog;
     private readonly CancellationToken token;
@@ -53,17 +56,20 @@ internal sealed class CuiFonts
         foreach (var entry in catalog.Entries.Where(entry => entry.Type == 8 && entry.Reference == ManifestClass))
         {
             token.ThrowIfCancellationRequested();
-            var r = new TagReader(catalog.Read(entry.TagHash));
-            var list = r.Array(8, 0x808047C9, 4);
+            byte[] manifest = catalog.Read(entry.TagHash);
+            int fontStride = Unsafe.SizeOf<C808047c9>();
+            var list = TagArray.Checked(manifest, TagView.FieldOffset<SFontManifest>("Fonts"), C808047c9.Class, fontStride);
             if (list.Count > 64) throw new InvalidDataException("Embedded font manifest exceeds the native capacity.");
             for (int i = 0; i < list.Count; i++)
             {
-                uint tag = r.U32(list.Data + i * 4);
+                uint tag = TagView.At<C808047c9>(manifest, list.Data + i * fontStride).Unk0;
                 Require(tag, HeaderClass);
-                var h = new TagReader(catalog.Read(tag));
-                if (!h.Has(0, 32) || h.U64(24) is 0 or > 16 * 1024 * 1024)
+                byte[] h = catalog.Read(tag);
+                if (!TagView.Fits<SFontHeader>(h, 0) || TagView.At<SFontHeader>(h, 0).ByteCount is 0 or > 16 * 1024 * 1024)
                     throw new InvalidDataException("Embedded font header has an invalid byte count.");
-                var header = new Header(tag, h.U32(8), String(h, 16), checked((int)h.U64(24)));
+                ref readonly var fontHeader = ref TagView.At<SFontHeader>(h, 0);
+                var header = new Header(tag, fontHeader.FontData, String(h, TagView.OffsetOf(h, in fontHeader.Filename)),
+                    checked((int)fontHeader.ByteCount));
                 if (!headers.TryGetValue(header.Name, out var existing)) headers.Add(header.Name, existing = []);
                 if (existing.All(candidate => candidate.Tag != tag)) existing.Add(header);
             }
@@ -71,31 +77,45 @@ internal sealed class CuiFonts
         foreach (var entry in catalog.Entries.Where(entry => entry.Type == 8 && entry.Reference == SheetClass))
         {
             token.ThrowIfCancellationRequested();
-            var bytes = catalog.Read(entry.TagHash); var r = new TagReader(bytes);
-            var names = r.Array(24, 0x80804767, 8);
-            var sets = r.Array(40, 0x8080475F, 40);
-            var rows = r.Array(56, 0x80804756, 128);
+            byte[] bytes = catalog.Read(entry.TagHash);
+            int nameStride = Unsafe.SizeOf<C80804767>(), setStride = Unsafe.SizeOf<SFontSet>(), rowStride = Unsafe.SizeOf<STextStyle>();
+            int refStride = Unsafe.SizeOf<C80804762>(), rangeStride = Unsafe.SizeOf<CuiFontRange>();
+            var names = TagArray.Checked(bytes, TagView.FieldOffset<SFontSheet>("Fonts.H612a3a3c.Filenames"), C80804767.Class, nameStride);
+            var sets = TagArray.Checked(bytes, TagView.FieldOffset<SFontSheet>("Fonts.H612a3a3c.FontSets"), SFontSet.Class, setStride);
+            var rows = TagArray.Checked(bytes, TagView.FieldOffset<SFontSheet>("Fonts.H612a3a3c.Fonts"), STextStyle.Class, rowStride);
             if (names.Count > 256 || sets.Count > 256 || rows.Count > 4096)
                 throw new InvalidDataException("CUI font table exceeds preview capacity.");
             Dictionary<int, string> filenames = [];
-            for (int i = 0; i < names.Count; i++) filenames.Add(names.Data + i * 8, String(r, names.Data + i * 8));
+            for (int i = 0; i < names.Count; i++)
+            {
+                ref readonly var filename = ref TagView.At<C80804767>(bytes, names.Data + i * nameStride);
+                filenames.Add(TagView.OffsetOf(bytes, in filename), String(bytes, TagView.OffsetOf(bytes, in filename.Unk0)));
+            }
             for (int i = 0; i < rows.Count; i++)
             {
-                int at = rows.Data + i * 128, set = r.Relative(at + 8);
-                if (set < sets.Data || set >= sets.Data + sets.Count * 40 || (set - sets.Data) % 40 != 0)
+                int at = rows.Data + i * rowStride;
+                ref readonly var row = ref TagView.At<STextStyle>(bytes, at);
+                int set = TagPointer.Checked(bytes, TagView.OffsetOf(bytes, in row.FontSet));
+                if (set < sets.Data || set >= sets.Data + sets.Count * setStride || (set - sets.Data) % setStride != 0)
                     throw new InvalidDataException("Text style leaves its declared font sets.");
-                var refs = r.Array(set + 8, 0x80804762, 8); var ranges = r.Array(set + 24, 0x80804763, 8);
+                ref readonly var fontSet = ref TagView.At<SFontSet>(bytes, set);
+                var refs = TagArray.Checked(bytes, TagView.OffsetOf(bytes, in fontSet.FontRefs), C80804762.Class, refStride);
+                var ranges = TagArray.Checked(bytes, TagView.OffsetOf(bytes, in fontSet.Ranges), CuiFontRange.Class, rangeStride);
                 if (refs.Count is < 1 or > 8 || ranges.Count != refs.Count)
                     throw new InvalidDataException("Text style font ranges disagree with its fonts.");
                 var fontRanges = new FontRange[refs.Count];
                 for (int font = 0; font < refs.Count; font++)
                 {
-                    if (!filenames.TryGetValue(r.Relative(refs.Data + font * 8), out string? name))
+                    ref readonly var fontRef = ref TagView.At<C80804762>(bytes, refs.Data + font * refStride);
+                    if (!filenames.TryGetValue(TagPointer.Checked(bytes, TagView.OffsetOf(bytes, in fontRef.Unk0)), out string? name))
                         throw new InvalidDataException("Text style references an undeclared font.");
-                    fontRanges[font] = new(name, r.I32(ranges.Data + font * 8), r.I32(ranges.Data + font * 8 + 4));
+                    ref readonly var range = ref TagView.At<CuiFontRange>(bytes, ranges.Data + font * rangeStride);
+                    fontRanges[font] = new(name, range.FirstCodePoint, range.CodePointCount);
                 }
-                byte[] definition = bytes.AsSpan(at, 128).ToArray(); definition.AsSpan(8, 8).Clear();
-                var style = new Style(entry.TagHash, r.U32(at), r.U8(at + 16), fontRanges, definition, r);
+                // The font set link is cleared so equal styles compare equal across sheets.
+                byte[] definition = bytes.AsSpan(at, rowStride).ToArray();
+                TagView.Edit<STextStyle>(definition).FontSet = default;
+                var style = new Style(entry.TagHash, row.StyleHash, row.Size, fontRanges, definition, bytes);
                 if (!styles.TryGetValue(style.Hash, out var candidates)) styles.Add(style.Hash, candidates = []);
                 candidates.Add(style);
             }
@@ -107,24 +127,24 @@ internal sealed class CuiFonts
         if (text.Length > 16384) throw new NotSupportedException("Text exceeds the layout preview budget.");
         if (!styles.TryGetValue(styleHash, out var candidates)) throw new NotSupportedException("Native text style is not available.");
         var style = candidates[0];
-        int alignment = checked((int)Integer(0x40E, 0)), casing = checked((int)Integer(0x40A, style.Definition[17]));
+        int alignment = checked((int)Integer(0x40E, 0)), casing = checked((int)Integer(0x40A, TagView.At<STextStyle>(style.Definition).DefaultCase));
         if (alignment is < 0 or > 2 || casing is < 0 or > 2)
             throw new NotSupportedException("Text alignment or case mode is unsupported.");
         if (candidates.Any(other => !other.Definition.AsSpan().SequenceEqual(style.Definition)
             || !other.Fonts.SequenceEqual(style.Fonts)))
             throw new NotSupportedException("Text style differs between screens; a screen context is required.");
         var paletteProperty = properties.LastOrDefault(row => row.Property.Direct && row.Property.Selector == 0x40D
-            && row.Property.ValueClass == 0x80804692);
+            && row.Property.ValueClass == C80804692.Class);
         uint paletteKey = paletteProperty is null ? DefaultColor : CuiVisualProperties.ReadUInt(paletteProperty.Source, paletteProperty.Property);
-        Vector4 color = Palette(style.Reader, paletteKey);
-        if (candidates.Any(other => Palette(other.Reader, paletteKey) != color))
+        Vector4 color = Palette(style.Sheet, paletteKey);
+        if (candidates.Any(other => Palette(other.Sheet, paletteKey) != color))
             throw new NotSupportedException("Text palette differs between screens; a screen context is required.");
         var tint = properties.LastOrDefault(row => row.Property.Direct && row.Property.Selector == 0x414
-            && row.Property.ValueClass == 0x80804693);
+            && row.Property.ValueClass == C80804693.Class);
         if (tint is not null)
         {
-            var data = new TagReader(tint.Source.Data); int at = tint.Property.ValueOffset;
-            color *= new Vector4(Single(data, at), Single(data, at + 4), Single(data, at + 8), Single(data, at + 12));
+            ref readonly var vector = ref TagView.At<C80804693>(tint.Source.Data.Span, tint.Property.ValueOffset);
+            color *= new Vector4(vector.Unk0, vector.Unk4, vector.Unk8, vector.UnkC);
         }
         if (!float.IsFinite(color.X + color.Y + color.Z + color.W)) throw new InvalidDataException("Text color is not finite.");
         var appearance = new CuiTextAppearance(style.Source, styleHash, size == 0 ? Math.Max(1, (int)style.Size) : size,
@@ -147,11 +167,11 @@ internal sealed class CuiFonts
         string error = missing.Count == 0 ? "" : "Some characters are unavailable in the native font set.";
         if (casing != 0 && text.Any(character => character > 127)) error = "Native non-ASCII casing is not implemented.";
         var auto = properties.LastOrDefault(row => row.Property.Direct && row.Property.Selector == 0x41A
-            && row.Property.ValueClass == 0x8080468D);
+            && row.Property.ValueClass == SCuiBoolValue.Class);
         bool autoWidth = auto is not null && auto.Source.Data.Span[auto.Property.ValueOffset] != 0;
         float minimum = Number(0x401), maximum = Number(0x402);
         var height = properties.LastOrDefault(row => row.Property.Direct && row.Property.Selector == 0x41B
-            && row.Property.ValueClass == 0x8080468D);
+            && row.Property.ValueClass == SCuiBoolValue.Class);
         bool autoHeight = height is not null && height.Source.Data.Span[height.Property.ValueOffset] != 0;
         float minimumHeight = Number(0x403), maximumHeight = Number(0x404), spacing = 1 + Number(0x421);
         if (Math.Abs(spacing) > 4096 || appearance.Size > 4096)
@@ -168,10 +188,10 @@ internal sealed class CuiFonts
         float Number(ulong selector)
         {
             var row = properties.LastOrDefault(row => row.Property.Direct && row.Property.Selector == selector
-                && row.Property.ValueClass == 0x80804694);
+                && row.Property.ValueClass == SCuiFloatValue.Class);
             if (row is null) return 0;
-            float value = Single(new(row.Source.Data), row.Property.ValueOffset);
-            if (row.Property.PoolDescriptor == 200) value = MathF.Round(value * CuiLayout.ReferenceHeight);
+            float value = TagView.At<SCuiFloatValue>(row.Source.Data.Span, row.Property.ValueOffset).ValueLayoutSelectors0x2060x209;
+            if (row.Property.PoolDescriptor == CuiDocument.FloatsB) value = MathF.Round(value * CuiLayout.ReferenceHeight);
             if (!float.IsFinite(value)) throw new InvalidDataException("Text size limit is not finite.");
             return value;
         }
@@ -180,24 +200,23 @@ internal sealed class CuiFonts
         {
             var value = properties.LastOrDefault(row => row.Property.Direct && row.Property.Selector == selector);
             if (value is null) return fallback;
-            return value.Property.ValueClass == 0x80804696 ? CuiVisualProperties.ReadUInt(value.Source, value.Property)
+            return value.Property.ValueClass == CuiIntegerValue.Class ? CuiVisualProperties.ReadUInt(value.Source, value.Property)
                 : throw new NotSupportedException("Native text property storage is unsupported.");
         }
     }
 
-    private static Vector4 Palette(TagReader reader, uint key)
+    private static Vector4 Palette(byte[] sheet, uint key)
     {
-        var colors = reader.Array(864, 0x80804770, 32);
+        int stride = Unsafe.SizeOf<C80804770>();
+        var colors = TagArray.Checked(sheet, TagView.FieldOffset<SFontSheet>("Palette"), C80804770.Class, stride);
         if (colors.Count % 4 != 0) throw new InvalidDataException("Text palettes do not have four equal ranges.");
         for (int i = 0; i < colors.Count / 4; i++)
         {
-            int at = colors.Data + i * 32;
-            if (reader.U32(at) == key) return new(Single(reader, at + 16), Single(reader, at + 20), Single(reader, at + 24), Single(reader, at + 28));
+            ref readonly var color = ref TagView.At<C80804770>(sheet, colors.Data + i * stride);
+            if (color.Unk0 == key) return new(color.Unk10, color.Unk14, color.Unk18, color.Unk1c);
         }
         return Vector4.One;
     }
-
-    private static float Single(TagReader reader, int at) => BitConverter.UInt32BitsToSingle(reader.U32(at));
 
     private CuiFontFace Face(string name)
     {
@@ -223,13 +242,12 @@ internal sealed class CuiFonts
             throw new InvalidDataException("CUI font reference has the wrong class.");
     }
 
-    private static string String(TagReader reader, int pointer)
+    private static string String(ReadOnlySpan<byte> tag, int pointer)
     {
-        int at = reader.Relative(pointer), length = 0;
-        while (length < 256 && reader.Has(at + length, 1) && reader.U8(at + length) != 0) length++;
-        if (length is 0 or 256 || !reader.Has(at + length, 1)) throw new InvalidDataException("Invalid native font filename.");
-        byte[] bytes = new byte[length];
-        for (int i = 0; i < length; i++) bytes[i] = reader.U8(at + i);
-        return new UTF8Encoding(false, true).GetString(bytes);
+        int at = TagPointer.Checked(tag, pointer), length = 0;
+        static bool Inside(ReadOnlySpan<byte> tag, int offset) => offset >= 0 && offset < tag.Length;
+        while (length < 256 && Inside(tag, at + length) && tag[at + length] != 0) length++;
+        if (length is 0 or 256 || !Inside(tag, at + length)) throw new InvalidDataException("Invalid native font filename.");
+        return new UTF8Encoding(false, true).GetString(tag.Slice(at, length));
     }
 }

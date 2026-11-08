@@ -1,9 +1,13 @@
-using System.Buffers.Binary;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -11,10 +15,11 @@ namespace SunriseStudio.Authoring;
 internal static class OriginalAssetMaterials
 {
     private const uint Template = 0x815B8158;
-    private const string TemplateHash = "A4EEF505308E1FC7191EB85B17B71BADA8E619E6F2E3D7F0B68493455EDB6D70";
+    // Entries: the technique, the constants header and data, then a header and data per texture.
+    private const int EntryCount = 9;
     private const string PixelHash = "9E97A5ACE9FCD8D9C743E287D1C0682C94F0B9E0EB037EA32593DDF53DCE5E13";
     private const string VertexHash = "D67606C0E9766D10759890F5A32A555662887C25533D81A2951E2D4DEACD0D66";
-    internal sealed record Prepared(uint MaterialTag, IReadOnlyList<ProjectAssetAddition> Assets, IReadOnlyList<string> Skipped);
+    internal sealed record Prepared(uint MaterialTag, IReadOnlyList<ProjectAssetAddition> Assets);
 
     /**
      * Untranslated glTF material features need an explicit skip before import.
@@ -81,13 +86,6 @@ internal static class OriginalAssetMaterials
         var packedImage = Texture(pbr, "metallicRoughnessTexture");
         var normalImage = Texture(material, "normalTexture");
         float strength = Number(Property(material, "normalTexture"), "scale", 1);
-        List<string> skipped = [];
-        if (normalImage is not null && Enumerable.Range(0, normalImage.Width * normalImage.Height)
-            .Any(index => normalImage.Pixels[index * 4 + 2] < 128))
-        {
-            if (!skipUnsupported) throw new NotSupportedException("The native normal profile cannot encode negative-Z normals. Use Skip to omit this normal map.");
-            skipped.Add("normal map with negative Z"); normalImage = null;
-        }
         var color = Map(baseImage, [255, 255, 255, 255], (pixel, output) =>
         {
             for (int c = 0; c < 3; c++) output[c] = Byte(ToSrgb(ToLinear(pixel[c] / 255f) * factor[c]));
@@ -96,6 +94,7 @@ internal static class OriginalAssetMaterials
         var packed = Map(packedImage, [255, 255, 255, 255], (pixel, output) =>
         { output[0] = Byte(pixel[2] / 255f * metal); output[1] = Byte(1 - pixel[1] / 255f * rough); output[2] = 255; output[3] = 0; }, token);
         // glTF image V reverses the generated bitangent; its tangent normal Y must reverse too.
+        // The shader rebuilds Z as positive, so a negative-Z texel reads as its mirror.
         var normalMap = Map(normalImage, [128, 128, 255, 255], (pixel, output) =>
         {
             double x = normalImage is null ? 0 : (pixel[0] / 255d * 2 - 1) * strength;
@@ -106,31 +105,35 @@ internal static class OriginalAssetMaterials
             output[2] = output[3] = 255;
         }, token);
         var templateEntry = Require(catalog, Template);
+        if (templateEntry.Reference != STechnique.Class)
+            throw new NotSupportedException("The installed opaque material template is not a technique.");
         byte[] native = catalog.ReadOriginal(Template);
-        if (Convert.ToHexString(SHA256.HashData(native)) != TemplateHash)
-            throw new NotSupportedException("The installed opaque material template differs from the checked profile.");
-        CheckShader(0x48, VertexHash); CheckShader(0x2C8, PixelHash);
-        uint Tag(int offset) => checked(0x80800000u + ((uint)package << 13) + (uint)(first + offset));
-        if (first < 0 || first > 8192 - 9) throw new InvalidDataException("The package has no room for this material.");
+        ref readonly var technique = ref TagView.Checked<STechnique>(native, 0);
+        CheckShader(technique.VertexShader.Shader, VertexHash); CheckShader(technique.PixelShader.Shader, PixelHash);
+        uint Tag(int offset) => TagHashes.Make(package, first + offset);
+        if (first < 0 || first > TagHashes.EntriesPerPackage - EntryCount) throw new InvalidDataException("The package has no room for this material.");
         var textures = new[]
         {
             TextureAssetImporter.PrepareRgba(catalog, color, name + ".color", package, first + 3, srgb: true),
             TextureAssetImporter.PrepareRgba(catalog, packed, name + ".surface", package, first + 5, srgb: false),
             TextureAssetImporter.PrepareRgba(catalog, normalMap, name + ".normal", package, first + 7, srgb: false)
         };
-        foreach (var (slot, offset) in TextureFields(native))
-            BinaryPrimitives.WriteUInt32LittleEndian(native.AsSpan(offset), textures[slot].HeaderTag);
-        uint constantsTag = BinaryPrimitives.ReadUInt32LittleEndian(native.AsSpan(0x34C));
+        foreach (ref var row in TextureRows(native)) row.Texture = textures[row.TextureSlot].HeaderTag;
+        ref var pixel = ref TagView.Edit<STechnique>(native).PixelShader;
+        uint constantsTag = pixel.State.DynamicConstants.CbContainer;
         var constants = Require(catalog, constantsTag); var payload = Require(catalog, constants.Reference);
         byte[] constantsHeader = catalog.ReadOriginal(constantsTag);
         if (constants.Type != 32 || constants.SubType != 7 || payload.Type != 40 || payload.SubType != 7
-            || constantsHeader.Length < 4 || BinaryPrimitives.ReadUInt32LittleEndian(constantsHeader) != 48)
+            || !TagView.FitsThrough<ConstantBufferHeader>(constantsHeader, 0, nameof(ConstantBufferHeader.ByteCount))
+            || TagView.At<uint>(constantsHeader, TagView.FieldOffset<ConstantBufferHeader>(nameof(ConstantBufferHeader.ByteCount))) != 48)
             throw new InvalidDataException("The opaque template has an unexpected constant buffer.");
+        // The checked pixel shader reads three float4 registers; only these lanes are not zero.
         byte[] values = new byte[48];
-        BinaryPrimitives.WriteSingleLittleEndian(values.AsSpan(16), 1);
-        BinaryPrimitives.WriteSingleLittleEndian(values.AsSpan(32), 2);
-        BinaryPrimitives.WriteSingleLittleEndian(values.AsSpan(36), -1);
-        BinaryPrimitives.WriteUInt32LittleEndian(native.AsSpan(0x34C), Tag(1));
+        var registers = MemoryMarshal.Cast<byte, Vector4>(values);
+        registers[1].X = 1;
+        registers[2].X = 2;
+        registers[2].Y = -1;
+        pixel.State.DynamicConstants.CbContainer = Tag(1);
         List<ProjectAssetAddition> additions =
         [
             new(name + ".material", native, new(package, templateEntry.Reference, templateEntry.TypeInfo, name, first), Template),
@@ -138,31 +141,32 @@ internal static class OriginalAssetMaterials
             new(name + ".constants.bin", values, new(package, Tag(1), payload.TypeInfo, null, first + 2))
         ];
         additions.AddRange(textures.SelectMany(texture => texture.Assets));
-        return new(Tag(0), additions, skipped);
+        return new(Tag(0), additions);
 
-        void CheckShader(int offset, string expected)
+        void CheckShader(uint tag, string expected)
         {
-            var shader = Require(catalog, BinaryPrimitives.ReadUInt32LittleEndian(native.AsSpan(offset)));
+            var shader = Require(catalog, tag);
             if (Convert.ToHexString(SHA256.HashData(catalog.ReadOriginal(shader.Reference))) != expected)
                 throw new NotSupportedException("The installed opaque shader differs from the checked profile.");
         }
     }
 
     private delegate void PixelMap(ReadOnlySpan<byte> source, Span<byte> target);
-    /** The material texture array repeats its count and stores slot/tag pairs in eight-byte rows. */
-    private static IReadOnlyList<(uint Slot, int Offset)> TextureFields(byte[] bytes)
+    /** The pixel stage's texture rows: exactly three, one per slot 0, 1 and 2. */
+    private static Span<SMaterialTextureAssignment> TextureRows(byte[] bytes)
     {
-        const int field = 0x2D0;
-        long count = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(field));
-        long header = checked(field + 8 + BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(field + 8)));
-        if (count != 3 || header < 4 || header > bytes.Length - 16 - count * 8
-            || BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan((int)header - 4)) != 0x80809FBD
-            || BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan((int)header)) != count
-            || BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan((int)header + 8)) != 0x80807211)
+        ref readonly var field = ref TagView.Checked<STechnique>(bytes, 0).PixelShader.State.StaticTextures.Textures;
+        long count = field.Count;
+        var array = new TagArray(bytes, TagView.OffsetOf(bytes, in field));
+        long header = array.HeaderOffset;
+        if (count != 3 || header < 4 || header > bytes.Length - TagArray.HeaderSize - count * Unsafe.SizeOf<SMaterialTextureAssignment>()
+            || !TagArray.MarkerAt(bytes, header) || TagRead.I64(bytes, (int)header) != count
+            || array.ElementClass != SMaterialTextureAssignment.Class)
             throw new InvalidDataException("The opaque template has an invalid texture array.");
-        var rows = Enumerable.Range(0, 3).Select(index => (Slot: BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan((int)header + 16 + index * 8)),
-            Offset: (int)header + 20 + index * 8)).ToArray();
-        if (!rows.Select(row => row.Slot).Order().SequenceEqual(new uint[] { 0, 1, 2 }))
+        var rows = MemoryMarshal.Cast<byte, SMaterialTextureAssignment>(
+            bytes.AsSpan(array.DataOffset, (int)count * Unsafe.SizeOf<SMaterialTextureAssignment>()));
+        uint[] slots = [rows[0].TextureSlot, rows[1].TextureSlot, rows[2].TextureSlot];
+        if (!slots.Order().SequenceEqual(new uint[] { 0, 1, 2 }))
             throw new InvalidDataException("The opaque template has unexpected texture slots.");
         return rows;
     }

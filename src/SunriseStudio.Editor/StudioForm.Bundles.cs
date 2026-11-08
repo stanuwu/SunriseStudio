@@ -1,6 +1,7 @@
 using System.Globalization;
 using ImGuiNET;
 using SunriseStudio.Interchange;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Editor;
 
@@ -12,13 +13,13 @@ public sealed partial class StudioForm
     private WorldSceneExportResult? observedWorldExport;
 
     // A map root is too large for one glTF scene; maps export through the world export.
-    private bool CanExportBundle => !workspace.IsBusy && workspace.Document?.Entry is { TagHash: > 0, Reference: not 0x808091DE };
+    private bool CanExportBundle => !workspace.IsBusy && workspace.Document?.Entry is { TagHash: > 0, Reference: not SMapRoot.Class };
     private const string MapBundleTip = "A map is too big for one bundle. Use World to Blender.";
 
     /** Explains a disabled full-asset export when the open document is a map. */
     private void MapBundleTooltip()
     {
-        if (workspace.Document?.Entry.Reference == 0x808091DE) StudioUi.Tip(MapBundleTip);
+        if (workspace.Document?.Entry.Reference == SMapRoot.Class) StudioUi.Tip(MapBundleTip);
     }
     /** The Blender add-on is installed by the user from its own repository; Studio ships no copy. */
     public const string BlenderAddonUrl = "https://github.com/stanuwu/SunriseBlenderPlugin";
@@ -67,7 +68,7 @@ public sealed partial class StudioForm
     {
         DrawWorldExportReport();
         DrawSkinImportDialog();
-        if (importBundleDialog) { ImGui.OpenPopup("Import Blender asset"); importBundleDialog = false; }
+        if (importBundleDialog) { ImGui.OpenPopup("Import Blender asset"); importBundleDialog = false; bundlePackage = workspace.DefaultPackageText; }
         if (observedTransferRevision != workspace.TransferRevision)
         { observedTransferRevision = workspace.TransferRevision; ImGui.OpenPopup("Asset transfer"); }
         CenterModal(520);

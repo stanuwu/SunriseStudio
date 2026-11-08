@@ -27,6 +27,7 @@ if (args.Contains("--authoring-audit")) return;
 SyntheticChecks.Run();
 MeshSyntheticChecks.Run();
 CullChecks.Synthetic();
+StaticAdditionChecks.Synthetic();
 ConfigReferenceCacheChecks.Run();
 PhysicsChecks.Synthetic();
 SharedShapeChecks.Synthetic();

@@ -5,6 +5,8 @@ using System.Text.Json;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using SunriseStudio.Viewport;
 using Vortice.DXGI;
 
@@ -38,8 +40,9 @@ static Vector3 PassFixture(PackageCatalog catalog, bool warp)
     using var lookup = renderer.CreateTextureResource(1, 1, 1, 1, 1, Format.R32G32B32A32_Float, false, true,
         [new(0, 0, Bytes(new(.2f, .4f, .6f, 0)), 16, 16)]);
     byte[] settingsBytes = new byte[NativeAtmosphereSettings.Size];
-    for (int i = 0; i < 3; i++) BinaryPrimitives.WriteUInt32LittleEndian(settingsBytes.AsSpan(0x80 + i * 4), (uint)(1 + i));
-    for (int i = 0; i < 16; i++) BinaryPrimitives.WriteSingleLittleEndian(settingsBytes.AsSpan(0x90 + i * 4), i / 16f);
+    ref var atmosphere = ref TagView.Edit<UnknownAtmospherePayload>(settingsBytes);
+    (atmosphere.Lookup3dMode0, atmosphere.Lookup3dSecond, atmosphere.Lookup2d) = (1, 2, 3);
+    for (int i = 0; i < 16; i++) atmosphere.TimeOfDayKeys[i] = i / 16f;
     var view = Matrix4x4.CreateLookAt(new(2, -5, 3), Vector3.Zero, Vector3.UnitZ);
     var projection = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3, 1, .1f, 1000);
     var camera = NativeViewInputs.EvaluateCameraScope(reader.ReadScopeExecution(0x80B356A5), 64, 64, view, projection);
@@ -213,7 +216,7 @@ static void CubemapPreflight(PackageCatalog catalog, PlacedCubemap source)
             && limited.CubemapSkippedReasons.Keys.Any(reason => reason.Contains("budget", StringComparison.OrdinalIgnoreCase)),
             "Environment textures bypassed the caller's budget.");
         byte[] unsupported = source.Cubemap.ResourceData.ToArray();
-        BinaryPrimitives.WriteSingleLittleEndian(unsupported.AsSpan(0x10 + 0x154), 1);
+        TagView.Edit<UnknownCubemapPayload>(unsupported).Flag16Value = 1;
         scene.Cubemaps.Clear(); scene.Cubemaps.Add(source with { Cubemap = new(unsupported) });
         var rejected = NativeScenePlan.Prepare(catalog, scene, textureBudgetBytes: long.MaxValue);
         Check(rejected.Cubemaps.Count == 0 && rejected.CubemapSkippedReasons.Keys.Any(reason => reason.Contains("technique 520", StringComparison.Ordinal)),

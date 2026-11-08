@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -13,9 +15,11 @@ public sealed partial class AssetSceneLoader
     private readonly Dictionary<uint, LinkInfo> linkInfos = [];
 
     // Placement payload classes with a known target.
-    private const uint VolumePayload = 0x80806FAD, LightsPayload = 0x80806F5A, OcclusionPayload = 0x80806F38;
-    private const uint FlarePayload = EffectReader.FlareResourceClass, EntityClass = 0x80809C0F, ConfigClass = 0x80809C36;
-    private const uint BehaviourClass = 0x8080941E, ScriptClass = 0x80800000, SoundClass = 0x80809802;
+    private const uint VolumePayload = SVolumePayload.Class, LightsPayload = SLightsPayload.Class,
+        OcclusionPayload = SAmbientOcclusionPayload.Class;
+    private const uint FlarePayload = EffectReader.FlareResourceClass, EntityClass = SEntity.Class, ConfigClass = SEntityConfig.Class;
+    private const uint BehaviourClass = ObjectBehaviorRoot.Class, ScriptClass = PackageReflectionMetadata.Class,
+        SoundClass = SWwiseEvent.Class;
 
     [GeneratedRegex(@"^$|0x[0-9A-Fa-f]{8}|^(Placement|Object) \d+( |$)")]
     private static partial Regex PlaceholderName();
@@ -114,7 +118,7 @@ public sealed partial class AssetSceneLoader
                     marker.NameEvidence = SceneNameEvidence.Derived;
                 }
             }
-            if (marker.NameHash is not (0 or 0x811C9DC5 or uint.MaxValue)) tags.Add($"name hash 0x{marker.NameHash:X8}");
+            if (marker.NameHash is not (0 or StringHash.Empty or uint.MaxValue)) tags.Add($"name hash 0x{marker.NameHash:X8}");
             AddLinkTags(tags, links);
             AddNameTags(tags, marker.Name, marker.NameEvidence);
             marker.Tags = tags.Distinct().ToArray();
@@ -233,18 +237,23 @@ public sealed partial class AssetSceneLoader
     /** A spawn point's row index inside its class-0x80809162 spawn set. */
     private int? SpawnOrdinal(SceneMarker marker)
     {
-        if (Class(marker.SourceTag) != 0x80809162) return null;
-        var rows = Read(marker.SourceTag).Rows(8, 0x80809164, 48);
-        var index = Array.IndexOf(rows, marker.SourceOffset);
-        return index < 0 ? null : index;
+        if (Class(marker.SourceTag) != SSpawnPoints.Class) return null;
+        var data = ReadBytes(marker.SourceTag);
+        var rows = TagView.Rows(data, in TagView.At<TagArray<SSpawnPointRow>>(data, TagView.FieldOffset<SSpawnPoints>(nameof(SSpawnPoints.SpawnPoints))),
+            SSpawnPointRow.Class);
+        for (var index = 0; index < rows.Length; ++index)
+            if (TagView.OffsetOf(data, in rows[index]) == marker.SourceOffset) return index;
+        return null;
     }
 
-    /** A wwise event tag's +0x08 is its event id, FNV-1 of the event name; the resolver supplies candidates. */
+    /** A wwise event id is FNV-1 of the event name; the resolver supplies candidates. */
     private string? SoundName(uint eventTag)
     {
         if (Class(eventTag) != SoundClass) return null;
-        var data = Read(eventTag);
-        return data.Has(8, 4) ? NameResolver?.Invoke(data.U32(8)) : null;
+        var data = ReadBytes(eventTag);
+        const string id = nameof(SWwiseEvent.WwiseEventId);
+        return TagView.FitsThrough<SWwiseEvent>(data, 0, id) ? NameResolver?.Invoke(TagRead.U32(data, TagView.FieldOffset<SWwiseEvent>(id)))
+            : null;
     }
 
     /** A marker read from a placement, such as an effect, keeps its kind and gains the placement's name. */
@@ -315,26 +324,27 @@ public sealed partial class AssetSceneLoader
         _ => instance.Layer.ToString()
     };
 
-    /** The self-relative payload at placement row +0x78 names its class 4 bytes before it and its tag at +0x10. */
+    /** The placement row's payload class and the tag that class's view names. */
     private (uint Class, uint Target) PlacementPayload(SceneMarker marker)
     {
         if (marker.Layer != SceneLayer.Objects || marker.SourceTag == 0) return default;
-        var data = Read(marker.SourceTag);
-        var field = marker.SourceOffset + 0x78;
-        if (!data.Has(field, 8) || data.I64(field) == 0) return default;
-        var payload = data.Relative(field);
-        if (payload < 4 || !data.Has(payload - 4, 4)) return default;
-        return (data.U32(payload - 4), data.Has(payload + 0x10, 4) ? data.U32(payload + 0x10) : 0);
+        var data = ReadBytes(marker.SourceTag);
+        const string field = nameof(AuthoredPlacementEntry.Payload);
+        if (!TagView.FitsThrough<AuthoredPlacementEntry>(data, marker.SourceOffset, field)) return default;
+        ref readonly var pointer = ref TagView.At<RelativePointer<Unknown>>(data,
+            marker.SourceOffset + TagView.FieldOffset<AuthoredPlacementEntry>(field));
+        if (pointer.IsNull || TagView.TargetClass(data, in pointer) is not { } payloadClass) return default;
+        return (payloadClass, PlacementPayloads.Tag(data, TagView.TargetOffset(data, in pointer)!.Value, payloadClass));
     }
 
     /** A kind for an entity whose components say nothing, from the tag class its placement payload targets. */
     private static string? PayloadKind(uint targetClass) => targetClass switch
     {
-        0x80809802 => "Audio emitter",
-        0x80806E68 => "Decal",
-        0x808073A5 => "Prop",
-        0x80807140 or 0x8080713A => "Light",
-        0x80806F68 or 0x80806E28 => "Effect",
+        SWwiseEvent.Class => "Audio emitter",
+        SMapDecals.Class => "Decal",
+        SEntityModel.Class => "Prop",
+        SExpensiveLight.Class or SLightCollection.Class => "Light",
+        SLensFlare.Class or SParticleSystem.Class => "Effect",
         _ => null
     };
 
@@ -348,9 +358,11 @@ public sealed partial class AssetSceneLoader
         var configs = new List<uint>();
         if (Class(tag) == EntityClass)
         {
-            var definition = Read(tag);
-            configs.AddRange(definition.Rows(0x10, 0x80809C04, 12).Select(r => definition.U32(r))
-                .Where(c => Class(c) == ConfigClass));
+            var definition = ReadBytes(tag);
+            foreach (ref readonly var component in TagView.Rows(definition,
+                         in ObjectChannelRest.ArrayAt<SEntity, SPatternComponent>(definition, 0, nameof(SEntity.Components)),
+                         SPatternComponent.Class))
+                if (Class(component.Config) == ConfigClass) configs.Add(component.Config);
         }
         else if (Class(tag) == ConfigClass) configs.Add(tag);
         var patterns = new SortedSet<string>(StringComparer.Ordinal);
@@ -363,21 +375,19 @@ public sealed partial class AssetSceneLoader
         bool particles = false, audio = false;
         foreach (var config in configs)
         {
-            var data = Read(config);
-            var facts = ComponentRoles.ReadConfig(catalog, data.Bytes, GameNames?.Strings);
+            var data = ReadBytes(config);
+            var facts = ComponentRoles.ReadConfig(catalog, data, GameNames?.Strings);
             if (facts.Primary != 0) primaries.Add(facts.Primary);
             prompt ??= facts.Prompt;
             particles |= facts.Particles;
             audio |= facts.Audio;
-            foreach (var field in new[] { 0x10, 0x18 })
-            {
-                if (data.I64(field) == 0) continue;
-                var target = data.Relative(field);
-                if (target >= 4 && data.Has(target - 4, 4)) components.Add(data.U32(target - 4));
-            }
+            if (TagView.TargetClass(data, in ObjectChannelRest.ConfigPointer(data, nameof(SEntityConfig.DefaultInstance))) is { } primary)
+                components.Add(primary);
+            if (TagView.TargetClass(data, in ObjectChannelRest.ConfigPointer(data, nameof(SEntityConfig.Definition))) is { } resource)
+                components.Add(resource);
             for (var offset = 0; offset <= data.Length - 4; offset += 4)
             {
-                var value = data.U32(offset);
+                var value = TagRead.U32(data, offset);
                 if (value < 0x80000000 || value == uint.MaxValue) continue;
                 var linkedClass = Class(value);
                 if (linkedClass == SoundClass && SoundName(value) is { } sound) sounds.Add(sound);
@@ -385,7 +395,7 @@ public sealed partial class AssetSceneLoader
                     && ComponentRoles.CombatantName(catalog, value, GameNames?.Strings) is { } combatant)
                     combatants.Add(combatant);
                 if (linkedClass is not (BehaviourClass or ScriptClass)) continue;
-                foreach (var text in InlineStrings(Read(value)))
+                foreach (var text in InlineStrings(ReadBytes(value)))
                 {
                     if (text.EndsWith(".pattern.tft", StringComparison.Ordinal)) patterns.Add(Stem(text, ".pattern.tft"));
                     else if (text.EndsWith(".bs", StringComparison.Ordinal)) scripts.Add(Stem(text, ".bs"));
@@ -398,12 +408,12 @@ public sealed partial class AssetSceneLoader
         string? internalName = null, objectType = null;
         if (Class(tag) == EntityClass)
         {
-            var definition = Read(tag).Bytes;
+            var definition = ReadBytes(tag);
             objectType = ComponentRoles.ObjectType(definition);
             if (ComponentRoles.InternalNameHash(definition) is { } hash) internalName = NameResolver?.Invoke(hash);
         }
         var info = new LinkInfo(patterns.ToArray(), scripts.ToArray(), components.ToArray(),
-            components.Contains(0x808072BD) || components.Contains(0x80807286), prompt, kind, sounds.ToArray(),
+            components.Contains(SModelComponent.Class) || components.Contains(SClothModelComponent.Class), prompt, kind, sounds.ToArray(),
             combatantName, internalName, objectType);
         linkInfos[tag] = info;
         return info;
@@ -417,12 +427,12 @@ public sealed partial class AssetSceneLoader
     }
 
     /** Decodes each block whole: one bad byte drops the block, and the length limit counts UTF-16 chars. */
-    private static IEnumerable<string> InlineStrings(TagData data)
+    private static IEnumerable<string> InlineStrings(byte[] data)
     {
         foreach (var (_, start, length) in InlineStringBlocks.Blocks(data))
         {
             string block;
-            try { block = InlineStringBlocks.StrictUtf8.GetString(data.Bytes, start, length); }
+            try { block = InlineStringBlocks.StrictUtf8.GetString(data, start, length); }
             catch (System.Text.DecoderFallbackException) { continue; }
             foreach (var part in block.Split('\0'))
                 if (part.Length is > 0 and <= InlineStringBlocks.MaximumLength && !part.Any(char.IsControl)) yield return part;

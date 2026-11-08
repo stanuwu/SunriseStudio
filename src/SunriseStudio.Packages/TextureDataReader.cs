@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Packages;
 
@@ -22,7 +24,7 @@ public sealed class TextureDataReader(PackageCatalog catalog)
 {
     /**
      * Decode every authored mip and reject unaccounted bytes rather than discarding them.
-     * @param residentOnly Leave out the streamed mips at header +0x24, as the game draws before they stream in.
+     * @param residentOnly Leave out the streamed mips in the StreamedTag tag, as the game draws before they stream in.
      */
     public TextureData Read(uint tag, bool residentOnly = false)
     {
@@ -30,7 +32,7 @@ public sealed class TextureDataReader(PackageCatalog catalog)
             || entry.SubType is < 1 or > 3)
             throw new NotSupportedException("Tag is not a pre-BL texture header.");
         byte[] header = catalog.Read(tag);
-        if (header.Length != 40 || U16(header, 0x0C) != 0xCAFE)
+        if (header.Length != Unsafe.SizeOf<TextureHeader>() || U16(header, 0x0C) != 0xCAFE)
             throw new InvalidDataException("Texture header differs from the supported pre-BL layout.");
         int format = checked((int)U32(header, 4));
         int width = U16(header, 0x0E), height = U16(header, 0x10);
@@ -48,7 +50,7 @@ public sealed class TextureDataReader(PackageCatalog catalog)
             throw new NotSupportedException("Authored 2D array ordering has not been verified for this build.");
         if (kind == TextureKind.Cube && arraySize != 6)
             throw new NotSupportedException("Cube-array ordering has not been verified for this build.");
-        uint largeTag = U32(header, 0x24);
+        uint largeTag = TagView.At<TextureHeader>(header).StreamedTag;
         bool hasLarge = largeTag is not (0 or uint.MaxValue);
         if (largeMips > mipCount || hasLarge != (largeMips > 0))
             throw new InvalidDataException("Texture streamed-mip count disagrees with its payload reference.");
@@ -100,7 +102,7 @@ public sealed class TextureDataReader(PackageCatalog catalog)
         if (!catalog.TryGetEntry(tag, out var entry) || entry.Type != 32 || entry.SubType is < 1 or > 3)
             throw new NotSupportedException("Tag is not a pre-BL texture header.");
         byte[] header = catalog.Read(tag);
-        if (header.Length != 40 || U16(header, 0x0C) != 0xCAFE)
+        if (header.Length != Unsafe.SizeOf<TextureHeader>() || U16(header, 0x0C) != 0xCAFE)
             throw new InvalidDataException("Texture header differs from the supported pre-BL layout.");
         var kind = entry.SubType == 3 ? TextureKind.Volume : entry.SubType == 2 ? TextureKind.Cube : TextureKind.Texture2D;
         int format = checked((int)U32(header, 4)), slices = kind == TextureKind.Volume ? 1 : U16(header, 0x14);

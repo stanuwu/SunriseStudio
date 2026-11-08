@@ -3,6 +3,8 @@ using ImGuiNET;
 using SunriseStudio.Editor.Creation;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Query;
 using ImGuiIcons = SunriseStudio.Viewport.ImGuiIcons;
 using StudioIcon = SunriseStudio.Viewport.StudioIcon;
 
@@ -16,6 +18,8 @@ public sealed partial class StudioForm
     private CancellationTokenSource? filterCancellation;
     private Task<BrowserAsset[]>? filterWork;
     private int filteredNameRevision;
+    /** Why the last tag query in the search box failed; empty when it ran. */
+    private string browserQueryError = "";
 
     private const string AllCategories = "All categories", AllTypes = "All types";
     private const string Dot = " \u00B7 ";
@@ -88,6 +92,7 @@ public sealed partial class StudioForm
         var rows = open is null ? workspace.Assets : workspace.CategoryRows.GetValueOrDefault(open.Name) ?? [];
         filteredNameRevision = workspace.NameRevision;
         browserDirty = false;
+        browserQueryError = "";
         if (words.Length == 0 && selectedCategory is null && selectedType is null && selectedPackage is null
             && !modifiedOnly && !leftoversOnly)
         {
@@ -100,6 +105,12 @@ public sealed partial class StudioForm
             && (selectedPackage is null || row.Entry.PackageName == selectedPackage)
             && !(leftoversOnly && row.InCategory)
             && (!modifiedOnly || changes.Contains(row.Entry.TagHash));
+        string text = search.Trim();
+        if (BrowserRowFilter.IsQuery(text) && workspace.Catalog is { } catalog)
+        {
+            filterWork = BrowserRowFilter.StartQuery(rows, text, catalog, Keep, token);
+            return;
+        }
         (var inline, filterWork) = BrowserRowFilter.Start(rows, words, Keep, token);
         if (inline is not null) filtered = inline;
     }
@@ -153,6 +164,7 @@ public sealed partial class StudioForm
         ImGui.SetNextItemWidth(-1);
         if (ImGui.InputTextWithHint("##assetSearch", "Search items, enemies and assets", ref search, 256))
         { browserDirty = true; searchChanged = clock.Elapsed.TotalSeconds; }
+        StudioUi.Tip("Words match names, kinds, tag classes and packages.\nA search starting with @ is a tag query, such as @<s_scenario>.bubbles[*]");
         if (browserDirty && clock.Elapsed.TotalSeconds - searchChanged > 0.2) FilterBrowser();
         // Drawn before the home view, so the home view can list every changed asset.
         if (workspace.Project is not null && ImGui.Checkbox("Changed only", ref changesOnly)) FilterBrowser();
@@ -182,6 +194,7 @@ public sealed partial class StudioForm
         StudioUi.Tip(tooltip);
         ImGui.SameLine(); ImGui.TextDisabled($"{filtered.Length:N0}");
         if (filterWork is not null) { ImGui.SameLine(); ImGui.TextDisabled("Searching"); }
+        else if (browserQueryError.Length != 0) { ImGui.SameLine(); ImGui.TextColored(StudioTheme.Accent, browserQueryError); }
     }
 
     /** Moves the cursor so a row this wide ends at the right edge; a row that does not fit takes the next line. */
@@ -217,6 +230,8 @@ public sealed partial class StudioForm
         CreationMenuItem("Static prop", prop, () => StartCreation(prop));
         CreationMenuItem("Clone material", CreationTypes.For(CreationTypes.MaterialKey, CreationMode.Clone),
             () => StartClone(CreationTypes.MaterialKey));
+        CreationMenuItem("Destination", CreationTypes.Destination, () => StartCreation(CreationTypes.Destination));
+        CreationMenuItem("Activity", CreationTypes.Activity, () => StartCreation(CreationTypes.Activity));
         ImGui.Separator();
         foreach (var type in CreationTypes.Blocked) CreationMenuItem(type.Name, type, () => { });
         ImGui.EndPopup();
@@ -362,6 +377,8 @@ public sealed partial class StudioForm
         filterWork = null;
         try { filtered = task.GetAwaiter().GetResult(); }
         catch (OperationCanceledException) { }
+        catch (Exception error) when (error is PathQueryException or InvalidDataException or KeyNotFoundException)
+        { filtered = []; browserQueryError = error.Message; }
         catch (Exception error) { workspace.Error = error.Message; }
     }
 
@@ -378,12 +395,15 @@ public sealed partial class StudioForm
         if (workspace.Document is { } document)
         {
             ImGui.TextWrapped(document.Name);
-            ImGui.TextDisabled(document.Inspection.Kind == "Binary" ? StudioWorkspace.AssetKind(document.Entry)
+            ImGui.TextDisabled(document.Inspection.Kind is "Binary" or TagInspector.KindName ? StudioWorkspace.AssetKind(document.Entry)
                 : document.Inspection.Kind);
             ImGui.Spacing();
             ImGui.TextDisabled("Package"); ImGui.TextWrapped(document.Entry.PackageName);
             ImGui.TextDisabled("Tag"); ImGui.SameLine(); ImGui.TextUnformatted($"{document.Entry.TagHash:X8}");
             ImGui.TextDisabled("Size"); ImGui.SameLine(); ImGui.TextUnformatted(FormatBytes(document.Bytes.Length));
+            // Without the registry the Tag page is hidden, so the reason shows here.
+            if (StudioWorkspace.TagSchemaError is { Length: > 0 } schemaError)
+                ImGui.TextColored(StudioTheme.Accent, "Tag registry not loaded: " + schemaError);
             if (ImGui.CollapsingHeader("Native metadata"))
                 StudioUi.Facts("native-metadata", [
                     ("Reference", $"{document.Entry.Reference:X8}", ""),
@@ -474,7 +494,7 @@ public sealed partial class StudioForm
         if (ImGuiIcons.Button("inspector-export", StudioIcon.Export, "Export")) ImGui.OpenPopup("inspector-export");
         if (ImGui.BeginPopup("inspector-export"))
         {
-            if (workspace.World is not null && document.Entry.Reference is 0x808091DE or 0x80809994
+            if (workspace.World is not null && document.Entry.Reference is SMapRoot.Class or SScenario.Class
                 && ImGui.MenuItem("World to Blender...", "", false, !workspace.IsBusy)) ExportWorldScene();
             if (ImGui.MenuItem("Full asset to Blender...", "", false, CanExportBundle)) ExportFullAsset();
             MapBundleTooltip();
@@ -484,7 +504,7 @@ public sealed partial class StudioForm
         string? addedId = document.AddedAssetId;
         bool aliases = addedId is not null
             && workspace.Project?.AddedAssets.Any(asset => asset.Id == addedId && asset.Native is not null) == true;
-        bool bindings = document.Entry.Reference == 0x80804825;
+        bool bindings = document.Entry.Reference == CuiResource.Class;
         ImGui.BeginDisabled(!workspace.CanEdit);
         ImGui.SameLine();
         if (ImGuiIcons.Button("inspector-import", StudioIcon.Import, addedId is null ? "Import as delta" : "Replace asset"))

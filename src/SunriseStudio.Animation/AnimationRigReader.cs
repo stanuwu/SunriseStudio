@@ -1,5 +1,8 @@
 using System.Numerics;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using FrameView = SunriseStudio.Tags.Generated.AnimationFrameReference;
 
 namespace SunriseStudio.Animation;
 
@@ -24,59 +27,74 @@ public sealed class AnimationRigReader(PackageCatalog catalog)
     {
         if (skeleton.EntityTag == 0)
             throw new NotSupportedException("Animation binding needs the entity that owns the skeleton.");
-        var entity = new AnimationControlReader.Data(catalog.Read(skeleton.EntityTag));
+        byte[] entity = catalog.Read(skeleton.EntityTag);
         var candidates = new List<uint>();
-        foreach (int row in entity.Rows(0x10, 0x80809C04, 12))
+        foreach (ref readonly var row in AnimationControlReader.Rows<SPatternComponent>(entity,
+            TagView.FieldOffset<SEntity>(nameof(SEntity.Components)), SPatternComponent.Class))
         {
-            uint tag = entity.U32(row);
-            if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != 0x80809C36) continue;
-            var data = new AnimationControlReader.Data(catalog.Read(tag));
-            int primary = data.Pointer(0x10), secondary = data.Pointer(0x18);
-            if (data.U32(primary - 4) == 0x80808F96 && data.U32(secondary - 4) == 0x80808F8F)
+            uint tag = row.Config;
+            if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != SEntityConfig.Class) continue;
+            byte[] data = catalog.Read(tag);
+            int primary = Target(data, "DefaultInstance"), secondary = Target(data, "Definition");
+            if (AnimationControlReader.ClassBefore(data, primary) == SAnimationRigPrimary.Class
+                && AnimationControlReader.ClassBefore(data, secondary) == SAnimationRigResource.Class)
                 candidates.Add(tag);
         }
         if (candidates.Distinct().Count() != 1)
             throw new NotSupportedException($"Entity has {candidates.Distinct().Count()} supported animation rigs.");
         uint resourceTag = candidates[0];
-        var rig = new AnimationControlReader.Data(catalog.Read(resourceTag));
-        int resource = rig.Pointer(0x18);
-        int[] rows = rig.Rows(resource + 0xA0, 0x80809076, 52);
-        int[] defaults = rig.Rows(resource + 0xB0, 0x80809F75, 32);
+        byte[] rig = catalog.Read(resourceTag);
+        int resource = Target(rig, "Definition");
+        var rows = AnimationControlReader.Rows<SAnimationControl>(rig,
+            resource + TagView.FieldOffset<SAnimationRigResource>(nameof(SAnimationRigResource.Controls)), SAnimationControl.Class);
+        var defaults = AnimationControlReader.Rows<SAnimationControlDefault>(rig,
+            resource + TagView.FieldOffset<SAnimationRigResource>(nameof(SAnimationRigResource.ControlDefaults)), SAnimationControlDefault.Class);
         if (rows.Length == 0 || rows.Length != defaults.Length)
             throw new InvalidDataException("Animation control count differs from its authored default poses.");
         var controls = new AnimationRigControl[rows.Length];
         for (int i = 0; i < rows.Length; i++)
         {
-            int row = rows[i], value = defaults[i];
-            short bone = rig.I16(row + 44), chain = rig.I16(row + 46);
-            byte composition = rig.U8(row + 48), chainMode = rig.U8(row + 49);
+            ref readonly var row = ref rows[i];
+            ref readonly var value = ref defaults[i];
+            short bone = row.BoneIndex, chain = row.ChainBoneIndex;
+            byte composition = row.CompositionMode, chainMode = row.ChainMode;
             if (bone < 0 || bone >= skeleton.Bones.Count || chain < -1 || chain >= skeleton.Bones.Count
                 || composition > 1 || chainMode is not (0 or 1 or 255))
                 throw new NotSupportedException("Animation rig control uses an unsupported bone or composition mode.");
-            var transform = new BoneTransform(new Quaternion(rig.F32(value), rig.F32(value + 4),
-                rig.F32(value + 8), rig.F32(value + 12)), new Vector3(rig.F32(value + 16),
-                rig.F32(value + 20), rig.F32(value + 24)), rig.F32(value + 28));
+            var transform = new BoneTransform(Finite(value.Rotation), new Vector3(AnimationControlReader.Finite(value.Translation.X),
+                AnimationControlReader.Finite(value.Translation.Y), AnimationControlReader.Finite(value.Translation.Z)),
+                AnimationControlReader.Finite(value.Scale));
             SkeletonReader.CheckTransform(transform);
-            controls[i] = new AnimationRigControl(i, rig.U32(row), bone, chain, composition, chainMode,
-                Frame(rig, row + 4, skeleton.Bones.Count), Frame(rig, row + 24, skeleton.Bones.Count), transform)
-            { PoleAxis = rig.U8(row + 50) };
+            controls[i] = new AnimationRigControl(i, row.ControlName, bone, chain, composition, chainMode,
+                Frame(in row.RotationFrame, skeleton.Bones.Count), Frame(in row.TranslationFrame, skeleton.Bones.Count), transform)
+            { PoleAxis = row.PoleAxis };
         }
         var links = new EntityAnimationCatalog(catalog).Read(skeleton.EntityTag);
         var clips = links.Select(x => x.ClipTag).ToHashSet();
-        var groups = rig.Rows(resource + 0x90, 0x8080907F, 8).Select(row =>
-            new AnimationControlGroup(rig.U32(row), rig.I16(row + 4))).ToArray();
+        var groups = AnimationControlReader.Groups(rig, resource + TagView.FieldOffset<SAnimationRigResource>(nameof(SAnimationRigResource.ControlGroups)));
         if (groups.Any(group => group.ControlCount < 0)
             || groups.Sum(group => (long)group.ControlCount) != controls.Length)
             throw new InvalidDataException("Rig control groups disagree with its control count.");
-        var ikControls = rig.Rows(resource + 0xC0, 0x80800006, 2).Select(rig.I16).ToArray();
+        var ikRows = AnimationControlReader.Rows<SI16Element>(rig,
+            resource + TagView.FieldOffset<SAnimationRigResource>(nameof(SAnimationRigResource.IkControls)), SI16Element.Class);
+        var ikControls = new short[ikRows.Length];
+        for (int i = 0; i < ikControls.Length; i++) ikControls[i] = ikRows[i].Value;
         if (ikControls.Any(index => index < 0 || index >= controls.Length)
             || ikControls.Distinct().Count() != ikControls.Length)
             throw new InvalidDataException("Animation IK list contains invalid control indices.");
         return new AnimationRigBinding(skeleton, resourceTag, controls, clips, groups,
-            ikControls.Select(index => (int)index).ToArray(), rig.U8(resource + 0x128) != 0,
+            ikControls.Select(index => (int)index).ToArray(),
+            AnimationControlReader.Member<SAnimationRigResource, byte>(rig, resource, nameof(SAnimationRigResource.RigFlag)) != 0,
             AnimationBoneCorrection.Read(catalog, links.Select(x => x.ConfigTag).Distinct(), skeleton.Bones.Count))
-        { Retargets = ReadRetargets(rig.U32(resource + 0xD0), controls.Length) };
+        {
+            Retargets = ReadRetargets(AnimationControlReader.Member<SAnimationRigResource, uint>(rig, resource, nameof(SAnimationRigResource.RetargetTable)),
+                controls.Length)
+        };
     }
+
+    /** Where a config pointer points; a null pointer gives the field itself. */
+    private static int Target(byte[] config, string pointer) => TagView.TargetOrSelf(config,
+        in AnimationControlReader.Member<SEntityConfig, RelativePointer<Unknown>>(config, 0, pointer));
 
     /**
      * The rig's retarget table: rows of keys and a translation scale for clips authored on another body.
@@ -85,40 +103,61 @@ public sealed class AnimationRigReader(PackageCatalog catalog)
     private AnimationRetarget[] ReadRetargets(uint tag, int controlCount)
     {
         if (tag is 0 or uint.MaxValue || !catalog.TryGetEntry(tag, out var entry)) return [];
-        if (entry.Reference != RetargetTableClass)
-            throw new InvalidDataException($"Animation retarget link 0x{tag:X8} is not a class 0x{RetargetTableClass:X8} table.");
-        var table = new AnimationControlReader.Data(catalog.Read(tag));
-        return table.Rows(0x08, RetargetRowClass, 56).Select(row =>
+        if (entry.Reference != SAnimationRetargetTable.Class)
+            throw new InvalidDataException($"Animation retarget link 0x{tag:X8} is not a class 0x{SAnimationRetargetTable.Class:X8} table.");
+        byte[] table = catalog.Read(tag);
+        var rows = AnimationControlReader.Rows<SAnimationRetargetRow>(table,
+            TagView.FieldOffset<SAnimationRetargetTable>(nameof(SAnimationRetargetTable.RetargetRows)), SAnimationRetargetRow.Class);
+        var result = new AnimationRetarget[rows.Length];
+        for (int i = 0; i < rows.Length; i++)
         {
-            float scale = table.F32(row + 16), second = table.F32(row + 20);
-            int[] offsets = table.Rows(row + 24, 0x80800091, 16), rotations = table.Rows(row + 40, 0x80800096, 16);
+            ref readonly var row = ref rows[i];
+            float scale = AnimationControlReader.Finite(row.TranslationScale);
+            float second = AnimationControlReader.Finite(row.SecondFactor);
+            var offsets = AnimationControlReader.Rows<SVec4Element>(table, TagView.OffsetOf(table, in row.ControlOffsets),
+                SVec4Element.Class).ToArray();
+            var rotations = AnimationControlReader.Rows<SQuatElement>(table, TagView.OffsetOf(table, in row.RetargetRotations),
+                SQuatElement.Class).ToArray();
             if (!float.IsFinite(scale) || scale <= 0 || second != 1 || offsets.Length is not 0 && offsets.Length != controlCount
-                || offsets.Any(at => table.F32(at) != 0 || table.F32(at + 4) != 0 || table.F32(at + 8) != 0 || table.F32(at + 12) != 0)
-                || rotations.Any(at => table.F32(at) != 0 || table.F32(at + 4) != 0 || table.F32(at + 8) != 0 || table.F32(at + 12) != 1))
+                || offsets.Any(at => AnimationControlReader.Finite(at.Offset.X) != 0 || AnimationControlReader.Finite(at.Offset.Y) != 0
+                    || AnimationControlReader.Finite(at.Offset.Z) != 0 || AnimationControlReader.Finite(at.Offset.W) != 0)
+                || rotations.Any(at => AnimationControlReader.Finite(at.Rotation.X) != 0 || AnimationControlReader.Finite(at.Rotation.Y) != 0
+                    || AnimationControlReader.Finite(at.Rotation.Z) != 0 || AnimationControlReader.Finite(at.Rotation.W) != 1))
                 throw new NotSupportedException("Animation retarget row uses fields that are not decoded.");
-            return new AnimationRetarget(Array.AsReadOnly(table.Rows(row, AnimationControlReader.RetargetKeyClass,
-                AnimationControlReader.RetargetKeyStride)
-                .Select(table.U32).ToArray()), scale);
-        }).ToArray();
+            result[i] = new AnimationRetarget(Array.AsReadOnly(AnimationControlReader.Keys(table,
+                TagView.OffsetOf(table, in row.Key.SkeletonNames))), scale);
+        }
+        return result;
     }
 
-    // The rig secondary's +0xD0 links this table; its rows are 56 bytes.
-    private const uint RetargetTableClass = 0x80809071, RetargetRowClass = 0x80809073;
+    /** Quaternion components are checked in X, Y, Z, W order. */
+    private static Quaternion Finite(Quaternion value) => new(AnimationControlReader.Finite(value.X),
+        AnimationControlReader.Finite(value.Y), AnimationControlReader.Finite(value.Z), AnimationControlReader.Finite(value.W));
 
-    /** An aim frame holds a nested frame 6 bytes in; the nested frame supplies its translation. */
-    private static AnimationFrameReference Frame(AnimationControlReader.Data data, int offset, int bones,
-        int depth = 0)
+    /** An aim frame holds a nested frame; the nested frame supplies its translation. */
+    private static AnimationFrameReference Frame(ref readonly FrameView frame, int bones)
     {
-        short first = data.I16(offset), second = data.I16(offset + 2);
-        byte kind = data.U8(offset + 4);
+        short first = frame.BoneIndex, second = frame.SecondBoneIndex;
+        byte kind = frame.Kind;
         if (first < -1 || first >= bones || second < -1 || second >= bones || kind > 6)
             throw new NotSupportedException("Animation reference frame uses an unsupported bone or kind.");
         if (kind != 6) return new(first, second, kind, null, 0, -1, 0);
-        short target = data.I16(offset + 16);
-        byte source = data.U8(offset + 18);
-        if (depth != 0 || source > 2 || target < -1 || target >= bones)
+        short target = frame.AimTarget;
+        byte source = frame.AimSource;
+        if (source > 2 || target < -1 || target >= bones)
             throw new NotSupportedException("Animation aim frame uses an unsupported source or depth.");
-        return new(first, second, kind, Frame(data, offset + 6, bones, depth + 1),
-            data.F32(offset + 12), target, source);
+        return new(first, second, kind, Frame(in frame.TranslationFrame, bones),
+            AnimationControlReader.Finite(frame.AimWeight), target, source);
+    }
+
+    /** A nested frame may not be an aim frame. */
+    private static AnimationFrameReference Frame(ref readonly AnimationBasicFrameReference frame, int bones)
+    {
+        short first = frame.BoneIndex, second = frame.SecondBoneIndex;
+        byte kind = frame.Kind;
+        if (first < -1 || first >= bones || second < -1 || second >= bones || kind > 6)
+            throw new NotSupportedException("Animation reference frame uses an unsupported bone or kind.");
+        if (kind != 6) return new(first, second, kind, null, 0, -1, 0);
+        throw new NotSupportedException("Animation aim frame uses an unsupported source or depth.");
     }
 }

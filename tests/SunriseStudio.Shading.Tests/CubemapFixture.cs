@@ -1,7 +1,9 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using SunriseStudio.Rendering;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using Vortice.DXGI;
 
 internal static class CubemapFixture
@@ -10,16 +12,19 @@ internal static class CubemapFixture
     public static void Run(Dx11Renderer renderer, GameMaterialReader reader, TfxParameterLookup parameters)
     {
         using var lighting = new NativeCubemapLighting(renderer, reader, new(), parameters);
-        byte[] source = new byte[0x1A0];
-        void F(int offset, float value) => BinaryPrimitives.WriteSingleLittleEndian(source.AsSpan(offset), value);
-        void I(int offset, int value) => BinaryPrimitives.WriteInt32LittleEndian(source.AsSpan(offset), value);
-        void V(int offset, Vector4 value) => MemoryMarshal.AsBytes(new[] { value }.AsSpan()).CopyTo(source.AsSpan(offset));
+        byte[] resource = new byte[Unsafe.SizeOf<UnknownCubemapPayload>()];
+        ref var payload = ref TagView.Edit<UnknownCubemapPayload>(resource);
         var model = Matrix4x4.CreateTranslation(0, 0, -3);
-        MemoryMarshal.AsBytes(new[] { model }.AsSpan()).CopyTo(source.AsSpan(0xB0));
-        MemoryMarshal.AsBytes(new[] { model }.AsSpan()).CopyTo(source.AsSpan(0xF0));
-        V(0x10, new(1, 1, 1, 0)); V(0x40, new(.25f, .25f, .25f, 0)); V(0x50, new(.25f, .25f, .25f, 0));
-        F(0x30, 1); I(0x130, 1); I(0x134, 1); I(0x138, 1); F(0x13C, 1); V(0x140, new(1, .5f, .5f, 0));
-        var binding = NativeCubemapBinding.Create(source, 1, 255, 2);
+        payload.SourceMatrixB0 = model;
+        payload.SourceMatrixF0 = model;
+        payload.Extents = Vector3.One;
+        payload.FadeA = payload.FadeB = new(.25f, .25f, .25f, 0);
+        payload.TextureIntensity = 1;
+        payload.ResolutionX = payload.ResolutionY = payload.ResolutionZ = 1;
+        payload.Pixel13W = 1;
+        payload.Pixel14X = 1;
+        payload.CellSize = payload.AlphaPower = .5f;
+        var binding = NativeCubemapBinding.Create(resource, 1, 255, 2);
         var uploads = new List<TextureSubresourceUpload>();
         for (int face = 0; face < 6; face++)
             for (int mip = 0; mip < 2; mip++)

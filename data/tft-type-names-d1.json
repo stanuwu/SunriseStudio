@@ -1,0 +1,157 @@
+{
+  "source": "Tag type suffixes of `<name>.<type>.tft` paths in Destiny 1 named-tag dictionaries (Blam-Network/tiger, facts only). Counts = number of cracked paths per type. Use as seed vocabulary for D2 harvest (plan \u00a74.0.7b); class ids differ per build.",
+  "types": [
+    {
+      "type": "texture",
+      "count": 2711
+    },
+    {
+      "type": "pattern",
+      "count": 389
+    },
+    {
+      "type": "gear_dye",
+      "count": 294
+    },
+    {
+      "type": "sequence",
+      "count": 283
+    },
+    {
+      "type": "damage_impulse",
+      "count": 201
+    },
+    {
+      "type": "material_responses",
+      "count": 93
+    },
+    {
+      "type": "player_feedback",
+      "count": 81
+    },
+    {
+      "type": "fx_sequence",
+      "count": 40
+    },
+    {
+      "type": "sandbox_hud_state",
+      "count": 29
+    },
+    {
+      "type": "material",
+      "count": 19
+    },
+    {
+      "type": "camera_track",
+      "count": 17
+    },
+    {
+      "type": "spawn_policy",
+      "count": 14
+    },
+    {
+      "type": "localized_strings",
+      "count": 8
+    },
+    {
+      "type": "bsc",
+      "count": 7
+    },
+    {
+      "type": "new_user_experience_sequence",
+      "count": 6
+    },
+    {
+      "type": "scoreboard",
+      "count": 6
+    },
+    {
+      "type": "ui_icon",
+      "count": 5
+    },
+    {
+      "type": "death_forces",
+      "count": 3
+    },
+    {
+      "type": "impulse_control",
+      "count": 3
+    },
+    {
+      "type": "widget_falling_leaves",
+      "count": 2
+    },
+    {
+      "type": "object_behaviors",
+      "count": 2
+    },
+    {
+      "type": "death_selector",
+      "count": 2
+    },
+    {
+      "type": "kill_incident_globals",
+      "count": 1
+    },
+    {
+      "type": "new_user_experience_tag_dictionary",
+      "count": 1
+    },
+    {
+      "type": "activity_mode_globals",
+      "count": 1
+    },
+    {
+      "type": "ui_director_art_element",
+      "count": 1
+    },
+    {
+      "type": "activity_player_globals",
+      "count": 1
+    },
+    {
+      "type": "static_player_control_link",
+      "count": 1
+    },
+    {
+      "type": "activity_mode_collection",
+      "count": 1
+    },
+    {
+      "type": "perk_definition",
+      "count": 1
+    },
+    {
+      "type": "damage_globals",
+      "count": 1
+    },
+    {
+      "type": "hdao_settings",
+      "count": 1
+    },
+    {
+      "type": "string_menu",
+      "count": 1
+    },
+    {
+      "type": "screen_area_fx_settings",
+      "count": 1
+    },
+    {
+      "type": "activity_reward_globals",
+      "count": 1
+    },
+    {
+      "type": "activity_modifier_hop_ons",
+      "count": 1
+    },
+    {
+      "type": "activity_controller_incident_globals",
+      "count": 1
+    },
+    {
+      "type": "incident_heat_globals",
+      "count": 1
+    }
+  ]
+}

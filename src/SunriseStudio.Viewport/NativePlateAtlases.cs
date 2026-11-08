@@ -1,5 +1,7 @@
-using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Viewport;
 
@@ -12,7 +14,7 @@ public sealed class NativePlateAtlases
 {
     // Synthetic texture tags below the package tag range; they never reach a package read.
     private const uint FirstTag = 0x7FA00000;
-    private const int Plates = 3, RowStride = 20;
+    private const int Plates = 3;
 
     private sealed record Row(uint Texture, int X, int Y, int Width, int Height);
     private sealed class Atlas(uint tag, int set, int plate, int size)
@@ -59,12 +61,12 @@ public sealed class NativePlateAtlases
         var result = new NativePlateAtlases(catalog, kind);
         foreach (byte[] record in records)
         {
-            uint count = NativeGearPlating.U32(record, 0x20);
+            uint count = PlateCount(record);
             for (int plate = 0; plate < Math.Min(count, Plates); plate++)
             {
                 try
                 {
-                    var (set, rows) = result.Descriptor(NativeGearPlating.U32(record, 0x24 + plate * 4));
+                    var (set, rows) = result.Descriptor(PlateDescriptor(record, plate));
                     var atlas = result.Get(set, plate);
                     if (atlas.Error is not null) continue;
                     foreach (var row in rows)
@@ -92,12 +94,12 @@ public sealed class NativePlateAtlases
     internal bool TagsFor(byte[] record, Dictionary<uint, uint> plates, out string? error)
     {
         error = null;
-        uint count = NativeGearPlating.U32(record, 0x20);
+        uint count = PlateCount(record);
         if (count is 0 or > Plates) { error = "The gear record has no plate descriptors"; return false; }
         for (int plate = 0; plate < count; plate++)
         {
             int set;
-            try { set = Descriptor(NativeGearPlating.U32(record, 0x24 + plate * 4)).Set; }
+            try { set = Descriptor(PlateDescriptor(record, plate)).Set; }
             catch (Exception exception) when (exception is InvalidDataException or KeyNotFoundException or ArgumentException
                 or OverflowException or IndexOutOfRangeException)
             { error = $"Plate descriptor unreadable: {exception.Message}"; return false; }
@@ -116,8 +118,8 @@ public sealed class NativePlateAtlases
         var atlas = byTag[tag];
         if (atlas.Rows.Count == 0) throw new InvalidDataException("A plate atlas has no rows.");
         byte[] header = catalog.Read(atlas.Rows[0].Texture);
-        if (header.Length != 40) throw new InvalidDataException("Texture header has an unsupported size.");
-        int format = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(4)));
+        if (header.Length != Unsafe.SizeOf<TextureHeader>()) throw new InvalidDataException("Texture header has an unsupported size.");
+        int format = checked((int)TagView.At<TextureHeader>(header).Format);
         return Enumerable.Range(0, MipCount(atlas, format, _ => int.MaxValue)).Sum(level =>
             (long)TextureDataReader.GetPitch(format, Math.Max(1, atlas.Size >> level), Math.Max(1, atlas.Size >> level)).SlicePitch);
     }
@@ -194,15 +196,28 @@ public sealed class NativePlateAtlases
         return atlas;
     }
 
-    /** Descriptor +10 is the set; its rows are {texture, x, y, w, h}. */
+    private static uint PlateCount(byte[] record) =>
+        TagView.Member<SPlatedTextureSet, uint>(record, 0, nameof(SPlatedTextureSet.PlateCount));
+
+    private static uint PlateDescriptor(byte[] record, int plate) =>
+        TagView.Member<SPlatedTextureSet, uint>(record, 0, $"PlateDescriptor0[{plate}].Unk0");
+
+    /** The descriptor's plate set and its rows {texture, x, y, w, h}. */
     private (int Set, Row[] Rows) Descriptor(uint tag)
     {
         byte[] descriptor = NativeGearPlating.Require(catalog, tag, NativeGearPlating.DescriptorClass);
-        int set = BinaryPrimitives.ReadUInt16LittleEndian(descriptor.AsSpan(10));
-        var rows = NativeGearPlating.Rows(descriptor, 0x10, NativeGearPlating.DescriptorRowClass, RowStride)
-            .Select(row => new Row(NativeGearPlating.U32(descriptor, row), checked((int)NativeGearPlating.U32(descriptor, row + 4)),
-                checked((int)NativeGearPlating.U32(descriptor, row + 8)), checked((int)NativeGearPlating.U32(descriptor, row + 12)),
-                checked((int)NativeGearPlating.U32(descriptor, row + 16)))).ToArray();
+        int set = TagView.Member<STextureDescriptor, ushort>(descriptor, 0, nameof(STextureDescriptor.PlateSet));
+        int[] offsets = NativeGearPlating.Rows(descriptor, TagView.FieldOffset<STextureDescriptor>(nameof(STextureDescriptor.Rows)),
+            NativeGearPlating.DescriptorRowClass, Unsafe.SizeOf<UnknownTextureDescriptorRow>());
+        var rows = new Row[offsets.Length];
+        for (int i = 0; i < offsets.Length; i++)
+        {
+            ref readonly var row = ref TagView.At<UnknownTextureDescriptorRow>(descriptor, offsets[i]);
+            rows[i] = new Row(row.Texture, Edge(row.X), Edge(row.Y), Edge(row.Width), Edge(row.Height));
+        }
         return (set, rows);
     }
+
+    /** Edges are stored unsigned; one past the int range throws. */
+    private static int Edge(int value) => checked((int)unchecked((uint)value));
 }

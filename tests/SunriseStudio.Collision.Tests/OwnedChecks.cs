@@ -25,7 +25,7 @@ internal static class OwnedChecks
         LeviathanMove(catalog);
     }
 
-    private static ushort Package(uint tag) => (ushort)((tag - 0x80800000) >> 13);
+    private static ushort Package(uint tag) => (ushort)TagHashes.Package(tag);
 
     /** The reference decoder printed these numbers for owner 0x80EDC2D1. */
     private static void Decoder(PackageCatalog catalog)
@@ -134,8 +134,8 @@ internal static class OwnedChecks
         int multiple = 0;
         foreach (uint table in tables)
         {
-            var data = new NativeRows(catalog.ReadOriginal(table));
-            int[] offsets = data.Rows(0x40, 0x808071A3, 48);
+            byte[] data = catalog.ReadOriginal(table);
+            int[] offsets = TagRows.StaticInstances(data);
             foreach (var owner in index.TableOwners(table))
             {
                 var placement = Placement(catalog, owner);
@@ -169,7 +169,7 @@ internal static class OwnedChecks
     private static void SabreTree(PackageCatalog catalog)
     {
         byte[] table = catalog.ReadOriginal(SabreTable);
-        int row = new NativeRows(table).Rows(0x40, 0x808071A3, 48)[SabreRow];
+        int row = TagRows.StaticInstances(table)[SabreRow];
         Check(row + 0x1C == 218332, "The tree row is not at its expected offset.");
         var edit = Edit(table, SabreTable, SabreRow, row, scale: 3);
         var (result, moved) = CheckEdit(catalog, [edit]);
@@ -196,11 +196,11 @@ internal static class OwnedChecks
         (uint Table, int Row)? single = null, several = null, sharedRow = null, rotated = null;
         foreach (uint table in catalog.Entries.Where(x => x.PackageId == package && x.Reference == 0x8080966D).Select(x => x.TagHash).Order())
         {
-            var data = new NativeRows(catalog.ReadOriginal(table));
+            byte[] data = catalog.ReadOriginal(table);
             var owners = index.TableOwners(table);
             if (owners.Count != 1) continue;
             var placement = Placement(catalog, owners[0]);
-            int[] offsets = data.Rows(0x40, 0x808071A3, 48);
+            int[] offsets = TagRows.StaticInstances(data);
             for (int i = 0; i < offsets.Length && (single is null || several is null || sharedRow is null || rotated is null); i++)
             {
                 try
@@ -218,10 +218,10 @@ internal static class OwnedChecks
         foreach (var (table, row) in new[] { single!.Value, several!.Value })
         {
             byte[] bytes = catalog.ReadOriginal(table);
-            var data = new NativeRows(bytes);
-            int offset = data.Rows(0x40, 0x808071A3, 48)[row];
-            var turn = Quaternion.Normalize(Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.7f) * data.Rotation(offset));
-            var edit = Edit(bytes, table, row, offset, data.V3(offset + 0x10) + new Vector3(3, -2, 1), turn, 2.5f);
+            int offset = TagRows.StaticInstances(bytes)[row];
+            var stored = TagRows.StaticInstance(bytes, offset);
+            var turn = Quaternion.Normalize(Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.7f) * ObjectRows.Rotation(stored.Rotation));
+            var edit = Edit(bytes, table, row, offset, stored.Translation + new Vector3(3, -2, 1), turn, 2.5f);
             var (_, moved) = CheckEdit(catalog, [edit]);
             Console.WriteLine($"PASS collision-rule-move table={table:X8} row={row} instances={moved.Count} "
                 + $"compound={moved[0].Entity.Owner.CompoundTag:X8} moved=position,rotation,scale tree=encloses "
@@ -232,7 +232,7 @@ internal static class OwnedChecks
         if (sharedRow is var (sharedTable, shared))
         {
             byte[] sharedBytes = catalog.ReadOriginal(sharedTable);
-            int sharedOffset = new NativeRows(sharedBytes).Rows(0x40, 0x808071A3, 48)[shared];
+            int sharedOffset = TagRows.StaticInstances(sharedBytes)[shared];
             var alone = Edit(sharedBytes, sharedTable, shared, sharedOffset, scale: 2);
             Throws<InvalidDataException>(() => ObjectEditCompiler.Default.Compile([alone], catalog.ReadOriginal, catalog));
             sharedText = $"{sharedTable:X8}/{shared}=refused";
@@ -240,7 +240,7 @@ internal static class OwnedChecks
         if (rotated is var (rotatedTable, rotatedIndex))
         {
             byte[] rotatedBytes = catalog.ReadOriginal(rotatedTable);
-            int rotatedOffset = new NativeRows(rotatedBytes).Rows(0x40, 0x808071A3, 48)[rotatedIndex];
+            int rotatedOffset = TagRows.StaticInstances(rotatedBytes)[rotatedIndex];
             var mismatch = Edit(rotatedBytes, rotatedTable, rotatedIndex, rotatedOffset, scale: 2);
             Throws<InvalidDataException>(() => ObjectEditCompiler.Default.Compile([mismatch], catalog.ReadOriginal, catalog));
             rotatedText = $"{rotatedTable:X8}/{rotatedIndex}=refused";
@@ -264,8 +264,8 @@ internal static class OwnedChecks
         var context = new ObjectEditContext(catalog, catalog.ReadOriginal);
         var index = new StaticCollisionRule.CollisionIndex(context, Package(table));
         var ownerPlacement = Placement(catalog, index.TableOwners(table).Single());
-        var installed = StaticCollisionRule.Compose(ownerPlacement, Row(new NativeRows(catalog.ReadOriginal(table)), edit.Target.Offset));
-        var edited = StaticCollisionRule.Compose(ownerPlacement, Row(new NativeRows(compiled.Assets[table]), edit.Target.Offset));
+        var installed = StaticCollisionRule.Compose(ownerPlacement, Row(catalog.ReadOriginal(table), edit.Target.Offset));
+        var edited = StaticCollisionRule.Compose(ownerPlacement, Row(compiled.Assets[table], edit.Target.Offset));
         var matches = index.Find(installed);
         Check(matches.Count > 0, "The edited row has no collision instance.");
         foreach (var group in matches.GroupBy(x => x.Entity.Owner.CompoundTag))
@@ -340,13 +340,10 @@ internal static class OwnedChecks
             position is { } p ? [p.X, p.Y, p.Z] : null, rotation is { } q ? [q.X, q.Y, q.Z, q.W] : null, scale);
     }
 
-    private static QsTransform Row(NativeRows data, int row) => new(data.V3(row + 0x10), data.Q4(row), new Vector3(data.F32(row + 0x1C)));
+    private static QsTransform Row(byte[] data, int row) => TagRows.StaticInstance(data, row);
 
-    private static QsTransform Placement(PackageCatalog catalog, PlacedPayload owner)
-    {
-        var data = new NativeRows(catalog.ReadOriginal(owner.ListTag));
-        return new(data.V3(owner.Row + 0x20), data.Q4(owner.Row + 0x10), new Vector3(data.F32(owner.Row + 0x2C)));
-    }
+    private static QsTransform Placement(PackageCatalog catalog, PlacedPayload owner) =>
+        TagRows.Placement(catalog.ReadOriginal(owner.ListTag), owner.Row);
 
     private static void Near(CompoundBox box, double[] min, double[] max)
     {

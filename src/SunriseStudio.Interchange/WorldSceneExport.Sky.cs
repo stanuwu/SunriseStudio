@@ -47,7 +47,7 @@ public static partial class WorldSceneExport
     private static WorldSky? WriteSky(PackageCatalog catalog, LightContext context, PlacedAtmosphere atmosphere, Vector3 light,
         float time, string? root)
     {
-        var settings = NativeAtmosphereSettings.Parse(atmosphere.Settings);
+        var settings = NativeAtmosphereSettings.Parse(atmosphere.Payload);
         if (!settings.HasMode0Lookups || !settings.TryPickKeyframe(time, out float keyframe)) return null;
         var generate = SkyConstants(context, NativeSkyLighting.GenerateTag, GenerateDigest, inputs =>
         {

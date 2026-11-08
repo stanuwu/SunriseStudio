@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Audio;
 
@@ -19,7 +20,6 @@ public static class WwiseSoundBank
     private const byte Sound = 2, Action = 3, Event = 4, RandomSequence = 5, Switch = 6, Layer = 9;
     // The runtime decodes plug-in 0x00010001 (PCM) itself; stream type 0 keeps the media in the bank.
     private const uint PcmPlugin = 0x00010001;
-    private const uint EmptyHash = 0x811C9DC5;
     // The rate_of_fire game parameter, in rounds per second.
     private const uint RateOfFire = 0x6379397C;
     // RTPC parameter 0x07 is a container's transition time in seconds; transition mode 5 is trigger rate.
@@ -34,7 +34,7 @@ public static class WwiseSoundBank
     /** Wwise names objects by the FNV-1 hash of their lower-case name, as ASCII bytes. */
     public static uint Hash(string name)
     {
-        uint hash = EmptyHash;
+        uint hash = StringHash.Empty;
         foreach (byte value in Encoding.ASCII.GetBytes(name.ToLowerInvariant())) hash = unchecked(hash * 0x01000193) ^ value;
         return hash;
     }
@@ -99,8 +99,8 @@ public static class WwiseSoundBank
             else if (item.Type == Event) hirc.Add((Event, ids[item.Id], RewriteEvent(item.Data, ids)));
             else hirc.Add((item.Type, item.Id, item.Data));
         }
-        uint related = templateRelatedId != EmptyHash && ids.TryGetValue(templateRelatedId, out uint mappedRelated)
-            ? mappedRelated : EmptyHash;
+        uint related = templateRelatedId != StringHash.Empty && ids.TryGetValue(templateRelatedId, out uint mappedRelated)
+            ? mappedRelated : StringHash.Empty;
         return new(Write(template, bankId, media, hirc), bankId, eventId, related);
     }
 
@@ -391,10 +391,63 @@ public static class WwiseSoundBank
         }
         Put("HIRC", table.ToArray());
         byte[] bytes = stream.ToArray();
-        var check = AudioCatalog.ReadBank(0, bytes);
+        var check = Read(0, bytes);
         if (check.Id != bankId || check.EmbeddedMedia.Count != media.Count || check.Objects.Count != objects.Count)
             throw new InvalidDataException("The authored bank did not read back.");
         return bytes;
+    }
+
+    /** HIRC record lengths and DIDX slices must fit their own chunks, not just the bank file. */
+    public static AudioBank Read(uint tag, byte[] bytes)
+    {
+        var objects = new List<AudioBankObject>(); var media = new List<AudioMedia>();
+        uint version = 0, id = 0; byte[]? index = null, data = null; bool headerSeen = false;
+        var chunks = new HashSet<string>(StringComparer.Ordinal);
+        for (int p = 0; p < bytes.Length;)
+        {
+            if (p > bytes.Length - 8) throw new InvalidDataException("Truncated Wwise chunk header.");
+            uint length = U32(bytes, p + 4);
+            if (length > bytes.Length - p - 8) throw new InvalidDataException("Wwise chunk leaves its bank.");
+            int start = p + 8, end = checked(start + (int)length);
+            string kind = Encoding.ASCII.GetString(bytes, p, 4);
+            if (kind is "BKHD" or "DIDX" or "DATA" or "HIRC" && !chunks.Add(kind))
+                throw new InvalidDataException("Duplicate Wwise data chunk.");
+            if (kind == "BKHD")
+            {
+                if (headerSeen || length < 8) throw new InvalidDataException("Wwise bank header is invalid.");
+                version = U32(bytes, start); id = U32(bytes, start + 4); headerSeen = true;
+            }
+            else if (kind == "DIDX") index = bytes.AsSpan(start, (int)length).ToArray();
+            else if (kind == "DATA") data = bytes.AsSpan(start, (int)length).ToArray();
+            else if (kind == "HIRC")
+            {
+                if (length < 4) throw new InvalidDataException("Truncated Wwise object table.");
+                uint count = U32(bytes, start); int cursor = start + 4;
+                if (count > 1000000) throw new InvalidDataException("Wwise object table is too large.");
+                for (int i = 0; i < count; i++)
+                {
+                    if (cursor > end - 9) throw new InvalidDataException("Truncated Wwise object.");
+                    uint size = U32(bytes, cursor + 1);
+                    if (size < 4 || size > end - cursor - 5) throw new InvalidDataException("Wwise object leaves its table.");
+                    objects.Add(new(bytes[cursor], U32(bytes, cursor + 5), bytes.AsSpan(cursor + 9, checked((int)size - 4)).ToArray()));
+                    cursor += checked((int)size + 5);
+                }
+                if (cursor != end) throw new InvalidDataException("Wwise object count differs from its table.");
+            }
+            p = end;
+        }
+        if (!headerSeen) throw new InvalidDataException("Audio entry is not a Wwise bank.");
+        if (index is not null)
+        {
+            if (data is null || index.Length % 12 != 0) throw new InvalidDataException("Wwise embedded media index is invalid.");
+            for (int p = 0; p < index.Length; p += 12)
+            {
+                uint mediaId = U32(index, p), offset = U32(index, p + 4), size = U32(index, p + 8);
+                if (offset > data.Length || size > data.Length - offset) throw new InvalidDataException("Embedded media leaves DATA.");
+                media.Add(new(mediaId, null, $"Media {mediaId}", (int)size, data.AsSpan((int)offset, (int)size).ToArray()));
+            }
+        }
+        return new(tag, id, version, bytes, objects, media);
     }
 
     private static byte[]? Chunk(byte[] bank, string kind)

@@ -1,10 +1,13 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Packages;
 
 public sealed partial class ComponentSlotCatalog
 {
-    private const int CacheVersion = 1;
+    private const int CacheVersion = 2;
 
     /** The enclosing names cache owns package identity, overlay exclusion and atomic publication. */
     internal void WriteCache(NameCacheWriter writer)
@@ -97,19 +100,22 @@ public sealed partial class ComponentSlotCatalog
         if (node.Length < 0 || node.Error is not null && (!empty || node.Length != 0))
             throw new InvalidDataException("Component role cache failure row is invalid.");
         if (node.Error is not null) return;
+        int link = TagView.FieldOffset<SEntityLink>(nameof(SEntityLink.Next));
         bool valid = node.Class switch
         {
             ComponentSlotReader.OwnerClass => node.Descriptors.IsEmpty && node.Next.IsEmpty
-                && node.Slots.All(row => row.Type != 0 && Range(row.Offset, 8))
-                && node.Roots.All(row => Range(row.Offset, 4) && Range(row.SubblockOffset, 24)),
+                && node.Slots.All(row => row.Type != 0 && Range(row.Offset, Unsafe.SizeOf<ObjectSlot>()))
+                && node.Roots.All(row => Range(row.Offset, Unsafe.SizeOf<PlacedHandle>())
+                    && Range(row.SubblockOffset, Unsafe.SizeOf<ObjectBubbleBlock>())),
             ComponentSlotReader.ConfigClass => node.Slots.IsEmpty && node.Roots.IsEmpty && node.Next.IsEmpty
                 && node.Descriptors.All(row => row.Class == node.Primary && ComponentSlotReader.ClassId(row.Class)
                     && ComponentSlotReader.Schema(row.Sense) && ComponentSlotReader.Schema(row.Auth)
-                    && row.Offset % 4 == 0 && Range(row.Offset, 128)),
+                    && row.Offset % 4 == 0 && Range(row.Offset, ComponentSlotReader.DescriptorBytes)),
             ComponentSlotReader.RedirectClass => node.Slots.IsEmpty && node.Roots.IsEmpty && node.Descriptors.IsEmpty
-                && node.Next.Length == 1 && node.Next[0].Offset == 12 && Range(12, 4),
+                && node.Next.Length == 1 && node.Next[0].Offset == link && Range(link, sizeof(uint)),
             ComponentSlotReader.IndirectClass => node.Slots.IsEmpty && node.Roots.IsEmpty && node.Descriptors.IsEmpty
-                && Range(8, 4) && node.Next.All(row => Range(row.Offset, 4)),
+                && Range(TagView.FieldOffset<SAuthoredObjectSet>(nameof(SAuthoredObjectSet.DirectTarget)), sizeof(uint))
+                && node.Next.All(row => Range(row.Offset, Unsafe.SizeOf<SAuthoredObjectSetTarget>())),
             _ => false
         };
         if (!valid) throw new InvalidDataException("Component role cache fact has an invalid layout.");

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Formats;
 
@@ -22,7 +23,6 @@ public static class MaterialInterchange
 {
     public const string Format = "sunrise-material";
     public const string ManifestName = "material.sunrise-material.json";
-    private const uint MaterialClass = 0x808071E8;
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
     /** Bundle exporters may share texture files while retaining the native field schema. */
@@ -161,41 +161,20 @@ public static class MaterialInterchange
         if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new InvalidDataException("Material document is too large.");
         var document = JsonSerializer.Deserialize<MaterialDocument>(File.ReadAllBytes(path), Json)
             ?? throw new InvalidDataException("Material document is empty.");
-        if (document.Format != Format || document.Version != 1 || document.ClassHash != MaterialClass
+        if (document.Format != Format || document.Version != 1 || document.ClassHash != STechnique.Class
             || document.SchemaSha256 is null || document.SchemaSha256.Length != 64
             || document.Slots is null || document.Constants is null || document.Textures is null)
             throw new InvalidDataException("Unsupported material document.");
         return document;
     }
 
-    /** Exported fields come from the same inspector that authorizes native scalar edits. */
+    /** Exported fields are the material panel's editable slots and constant lanes. */
     private static MaterialDocument Describe(AssetInspectionContext context)
     {
-        var inspector = new MaterialInspector();
-        if (!inspector.CanInspect(context)) throw new NotSupportedException("Select a native material.");
-        var inspection = inspector.Inspect(context);
-        var slots = new List<MaterialSlot>();
-        var constants = new List<MaterialScalar>();
-        foreach (var stage in inspection.Sections.Where(x => x.Name is "Vertex" or "Pixel" or "Compute"))
-            foreach (var node in stage.Children ?? [])
-            {
-                if (node.Properties.FirstOrDefault(x => x.Name == "Texture") is { } texture)
-                {
-                    uint tag = uint.Parse(texture.Value[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-                    uint slot = uint.Parse(node.Properties.Single(x => x.Name == "Slot").Value, CultureInfo.InvariantCulture);
-                    slots.Add(new(stage.Name, slot, texture.Offset, tag, tag));
-                }
-                else if (node.Name is "Expression constants" or "Constant template")
-                {
-                    int index = 0;
-                    foreach (var vector in node.Children ?? [])
-                    {
-                        foreach (var field in vector.Properties.Where(x => x.Editable && x.Encoding == ScalarEncoding.Float32))
-                            constants.Add(new(stage.Name, node.Name, index, field.Name, field.Offset, field.Value));
-                        index++;
-                    }
-                }
-            }
+        if (!new MaterialInspector().CanInspect(context)) throw new NotSupportedException("Select a native material.");
+        var (textures, lanes) = MaterialInspector.Fields(context.Data.Span);
+        var slots = textures.Select(x => new MaterialSlot(x.Stage, x.Slot, x.Offset, x.Texture, x.Texture)).ToList();
+        var constants = lanes.Select(x => new MaterialScalar(x.Stage, x.Block, x.Index, x.Lane, x.Offset, x.Value)).ToList();
         byte[] schema = context.Data.ToArray();
         foreach (int offset in slots.Select(x => x.Offset).Concat(constants.Select(x => x.Offset)).Distinct())
             schema.AsSpan(offset, 4).Clear();
@@ -205,9 +184,9 @@ public static class MaterialInterchange
 
     private static AssetInspectionContext Context(PackageCatalog catalog, uint tag)
     {
-        if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != MaterialClass)
+        if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != STechnique.Class)
             throw new InvalidDataException("Tag is not a supported native material.");
-        return new(tag, MaterialClass, catalog.Read(tag), catalog.GetName(tag) ?? $"Material {tag:X8}",
+        return new(tag, STechnique.Class, catalog.Read(tag), catalog.GetName(tag) ?? $"Material {tag:X8}",
             catalog.GetName, catalog.ContainsTag, catalog.Read);
     }
 

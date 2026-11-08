@@ -1,3 +1,9 @@
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using LabelTableView = SunriseStudio.Tags.Generated.PerkLabelTable;
+using SunriseStudio.Packages;
+
 namespace SunriseStudio.Formats;
 
 /** One entry of the installed label table: a single label with its bit, or a group with its mask. */
@@ -8,10 +14,12 @@ public sealed class PerkLabelTable
 {
     /** Tag of the installed label table. */
     public const uint Tag = 0x80C70CA1;
-    // +8 is the u32 label hash array; +24 holds 44-byte groups {u32 hash, 40-byte mask}.
-    private const uint HashClass = 0x80800070, GroupClass = 0x808094BE;
-    // A compiled label set is 320 bits.
-    public const int MaskBytes = 40;
+    // A u32 label hash array, then groups of a hash and a label mask.
+    private const uint HashClass = SU32HashElement.Class, GroupClass = SPerkLabelGroup.Class;
+    private static readonly int HashesField = TagView.FieldOffset<LabelTableView>(nameof(LabelTableView.Labels));
+    private static readonly int GroupsField = TagView.FieldOffset<LabelTableView>("Compression.Groups");
+    /** Bytes in a label mask, one bit per label table index. */
+    public static readonly int MaskBytes = MaskLength();
 
     /** FNV-1 names that match label table rows. */
     private static readonly string[] KnownNames =
@@ -30,7 +38,7 @@ public sealed class PerkLabelTable
 
     public PerkLabelTable(IReadOnlyList<uint> labels, IReadOnlyList<(uint Hash, byte[] Mask)> groups)
     {
-        var names = KnownNames.ToDictionary(InvestmentItemClone.Fnv1, name => name);
+        var names = KnownNames.ToDictionary(StringBankWriter.Hash, name => name);
         var entries = new List<PerkLabel>();
         for (int bit = 0; bit < Math.Min(labels.Count, MaskBytes * 8); bit++)
         {
@@ -48,17 +56,31 @@ public sealed class PerkLabelTable
     /** Reads the installed table tag; null when the arrays are missing or malformed. */
     public static PerkLabelTable? Parse(ReadOnlyMemory<byte> bytes)
     {
-        var data = new TagReader(bytes);
-        if (!data.TryArray(8, HashClass, 4, out var hashes) || !data.TryArray(24, GroupClass, 44, out var groups)) return null;
+        int hashStride = Unsafe.SizeOf<SU32HashElement>(), groupStride = Unsafe.SizeOf<SPerkLabelGroup>();
+        if (!TagArray.TryChecked(bytes.Span, HashesField, HashClass, hashStride, out var hashes)
+            || !TagArray.TryChecked(bytes.Span, GroupsField, GroupClass, groupStride, out var groups)) return null;
         return new(
-            [.. Enumerable.Range(0, hashes.Count).Select(i => data.U32(hashes.Data + i * 4))],
-            [.. Enumerable.Range(0, groups.Count).Select(i => groups.Data + i * 44)
-                .Select(row => (data.U32(row), bytes.Span.Slice(row + 4, MaskBytes).ToArray()))]);
+            [.. Enumerable.Range(0, hashes.Count).Select(i => TagView.At<SU32HashElement>(bytes.Span, hashes.Data + i * hashStride).KeyHash)],
+            [.. Enumerable.Range(0, groups.Count).Select(i => groups.Data + i * groupStride)
+                .Select(row => Group(bytes.Span, row))]);
+    }
+
+    /** One group row: its hash and a copy of its label mask. */
+    private static (uint Hash, byte[] Mask) Group(ReadOnlySpan<byte> bytes, int row)
+    {
+        ref readonly var group = ref TagView.At<SPerkLabelGroup>(bytes, row);
+        return (group.GroupHash, ((ReadOnlySpan<byte>)group.LabelMask).ToArray());
+    }
+
+    private static int MaskLength()
+    {
+        SPerkLabelGroup group = default;
+        return ((Span<byte>)group.LabelMask).Length;
     }
 
     public bool Contains(uint hash) => masks.ContainsKey(hash);
 
-    /** ORs a label's or group's mask into the 40-byte set; false for a hash the table lacks. */
+    /** ORs a label's or group's mask into the set; false for a hash the table lacks. */
     public bool AddTo(uint hash, byte[] set)
     {
         if (!masks.TryGetValue(hash, out var mask)) return false;

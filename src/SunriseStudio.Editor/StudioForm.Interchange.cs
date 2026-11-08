@@ -1,7 +1,8 @@
+using SunriseStudio.Authoring;
 using SunriseStudio.Formats;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
-using SunriseStudio.Authoring;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Editor;
 
@@ -105,7 +106,7 @@ public sealed partial class StudioForm
     }
 
     private uint? SelectedClipTag() => AssetPreviewViewport?.Animation?.Clip?.TagHash
-        ?? (workspace.Document?.Entry.Reference == 0x80808F49 ? workspace.Document.Entry.TagHash : null);
+        ?? (workspace.Document?.Entry.Reference == SAnimationClip.Class ? workspace.Document.Entry.TagHash : null);
 
     private void ExportAnimationControls()
     {

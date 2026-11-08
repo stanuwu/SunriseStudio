@@ -3,6 +3,7 @@ using System.Numerics;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Interchange;
 
@@ -30,7 +31,7 @@ internal static class NativeVertexInputs
         IReadOnlyList<Vector4>? channels)
     {
         if (mesh.Native is not { Kind: NativeMeshKind.Entity, InputLayoutVerified: true } native
-            || !catalog.TryGetEntry(mesh.MaterialTag, out var entry) || entry.Reference != 0x808071E8
+            || !catalog.TryGetEntry(mesh.MaterialTag, out var entry) || entry.Reference != STechnique.Class
             || reader.Read(mesh.MaterialTag) is not { VertexShader: { } shader } material) return null;
         var inputs = MaterialPreviewAnalyzer.CreateInputs(catalog);
         inputs.ObjectChannels = channels;

@@ -1,5 +1,7 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.InteropServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Rendering;
 
@@ -24,29 +26,15 @@ public sealed class NativeExpression
      */
     public static NativeExpression? Read(ReadOnlySpan<byte> tag, int offset)
     {
-        if (offset < 0 || offset + 0x30 > tag.Length) throw new InvalidDataException("Expression record leaves its tag.");
-        long codeCount = BinaryPrimitives.ReadInt64LittleEndian(tag[offset..]);
-        if (codeCount == 0) return null;
-        long constantCount = BinaryPrimitives.ReadInt64LittleEndian(tag[(offset + 16)..]);
-        var code = Array(tag, offset + 8, codeCount, 1).ToArray();
-        var constantBytes = constantCount == 0 ? [] : Array(tag, offset + 24, constantCount, 16);
-        var values = new Vector4[constantCount];
-        for (int i = 0; i < values.Length; i++)
-        {
-            var at = constantBytes[(16 * i)..];
-            values[i] = new(BinaryPrimitives.ReadSingleLittleEndian(at), BinaryPrimitives.ReadSingleLittleEndian(at[4..]),
-                BinaryPrimitives.ReadSingleLittleEndian(at[8..]), BinaryPrimitives.ReadSingleLittleEndian(at[12..]));
-        }
+        if (!TagView.Fits<SCompiledExpression>(tag, offset)) throw new InvalidDataException("Expression record leaves its tag.");
+        ref readonly var expression = ref TagView.At<SCompiledExpression>(tag, offset);
+        if (expression.Bytecode.Count == 0) return null;
+        var code = MemoryMarshal.Cast<ExpressionCode, byte>(
+            TagView.CheckedRows(tag, in expression.Bytecode, ExpressionCode.Class)).ToArray();
+        var constantRows = TagView.CheckedRows(tag, in expression.ConstantBuffer, ExpressionConstant.Class);
+        var values = new Vector4[constantRows.Length];
+        for (int i = 0; i < values.Length; i++) values[i] = constantRows[i].Value;
         return new(code, values);
-    }
-
-    /** Array data starts 16 bytes past the self-relative link at field. */
-    private static ReadOnlySpan<byte> Array(ReadOnlySpan<byte> tag, int field, long count, int stride)
-    {
-        long start = field + BinaryPrimitives.ReadInt64LittleEndian(tag[field..]) + 16;
-        if (count < 0 || start < 0 || start + count * stride > tag.Length)
-            throw new InvalidDataException("Expression array leaves its tag.");
-        return tag.Slice((int)start, (int)(count * stride));
     }
 
     /**

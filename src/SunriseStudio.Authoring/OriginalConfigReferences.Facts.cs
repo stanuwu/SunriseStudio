@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Authoring;
 
@@ -43,8 +45,9 @@ internal static partial class OriginalConfigReferences
             {
                 int offset = reader.ReadInt32(), ordinal = reader.ReadInt32(), auxiliary = reader.ReadInt32();
                 uint owner = reader.ReadUInt32();
-                if (type != 0x808099D6 || offset < 0 || offset > entry.Size - 144 || ordinal < 0
-                    || auxiliary < 8 || auxiliary > entry.Size - 24 || (auxiliary & 3) != 0)
+                if (type != SMapPlacements.Class || offset < 0 || offset > entry.Size - Unsafe.SizeOf<AuthoredPlacementEntry>()
+                    || ordinal < 0 || auxiliary < InstanceIsolationScope.PayloadLead
+                    || auxiliary > entry.Size - Unsafe.SizeOf<SStaticInstancesPayload>() || (auxiliary & 3) != 0)
                     throw new InvalidDataException("The isolation cache placement is invalid.");
                 placements[row] = new(tag, offset, ordinal, auxiliary, owner);
             }
@@ -65,9 +68,10 @@ internal static partial class OriginalConfigReferences
             }
             if (valid == 0 && (link != 0 || placements.Length != 0 || maps.Length != 0 || children.Length != 0)
                 || valid != 0 && candidates.Length != 0
-                || type != 0x808099D6 && maps.Length != 0
-                || type is 0x80806EF4 or 0x808099D6 or 0x80807DAE or 0x8080925B && children.Length != 0
-                || type is not (0x80806EF4 or 0x80807DAE or 0x8080925B) && link != 0)
+                || type != SMapPlacements.Class && maps.Length != 0
+                || type is SMapResourceLink.Class or SMapPlacements.Class or SBubbleParent.Class or SScenarioStateEntry.Class
+                    && children.Length != 0
+                || type is not (SMapResourceLink.Class or SBubbleParent.Class or SScenarioStateEntry.Class) && link != 0)
                 throw new InvalidDataException("The isolation cache node fields do not match its class.");
             result.Add(tag, new(tag, type, valid != 0, link, placements, maps, children, candidates));
         }

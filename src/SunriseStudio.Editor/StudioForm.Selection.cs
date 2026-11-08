@@ -140,7 +140,7 @@ public sealed partial class StudioForm
         {
             // The catalog shows compiled project bytes, so these start from the current edited state.
             editTarget = selectedObject;
-            sceneEditInfo = SceneEdits.Describe(catalog, selectedObject, inspectionWorld);
+            sceneEditInfo = SceneEdits.Describe(catalog, selectedObject, inspectionWorld, workspace.IsProjectContent);
             editPosition = sceneEditInfo.Position;
             editRotation = editRotationBase = QuaternionToDegrees(sceneEditInfo.Rotation);
             editScale = sceneEditInfo.Scale;
@@ -162,10 +162,28 @@ public sealed partial class StudioForm
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("XYZ degrees");
             if (info.CanScale)
             { ImGui.TextDisabled("Scale"); ImGui.SetNextItemWidth(-1); ImGui.InputFloat("##scale", ref editScale, 0, 0, "%.4f"); }
+            // A static of the project's own content is moved in its source file, not by an object edit.
+            bool content = info.Target is { Layout: ObjectEditLayout.StaticInstance } row && workspace.IsProjectContent(row.SourceTag);
             if (ImGui.Button("Apply transform", new(-1, 0))) workspace.Run(() =>
-                workspace.ApplyObjectEdit(SceneEdits.CreateTransformEdit(catalog, selectedObject, editPosition,
-                    editRotation == editRotationBase ? null : DegreesToQuaternion(editRotation), editScale, inspectionWorld,
-                    objectInspection?.Object.Name)));
+            {
+                if (content)
+                    workspace.MoveContentStatic(info.Target!.SourceTag, info.Target.Index, editPosition,
+                        editRotation == editRotationBase ? info.Rotation : DegreesToQuaternion(editRotation), editScale);
+                else
+                    workspace.ApplyObjectEdit(SceneEdits.CreateTransformEdit(catalog, selectedObject, editPosition,
+                        editRotation == editRotationBase ? null : DegreesToQuaternion(editRotation), editScale, inspectionWorld,
+                        objectInspection?.Object.Name));
+            });
+            if (!content && info.Target?.Layout == ObjectEditLayout.StaticInstance && workspace.Project is { } project)
+            {
+                if (ImGui.Button("Copy to this transform", new(-1, 0))) workspace.Run(() =>
+                    workspace.ApplyObjectEdit(SceneEdits.CreateCopyEdit(catalog, selectedObject, project.ObjectEdits, editPosition,
+                        DegreesToQuaternion(editRotation), editScale, inspectionWorld, objectInspection?.Object.Name)));
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Adds a copy at the values above; the object itself stays.");
+                if (ImGui.Button("Remove object", new(-1, 0))) workspace.Run(() =>
+                    workspace.ApplyObjectEdit(SceneEdits.CreateRemoveEdit(catalog, selectedObject, inspectionWorld,
+                        objectInspection?.Object.Name)));
+            }
         }
         if (info.CanBounds)
         {
@@ -179,6 +197,12 @@ public sealed partial class StudioForm
         {
             ImGui.TextColored(StudioTheme.Accent, $"Edited: {saved.Summary()}");
             if (ImGui.Button("Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
+        }
+        if (info.Target is { Layout: ObjectEditLayout.StaticInstance } removable
+            && workspace.Project?.FindObjectEdit(new ObjectEdit(ObjectEditKind.RemoveInstance, removable).Key) is { } removal)
+        {
+            ImGui.TextColored(StudioTheme.Accent, "Removed in this project");
+            if (ImGui.Button("Restore object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(removal.Key));
         }
         ImGui.EndDisabled();
         if (workspace.Project is null) ImGui.TextDisabled("Create a project to edit");

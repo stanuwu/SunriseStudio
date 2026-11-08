@@ -58,7 +58,7 @@ internal static class StaticIsolationFixture
         entries.Add(new(0x80808A54, 0x100A, container.ToArray()));
         var list = new Bytes(24); int child = list.Array(8, 0x808084C1, 16, 1); list.U32(child, Container);
         entries.Add(new(0x808091E0, 0x100A, list.ToArray()));
-        var bubble = new Bytes(32); bubble.U32(8, ContainerList);
+        var bubble = new Bytes(80); bubble.U32(8, ContainerList);
         entries.Add(new(0x80807DAE, 0x100A, bubble.ToArray())
         { WideHashes = paddedConfig ? new([BubbleWide]) : WideHashAliases.Empty });
         var root = new Bytes(32); child = root.Array(0x10, 0x80807D53, 16, 1);
@@ -93,12 +93,25 @@ internal static class StaticIsolationFixture
         return container.ToArray();
     }
 
+    /** A placement list with one static placement of `owner`. */
+    internal static byte[] StaticPlacementList(uint owner) => Placement(0x808071B3, owner);
+
+    /** A bubble's container list naming `containers`. */
+    internal static byte[] BubbleContainers(params uint[] containers)
+    {
+        var list = new Bytes(24); int child = list.Array(8, 0x808084C1, 16, containers.Length);
+        for (int index = 0; index < containers.Length; index++) list.U32(child + index * 16, containers[index]);
+        return list.ToArray();
+    }
+
     internal static byte[] ConfigPlacement()
     {
         var config = new Bytes(160);
         const int descriptor = 32;
-        config.U64(16, 24); config.U32(descriptor, SlotConfig); config.U32(descriptor + 4, 0x80809927);
-        config.U32(descriptor + 8, 0x70); config.U16(descriptor + 52, 4);
+        int instance = config.Append(24) + 8; config.U32(instance - 4, 0x80809927);
+        config.U64(16, (ulong)(instance - 16)); config.U64(24, descriptor - 24);
+        config.U32(descriptor, SlotConfig); config.U32(descriptor + 4, 0x80809927);
+        config.U32(descriptor + 8, (uint)instance); config.U16(descriptor + 52, 4);
         int row = config.Array(descriptor + 0x58, 0x808099D8, 144, 1);
         config.U32(row, Entity); config.F32(row + 0x1C, 1); config.F32(row + 0x2C, 1);
         config.U64(row + 0x70, ulong.MaxValue);

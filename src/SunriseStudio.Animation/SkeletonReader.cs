@@ -1,5 +1,7 @@
 using System.Numerics;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Animation;
 
@@ -15,54 +17,69 @@ public sealed class SkeletonReader(PackageCatalog catalog)
         uint resourceTag = tag;
         var models = new HashSet<uint>();
         var clothModels = new List<ClothModelReference>();
-        if (Class(tag) == 0x80809C0F)
+        if (Class(tag) == SEntity.Class)
         {
             entityTag = tag;
-            var entity = new TagData(catalog.Read(tag));
+            byte[] entity = catalog.Read(tag);
             var skeletons = new HashSet<uint>();
-            foreach (int row in entity.Rows(0x10, 0x80809C04, 12))
+            foreach (ref readonly var component in AnimationControlReader.Rows<SEntity, SPatternComponent>(entity, 0,
+                         nameof(SEntity.Components), SPatternComponent.Class, ReadMessages.Default))
             {
-                uint configTag = entity.U32(row);
-                if (Class(configTag) != 0x80809C36) continue;
-                var config = new TagData(catalog.Read(configTag));
-                int resource = config.Pointer(0x18);
-                uint resourceClass = config.U32(resource - 4);
-                if (resourceClass == 0x80808546 && config.U32(config.Pointer(0x10) - 4) == 0x80808545)
+                uint configTag = component.Config;
+                if (Class(configTag) != SEntityConfig.Class) continue;
+                byte[] config = catalog.Read(configTag);
+                if (ConfigTarget(config, nameof(SEntityConfig.Definition)) is not { } resource) continue;
+                uint resourceClass = AnimationControlReader.ClassBefore(config, resource, ReadMessages.Default);
+                if (resourceClass == SSkeletonResource.Class
+                    && ConfigTarget(config, nameof(SEntityConfig.DefaultInstance)) is { } skeletonPrimary
+                    && AnimationControlReader.ClassBefore(config, skeletonPrimary, ReadMessages.Default) == SSkeletonPrimary.Class)
                     skeletons.Add(configTag);
-                if (resourceClass == 0x808072BD && config.Has(resource + 0x1DC, 4))
+                if (resourceClass == SModelComponent.Class
+                    && TagView.FitsThrough<SModelComponent>(config, resource, nameof(SModelComponent.Model)))
                 {
-                    uint model = config.U32(resource + 0x1DC);
-                    if (Class(model) == 0x808073A5) models.Add(model);
+                    uint model = AnimationControlReader.Member<SModelComponent, uint>(config, resource,
+                        nameof(SModelComponent.Model), ReadMessages.Default);
+                    if (Class(model) == SEntityModel.Class) models.Add(model);
                 }
-                if (resourceClass == 0x80807286 && ClothReference(configTag) is { } cloth) clothModels.Add(cloth);
+                if (resourceClass == SClothModelComponent.Class && ClothReference(configTag) is { } cloth) clothModels.Add(cloth);
             }
             if (skeletons.Count != 1)
                 throw new NotSupportedException($"Entity 0x{tag:X8} has {skeletons.Count} supported skeleton resources.");
             resourceTag = skeletons.Single();
         }
-        if (Class(resourceTag) != 0x80809C36)
+        if (Class(resourceTag) != SEntityConfig.Class)
             throw new NotSupportedException("Skeleton input must be an entity or skeleton config tag.");
-        var data = new TagData(catalog.Read(resourceTag));
-        int primary = data.Pointer(0x10), secondary = data.Pointer(0x18);
-        if (data.U32(primary - 4) != 0x80808545 || data.U32(secondary - 4) != 0x80808546)
+        byte[] data = catalog.Read(resourceTag);
+        int? instance = ConfigTarget(data, nameof(SEntityConfig.DefaultInstance));
+        int? definition = ConfigTarget(data, nameof(SEntityConfig.Definition));
+        if (instance is not { } primary
+            || AnimationControlReader.ClassBefore(data, primary, ReadMessages.Default) != SSkeletonPrimary.Class
+            || definition is not { } secondary
+            || AnimationControlReader.ClassBefore(data, secondary, ReadMessages.Default) != SSkeletonResource.Class)
             throw new NotSupportedException("Config does not contain the supported skeleton resource pair.");
-        int[] hierarchy = data.Rows(secondary + 0x80, 0x80808A08, 16);
-        int[] bind = data.Rows(secondary + 0x90, 0x80809F75, 32);
-        int[] inverse = data.Rows(secondary + 0xA0, 0x80809F75, 32);
+        var hierarchy = AnimationControlReader.Rows<SSkeletonResource, SSkeletonBoneNode>(data, secondary,
+            nameof(SSkeletonResource.Hierarchy), SSkeletonBoneNode.Class, ReadMessages.Default);
+        var bind = AnimationControlReader.Rows<SSkeletonResource, SAnimationControlDefault>(data, secondary,
+            nameof(SSkeletonResource.ObjectBindTransforms), SAnimationControlDefault.Class, ReadMessages.Default);
+        var inverse = AnimationControlReader.Rows<SSkeletonResource, SAnimationControlDefault>(data, secondary,
+            nameof(SSkeletonResource.InverseBindTransforms), SAnimationControlDefault.Class, ReadMessages.Default);
         if (hierarchy.Length is < 1 or > 4096 || bind.Length != hierarchy.Length
             || inverse.Length != hierarchy.Length)
             throw new InvalidDataException("Skeleton hierarchy and transform counts disagree.");
-        var parents = hierarchy.Select(row => data.I32(row + 4)).ToArray();
+        var parents = new int[hierarchy.Length];
+        for (int i = 0; i < parents.Length; i++) parents[i] = hierarchy[i].ParentIndex;
         int[] order = EvaluationOrder(parents);
-        var objectTransforms = bind.Select(data.Transform).ToArray();
-        var inverseTransforms = inverse.Select(data.Transform).ToArray();
+        var objectTransforms = new BoneTransform[bind.Length];
+        for (int i = 0; i < objectTransforms.Length; i++) objectTransforms[i] = Transform(in bind[i]);
+        var inverseTransforms = new BoneTransform[inverse.Length];
+        for (int i = 0; i < inverseTransforms.Length; i++) inverseTransforms[i] = Transform(in inverse[i]);
         var bones = new SkeletonBone[hierarchy.Length];
         float maximumError = 0;
         for (int i = 0; i < bones.Length; i++)
         {
-            int row = hierarchy[i];
-            uint hash = data.U32(row);
-            int child = data.I32(row + 8), sibling = data.I32(row + 12);
+            ref readonly var node = ref hierarchy[i];
+            uint hash = node.BoneName;
+            int child = node.FirstChildIndex, sibling = node.NextSiblingIndex;
             if (child < -1 || child >= bones.Length || sibling < -1 || sibling >= bones.Length)
                 throw new InvalidDataException("Skeleton child link is outside the hierarchy.");
             var product = objectTransforms[i].Matrix * inverseTransforms[i].Matrix;
@@ -86,18 +103,37 @@ public sealed class SkeletonReader(PackageCatalog catalog)
      */
     public ClothModelReference? ClothReference(uint configTag)
     {
-        if (Class(configTag) != 0x80809C36) return null;
-        var config = new TagData(catalog.Read(configTag));
-        int resource = config.Pointer(0x18);
-        if (config.U32(resource - 4) != 0x80807286 || !config.Has(resource + 0x358, 4)
-            || config.U32(config.Pointer(0x10) - 4) != 0x80807273)
+        if (Class(configTag) != SEntityConfig.Class) return null;
+        byte[] config = catalog.Read(configTag);
+        if (ConfigTarget(config, nameof(SEntityConfig.Definition)) is not { } resource
+            || AnimationControlReader.ClassBefore(config, resource, ReadMessages.Default) != SClothModelComponent.Class
+            || !TagView.FitsThrough<SClothModelComponent>(config, resource, nameof(SClothModelComponent.HavokClothAsset))
+            || ConfigTarget(config, nameof(SEntityConfig.DefaultInstance)) is not { } instance
+            || AnimationControlReader.ClassBefore(config, instance, ReadMessages.Default) != SClothModelPrimary.Class)
             return null;
-        // The resource names the model at +0x1DC and the cloth asset at +0x358.
-        uint model = config.U32(resource + 0x1DC), asset = config.U32(resource + 0x358);
-        return Class(model) == 0x808073A5 && Class(asset) == 0x8080727A ? new(configTag, model, asset) : null;
+        uint model = AnimationControlReader.Member<SClothModelComponent, uint>(config, resource,
+            nameof(SClothModelComponent.Model), ReadMessages.Default);
+        uint asset = AnimationControlReader.Member<SClothModelComponent, uint>(config, resource,
+            nameof(SClothModelComponent.HavokClothAsset), ReadMessages.Default);
+        return Class(model) == SEntityModel.Class && Class(asset) == SSkeletonAsset.Class ? new(configTag, model, asset) : null;
     }
 
     private uint Class(uint tag) => catalog.TryGetEntry(tag, out var entry) ? entry.Reference : 0;
+
+    /**
+     * @param messages Null means ReadMessages.Default.
+     * @return The object a config pointer names; null for a null pointer.
+     */
+    internal static int? ConfigTarget(byte[] config, string member, ReadMessages? messages = null) =>
+        TagView.TargetOffset(config, in AnimationControlReader.Member<SEntityConfig, RelativePointer<Unknown>>(config, 0,
+            member, messages ?? ReadMessages.Default));
+
+    private static BoneTransform Transform(ref readonly SAnimationControlDefault value)
+    {
+        var transform = new BoneTransform(value.Rotation, value.Translation, value.Scale);
+        CheckTransform(transform);
+        return transform;
+    }
 
     /** A parent cycle is rejected before evaluating any pose. */
     private static int[] EvaluationOrder(int[] parents)

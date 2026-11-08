@@ -1,5 +1,7 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Rendering;
 
@@ -11,25 +13,21 @@ public sealed class NativeDirectionCurve
 
     private NativeDirectionCurve(Vector4[] keys) => this.keys = keys;
 
-    /** The kind byte sits behind the relative link at +0x10; the keys are the typed array at +0x30. */
+    /** The keys and their kind sit behind the Curve pointer; the key array needs a valid header. */
     public static NativeDirectionCurve Parse(ReadOnlySpan<byte> tag)
     {
-        long kindOffset = 0x10 + BinaryPrimitives.ReadInt64LittleEndian(tag[0x10..]);
-        if (kindOffset < 0 || kindOffset >= tag.Length || tag[(int)kindOffset] != 0)
-            throw new NotSupportedException("Only linear direction curves (kind 0) are verified.");
-        int count = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(tag[0x30..]));
-        long header = 0x38 + BinaryPrimitives.ReadInt64LittleEndian(tag[0x38..]);
-        long data = header + 16;
-        if (count < 1 || data < 0 || data + 16L * count > tag.Length)
+        ref readonly var curve = ref TagView.At<UnknownDirectionCurve>(tag);
+        long keysAt = TagView.OffsetOf(tag, in curve.Curve) + curve.Curve.Relative;
+        if (curve.Curve.IsNull || keysAt < 0 || keysAt > tag.Length - Unsafe.SizeOf<DirectionCurveKeys>())
             throw new InvalidDataException("Direction curve keys leave their tag.");
-        var keys = new Vector4[count];
-        for (int i = 0; i < count; i++)
-        {
-            var at = tag[(int)(data + 16 * i)..];
-            keys[i] = new(BinaryPrimitives.ReadSingleLittleEndian(at), BinaryPrimitives.ReadSingleLittleEndian(at[4..]),
-                BinaryPrimitives.ReadSingleLittleEndian(at[8..]), BinaryPrimitives.ReadSingleLittleEndian(at[12..]));
-        }
-        return new(keys);
+        ref readonly var keys = ref TagView.At<DirectionCurveKeys>(tag, (int)keysAt);
+        if (keys.CurveKind != 0)
+            throw new NotSupportedException("Only linear direction curves (kind 0) are verified.");
+        var rows = TagView.CheckedRows(tag, in keys.Vectors, ExpressionConstant.Class);
+        if (rows.Length < 1) throw new InvalidDataException("Direction curve keys leave their tag.");
+        var values = new Vector4[rows.Length];
+        for (int i = 0; i < values.Length; i++) values[i] = rows[i].Value;
+        return new(values);
     }
 
     /** Lerps the two keys around (count - 1) * time; the ends clamp and do not wrap. */
@@ -58,14 +56,11 @@ public sealed class NativeTimeOfDay
     /** Header floats +0x0 to +0xC and curve handles +0x10 to +0x1C; -1 marks an absent curve. */
     public static (float[] Windows, uint[] Curves) ReadHeader(ReadOnlySpan<byte> tag)
     {
-        if (tag.Length < 0x20) throw new InvalidDataException("Time-of-day curve set is shorter than its header.");
-        var windows = new float[4];
-        var handles = new uint[4];
-        for (int i = 0; i < 4; i++)
-        {
-            windows[i] = BinaryPrimitives.ReadSingleLittleEndian(tag[(4 * i)..]);
-            handles[i] = BinaryPrimitives.ReadUInt32LittleEndian(tag[(0x10 + 4 * i)..]);
-        }
+        if (!TagView.Fits<UnknownTimeOfDayCurveSet>(tag, 0))
+            throw new InvalidDataException("Time-of-day curve set is shorter than its header.");
+        ref readonly var set = ref TagView.At<UnknownTimeOfDayCurveSet>(tag);
+        float[] windows = [set.SkyWindowStart, set.SkyWindowEnd, set.LightWindowStart, set.LightWindowEnd];
+        uint[] handles = [set.SkyCurveBase, set.SkyCurveWindow, set.LightCurveBase, set.LightCurveWindow];
         return (windows, handles);
     }
 

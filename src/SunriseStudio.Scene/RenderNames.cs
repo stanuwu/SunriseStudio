@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Text;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -46,42 +48,38 @@ public sealed partial class RenderNames
         var diagnostics = new List<string>();
         var unset = 0;
         var roots = rootTag.HasValue ? [rootTag.Value]
-            : catalog.Entries.Where(e => e.Reference == 0x80806CB1).Select(e => e.TagHash).ToArray();
+            : catalog.Entries.Where(e => e.Reference == SRendererRoot.Class).Select(e => e.TagHash).ToArray();
         foreach (var root in roots)
         {
             token.ThrowIfCancellationRequested();
-            if (!catalog.TryGetEntry(root, out var rootEntry) || rootEntry.Reference != 0x80806CB1)
+            if (!catalog.TryGetEntry(root, out var rootEntry) || rootEntry.Reference != SRendererRoot.Class)
                 throw new InvalidDataException($"Renderer root 0x{root:X8} has the wrong live class.");
-            var data = new TagData(catalog.Read(root));
+            var data = catalog.Read(root);
             var strings = StringRegions(data);
-            foreach (var (kind, field, element, targetClass) in new[]
+            foreach (var (kind, targetClass) in new[]
             {
-                (RendererNameKind.Scope, 0x10, 0x80806CB6U, 0x808071F3U),
-                (RendererNameKind.Technique, 0x20, 0x80806CB5U, 0x808071E8U)
+                (RendererNameKind.Scope, SScope.Class),
+                (RendererNameKind.Technique, STechnique.Class)
             })
             {
-                var rows = data.Rows(field, element, 16);
+                var rows = NameRows(data, kind);
                 for (var ordinal = 0; ordinal < rows.Length; ++ordinal)
                 {
                     token.ThrowIfCancellationRequested();
-                    var row = rows[ordinal];
-                    var tag = data.U32(row + 12);
+                    var (row, tag) = rows[ordinal];
                     if (tag is 0 or uint.MaxValue) { unset++; continue; }
                     if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != targetClass)
                     {
                         diagnostics.Add($"Renderer {kind} row {ordinal} in 0x{root:X8} has an invalid tag 0x{tag:X8}.");
                         continue;
                     }
-                    if (kind == RendererNameKind.Scope)
+                    if (kind == RendererNameKind.Scope
+                        && TagRead.U32(catalog.Read(tag), TagView.FieldOffset<SScope>("Common.ScopeIndex")) != ordinal)
                     {
-                        var scope = new TagData(catalog.Read(tag));
-                        if (scope.U32(0x10) != ordinal)
-                        {
-                            diagnostics.Add($"Renderer scope 0x{tag:X8} disagrees with row index {ordinal}.");
-                            continue;
-                        }
+                        diagnostics.Add($"Renderer scope 0x{tag:X8} disagrees with row index {ordinal}.");
+                        continue;
                     }
-                    var offset = data.Relative(row);
+                    var offset = NameOffset(data, kind, row);
                     var name = ReadName(data, strings, offset);
                     entries.Add(new RendererNameEntry(tag, targetClass, name, kind, root,
                         ordinal, row, offset));
@@ -104,27 +102,42 @@ public sealed partial class RenderNames
         UnsetRowCount = unset;
     }
 
-    /** Name pointers must stay inside a bounded package string block. */
-    private static (int Start, int Length)[] StringRegions(TagData data)
+    /** Each row of one renderer name table: where it sits and the tag it names. */
+    private static (int Row, uint Tag)[] NameRows(byte[] data, RendererNameKind kind)
     {
-        var result = new List<(int, int)>();
-        for (var offset = 0; offset <= data.Length - 12; offset += 4)
+        if (kind == RendererNameKind.Scope)
         {
-            if (data.U32(offset) != 0x80800065) continue;
-            var length = data.U64(offset + 4);
-            if (length != 0 && length <= (ulong)(data.Length - offset - 12))
-                result.Add((offset + 12, (int)length));
+            ref readonly var scopeNames = ref TagView.At<TagArray<UnknownRendererScopeRow>>(data,
+                TagView.FieldOffset<SRendererRoot>(nameof(SRendererRoot.ScopeNames)));
+            var scopes = TagView.Rows(data, in scopeNames, UnknownRendererScopeRow.Class);
+            var result = new (int, uint)[scopes.Length];
+            for (var i = 0; i < scopes.Length; ++i) result[i] = (TagView.OffsetOf(data, in scopes[i]), scopes[i].Scope);
+            return result;
         }
-        return result.ToArray();
+        ref readonly var techniqueNames = ref TagView.At<TagArray<UnknownRendererTechniqueRow>>(data,
+            TagView.FieldOffset<SRendererRoot>(nameof(SRendererRoot.TechniqueNames)));
+        var techniques = TagView.Rows(data, in techniqueNames, UnknownRendererTechniqueRow.Class);
+        var rows = new (int, uint)[techniques.Length];
+        for (var i = 0; i < techniques.Length; ++i) rows[i] = (TagView.OffsetOf(data, in techniques[i]), techniques[i].Technique);
+        return rows;
     }
 
+    /** Where a row's name pointer lands; a null pointer lands on the row itself. */
+    private static int NameOffset(byte[] data, RendererNameKind kind, int row) => kind == RendererNameKind.Scope
+        ? TagView.TargetOffset(data, in TagView.At<UnknownRendererScopeRow>(data, row).Name) ?? row
+        : TagView.TargetOffset(data, in TagView.At<UnknownRendererTechniqueRow>(data, row).Name) ?? row;
+
+    /** Name pointers must stay inside a bounded package string block. */
+    private static (int Start, int Length)[] StringRegions(byte[] data) =>
+        TagBlock.Find(data, SInlineString.Class).Select(block => (block.Start, block.Length)).ToArray();
+
     /** Authored pointers may share a string suffix but must end inside the owning block. */
-    private static string ReadName(TagData data, (int Start, int Length)[] strings, int offset)
+    private static string ReadName(byte[] data, (int Start, int Length)[] strings, int offset)
     {
         var owners = strings.Where(s => offset >= s.Start && offset < s.Start + s.Length).ToArray();
         if (owners.Length != 1)
             throw new InvalidDataException("Renderer name pointer has no unique string block.");
-        var tail = data.Bytes.AsSpan(offset, owners[0].Start + owners[0].Length - offset);
+        var tail = data.AsSpan(offset, owners[0].Start + owners[0].Length - offset);
         var end = tail.IndexOf((byte)0);
         if (end <= 0 || end > 1024)
             throw new InvalidDataException("Renderer name is empty or has no bounded terminator.");

@@ -3,7 +3,7 @@
     <TargetFramework>net9.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../SunriseStudio.Packages/SunriseStudio.Packages.csproj" />
+    <ProjectReference Include="../SunriseStudio.Tags/SunriseStudio.Tags.csproj" />
     <ProjectReference Include="../SunriseStudio.Animation/SunriseStudio.Animation.csproj" />
   </ItemGroup>
 </Project>

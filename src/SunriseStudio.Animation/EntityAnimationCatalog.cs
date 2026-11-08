@@ -1,5 +1,5 @@
-using System.Buffers.Binary;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Animation;
 
@@ -22,22 +22,26 @@ public sealed class EntityAnimationCatalog(PackageCatalog catalog)
     public IReadOnlyList<EntityAnimationReference> Read(uint entityTag, bool resolveNames = false,
         CancellationToken cancellationToken = default)
     {
-        if (Class(entityTag) != 0x80809C0F)
+        if (Class(entityTag) != SEntity.Class)
             throw new NotSupportedException("Animation catalog input must be an entity class tag.");
         byte[] entity = catalog.Read(entityTag);
         var result = new List<EntityAnimationReference>();
         var definitions = new HashSet<uint>();
-        foreach (int row in Rows(entity, 0x10, 0x80809C04, 12))
+        foreach (ref readonly var component in AnimationControlReader.Rows<SEntity, SPatternComponent>(entity, 0,
+                     nameof(SEntity.Components), SPatternComponent.Class, ReadMessages.Reference))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            uint configTag = U32(entity, row);
-            if (Class(configTag) != 0x80809C36) continue;
+            uint configTag = component.Config;
+            if (Class(configTag) != SEntityConfig.Class) continue;
             byte[] config = catalog.Read(configTag);
-            int primary = Pointer(config, 0x10);
-            if (U32(config, primary - 4) != 0x808036E2) continue;
-            uint definitionTag = U32(config, checked(primary + 0xD0));
+            if (SkeletonReader.ConfigTarget(config, nameof(SEntityConfig.DefaultInstance), ReadMessages.Reference)
+                    is not { } primary
+                || AnimationControlReader.ClassBefore(config, primary, ReadMessages.Reference) != SAnimationComponent.Class)
+                continue;
+            uint definitionTag = AnimationControlReader.Member<SAnimationComponent, uint>(config, primary,
+                "H624f85f9.AnimationDefinition", ReadMessages.Reference);
             if (definitionTag is 0 or uint.MaxValue) continue;
-            if (Class(definitionTag) != 0x808036F6)
+            if (Class(definitionTag) != SAnimationDefinition.Class)
                 throw new InvalidDataException("Animation component references an unexpected definition class.");
             if (!definitions.Add(definitionTag)) continue;
             result.AddRange(ReadDefinition(definitionTag, resolveNames, cancellationToken)
@@ -50,10 +54,13 @@ public sealed class EntityAnimationCatalog(PackageCatalog catalog)
     public IReadOnlyList<EntityAnimationReference> ReadDefinition(uint definitionTag, bool resolveNames = false,
         CancellationToken cancellationToken = default)
     {
-        if (Class(definitionTag) != 0x808036F6)
+        if (Class(definitionTag) != SAnimationDefinition.Class)
             throw new NotSupportedException("Animation definition has an unsupported class.");
         byte[] definition = catalog.Read(definitionTag);
-        uint[] clips = Rows(definition, 8, 0x80808F48, 4).Select(row => U32(definition, row)).ToArray();
+        var slots = AnimationControlReader.Rows<SAnimationDefinition, SAnimationClipSlot>(definition, 0,
+            nameof(SAnimationDefinition.Animations), SAnimationClipSlot.Class, ReadMessages.Reference);
+        uint[] clips = new uint[slots.Length];
+        for (int slot = 0; slot < clips.Length; slot++) clips[slot] = slots[slot].Clip;
         IReadOnlyDictionary<int, AnimationClipNames.Label> labels = new Dictionary<int, AnimationClipNames.Label>();
         string? diagnostic = null;
         if (resolveNames)
@@ -64,7 +71,7 @@ public sealed class EntityAnimationCatalog(PackageCatalog catalog)
                 labels = AnimationClipNames.Resolve(definition, clips, tag =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (Class(tag) != 0x80808F49) return [];
+                    if (Class(tag) != SAnimationClip.Class) return [];
                     if (!paths.TryGetValue(tag, out var value))
                         paths[tag] = value = AnimationClipNames.ReadPaths(catalog.Read(tag), Class);
                     return value;
@@ -80,7 +87,7 @@ public sealed class EntityAnimationCatalog(PackageCatalog catalog)
             cancellationToken.ThrowIfCancellationRequested();
             uint clip = clips[index];
             if (clip is 0 or uint.MaxValue) continue;
-            if (Class(clip) != 0x80808F49)
+            if (Class(clip) != SAnimationClip.Class)
                 throw new InvalidDataException($"Animation slot {index} references an unsupported clip class.");
             labels.TryGetValue(index, out var label);
             result.Add(new(0, definitionTag, index, clip)
@@ -92,35 +99,16 @@ public sealed class EntityAnimationCatalog(PackageCatalog catalog)
     /** Layer-name hashes in run order; a blend entry's layer index points into this list. */
     public IReadOnlyList<uint> ReadLayerNames(uint definitionTag)
     {
-        if (Class(definitionTag) != 0x808036F6)
+        if (Class(definitionTag) != SAnimationDefinition.Class)
             throw new NotSupportedException("Animation definition has an unsupported class.");
         byte[] definition = catalog.Read(definitionTag);
-        return Rows(definition, 0x58, 0x80808F1C, 4).Select(row => U32(definition, row)).ToArray();
+        var layers = AnimationControlReader.Rows<SAnimationDefinition, SAnimationLayerName>(definition, 0,
+            nameof(SAnimationDefinition.MotionStructure), SAnimationLayerName.Class, ReadMessages.Reference);
+        var names = new uint[layers.Length];
+        for (int layer = 0; layer < names.Length; layer++) names[layer] = layers[layer].LayerName;
+        return names;
     }
 
     private uint Class(uint tag) => catalog.TryGetEntry(tag, out var entry)
         && AssetCategories.IsStructured(entry) ? entry.Reference : 0;
-    private static ReadOnlySpan<byte> Slice(byte[] data, int offset, int count)
-    {
-        if (offset < 0 || count < 0 || offset > data.Length - count)
-            throw new InvalidDataException("Animation reference range exceeds its tag.");
-        return data.AsSpan(offset, count);
-    }
-    private static uint U32(byte[] data, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(Slice(data, offset, 4));
-    private static int Pointer(byte[] data, int field) => checked((int)(field
-        + BinaryPrimitives.ReadInt64LittleEndian(Slice(data, field, 8))));
-
-    /** Array classes and byte extents are checked before exposing any clip link. */
-    private static int[] Rows(byte[] data, int field, uint expected, int stride)
-    {
-        long count = BinaryPrimitives.ReadInt64LittleEndian(Slice(data, field, 8));
-        if (count < 0 || count > 1_000_000) throw new InvalidDataException("Invalid animation reference count.");
-        if (count == 0) return [];
-        int header = Pointer(data, field + 8);
-        if (U32(data, header - 4) != 0x80809FBD || U32(data, header + 8) != expected)
-            throw new InvalidDataException("Animation reference array has an unexpected element class.");
-        int start = checked(header + 16);
-        _ = Slice(data, start, checked((int)count * stride));
-        return Enumerable.Range(0, (int)count).Select(i => start + i * stride).ToArray();
-    }
 }

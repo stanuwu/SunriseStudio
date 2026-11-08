@@ -1,4 +1,7 @@
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -13,9 +16,8 @@ public sealed record SandboxPerkDisplay(int Index, uint Hash, uint NameBank, uin
 /** Each sandbox perk row points at a display row that carries its authored name and description. */
 public static class SandboxPerkDisplays
 {
-    public const uint Tag = 0x81613D28, TableClass = 0x80805C97, RowClass = 0x80805C9D, DisplayClass = 0x80805C9F;
-    // Perk rows are 24 bytes; display rows are 28 bytes.
-    private const int RowStride = 24, DisplayStride = 28;
+    public const uint Tag = 0x81613D28, TableClass = SSandboxPerkDisplayTable.Class, RowClass = SSandboxPerkDisplayRow.Class,
+        DisplayClass = SSandboxPerkDisplayText.Class;
 
     /**
      * Reads every sandbox perk with its display strings.
@@ -27,26 +29,32 @@ public static class SandboxPerkDisplays
     {
         if (!catalog.TryGetEntry(tag, out var entry)) return [];
         if (entry.Reference != TableClass) throw new InvalidDataException("Sandbox perk table has an unexpected class.");
-        var data = new TagData(catalog.Read(tag));
-        var rows = data.Rows(8, RowClass, RowStride);
+        byte[] data = catalog.Read(tag);
+        var rows = TagView.Rows(data, in TagView.At<TagArray<SSandboxPerkDisplayRow>>(data,
+            TagView.FieldOffset<SSandboxPerkDisplayTable>(nameof(SSandboxPerkDisplayTable.Table))), RowClass);
+        bool pointsAtDisplay = false;
+        foreach (ref readonly var row in rows) pointsAtDisplay |= !row.Display.IsNull;
         // A table whose rows point at no display row carries no display array.
-        var displays = rows.Any(row => data.I64(row + 8) != 0) ? data.Rows(24, DisplayClass, DisplayStride) : [];
-        int first = displays.Length == 0 ? 0 : displays[0];
+        var displays = pointsAtDisplay ? TagView.Rows(data, in TagView.At<TagArray<SSandboxPerkDisplayText>>(data,
+            TagView.FieldOffset<SSandboxPerkDisplayTable>("ComponentStorage.Displays")), DisplayClass) : [];
+        int first = displays.Length == 0 ? 0 : TagView.OffsetOf(data, in displays[0]);
+        int stride = Unsafe.SizeOf<SSandboxPerkDisplayText>();
         var result = new SandboxPerkDisplay[rows.Length];
         for (int i = 0; i < rows.Length; i++)
         {
-            int row = rows[i];
-            uint hash = data.U32(row), gameplay = data.U32(row + 4);
-            if (data.I64(row + 8) == 0)
+            ref readonly var row = ref rows[i];
+            uint hash = row.DefinitionHash, gameplay = row.GameplayNameHash;
+            if (row.Display.IsNull)
             {
-                result[i] = new(i, hash, 0, 0x811C9DC5, 0, 0x811C9DC5, ushort.MaxValue) { GameplayHash = gameplay };
+                result[i] = new(i, hash, 0, StringHash.Empty, 0, StringHash.Empty, ushort.MaxValue) { GameplayHash = gameplay };
                 continue;
             }
-            int display = data.Relative(row + 8);
-            if (display < first || (display - first) % DisplayStride != 0 || (display - first) / DisplayStride >= displays.Length)
+            int display = TagView.TargetOffset(data, in row.Display)!.Value;
+            if (display < first || (display - first) % stride != 0 || (display - first) / stride >= displays.Length)
                 throw new InvalidDataException($"Sandbox perk {i} points outside its display rows.");
-            result[i] = new(i, hash, data.U32(display), data.U32(display + 4), data.U32(display + 8),
-                data.U32(display + 12), data.U16(display + 16)) { GameplayHash = gameplay };
+            ref readonly var text = ref displays[(display - first) / stride];
+            result[i] = new(i, hash, text.NameBank, text.NameHash, text.DescriptionBank, text.DescriptionHash, text.IconIndex)
+                { GameplayHash = gameplay };
         }
         return result;
     }

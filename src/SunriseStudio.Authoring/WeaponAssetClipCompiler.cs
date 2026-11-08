@@ -21,7 +21,7 @@ public static class WeaponAssetClipCompiler
         float metresPerUnit, ushort packageId, int firstEntry, string name, WeaponArmsSource? arms = null)
     {
         if (!PackageWriter.IsNewPackageId(packageId) || catalog.ContainsInstalledPackage(packageId)
-            || firstEntry < 0 || firstEntry > 8192 - sourceClips.Count)
+            || firstEntry < 0 || firstEntry > TagHashes.EntriesPerPackage - sourceClips.Count)
             throw new InvalidDataException("Weapon clips need unused entries in a new package.");
         if (sourceClips.Select(clip => clip.Event).Distinct(StringComparer.Ordinal).Count() != sourceClips.Count
             || !sourceClips.Any(clip => clip.Event == "fire") || !sourceClips.Any(clip => clip.Event == "reload")
@@ -100,7 +100,7 @@ public static class WeaponAssetClipCompiler
                 : WeaponAssetAnimationCompiler.PrepareNew(catalog, staging, template, EmptyTemplate, values, codec);
             if (!catalog.TryGetEntry(compiled.TemplateTag, out var entry))
                 throw new InvalidDataException("Weapon clip source disappeared.");
-            uint tag = checked(0x80800000u + ((uint)packageId << 13) + (uint)(firstEntry + output.Count));
+            uint tag = TagHashes.Make(packageId, firstEntry + output.Count);
             if (catalog.ContainsTag(tag)) throw new InvalidDataException("A weapon clip destination is already used.");
             output.Add(new(name + "." + source.Event, compiled.Data,
                 new(packageId, entry.Reference, entry.TypeInfo, source.Event, firstEntry + output.Count), compiled.TemplateTag));

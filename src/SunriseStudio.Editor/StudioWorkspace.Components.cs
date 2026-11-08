@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Editor;
 
@@ -92,16 +94,15 @@ public sealed partial class StudioWorkspace
         { return new(config, primary, "Unreadable", name, [], [], null, error.Message); }
     }
 
-    /** Offset of the first aligned u32 past the header that is a class-0x8080815F tag. */
+    /** Offset of LocalDefinition in the ActorGroupSource that Definition names; null unless it names a record. */
     private static int? FindLocalDefinition(PackageCatalog catalog, byte[] bytes)
     {
-        for (int offset = 0x20; offset <= bytes.Length - 4; offset += 4)
-        {
-            uint value = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset));
-            if (value >= 0x80000000 && value != uint.MaxValue && catalog.TryGetEntry(value, out var entry)
-                && AssetCategories.IsStructured(entry) && entry.Reference == ComponentRoles.CombatantNameRecord) return offset;
-        }
-        return null;
+        int source = TagPointer.TryChecked(bytes, TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition)));
+        if (source < 0 || TagView.ClassAt(bytes, source) != ActorGroupSource.Class
+            || !TagView.FitsThrough<ActorGroupSource>(bytes, source, nameof(ActorGroupSource.LocalDefinition))) return null;
+        int at = source + TagView.FieldOffset<ActorGroupSource>(nameof(ActorGroupSource.LocalDefinition));
+        return catalog.TryGetEntry(TagRead.U32(bytes, at), out var entry) && AssetCategories.IsStructured(entry)
+            && entry.Reference == ComponentRoles.CombatantNameRecord ? at : null;
     }
 
     /** Writes one config field as one undo step; the entity stays the open document. */
@@ -116,7 +117,7 @@ public sealed partial class StudioWorkspace
             uint tag = BinaryPrimitives.ReadUInt32LittleEndian(edited.AsSpan(property.Offset));
             if (Catalog is not { } catalog || !catalog.TryGetEntry(tag, out var entry) || !AssetCategories.IsStructured(entry)
                 || entry.Reference != ComponentRoles.CombatantNameRecord)
-                throw new InvalidDataException($"0x{tag:X8} is not a class-0x8080815F local definition.");
+                throw new InvalidDataException($"0x{tag:X8} is not a class-0x{ComponentRoles.CombatantNameRecord:X8} local definition.");
         }
         ApplyAssetEdits(new Dictionary<uint, byte[]> { [configTag] = edited }, $"Changed {property.Name}");
     }

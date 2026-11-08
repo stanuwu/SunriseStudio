@@ -1,6 +1,8 @@
-using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -20,28 +22,32 @@ public sealed record BehaviorExpression(int Offset, int NativeOverride, IReadOnl
     public static BehaviorExpression Read(ReadOnlyMemory<byte> bytes, int offset,
         Func<uint, string?>? channelName = null)
     {
-        var reader = new TagReader(bytes);
-        if (!reader.Has(offset, 0x40)) throw new InvalidDataException("Truncated behavior expression.");
-        var inputs = reader.Array(offset, stride: 8);
+        var tag = bytes.Span;
+        if (!TagView.Fits<C80809419>(tag, offset)) throw new InvalidDataException("Truncated behavior expression.");
+        ref readonly var expression = ref TagView.At<C80809419>(tag, offset);
+        int inputStride = Unsafe.SizeOf<BehaviorExpressionInput>(), constantStride = Unsafe.SizeOf<ExpressionConstant>();
+        var inputs = TagArray.Checked(tag, TagView.OffsetOf(tag, in expression.Inputs), stride: inputStride);
         if (inputs.Count > 8) throw new InvalidDataException("Behavior expressions support at most eight bound inputs.");
-        var code = reader.Array(offset + 0x10, 0x80800009, 1);
-        var constants = reader.Array(offset + 0x20, 0x80800090, 16);
+        var code = TagArray.Checked(tag, TagView.OffsetOf(tag, in expression.Expression.Bytecode), ExpressionCode.Class,
+            Unsafe.SizeOf<ExpressionCode>());
+        var constants = TagArray.Checked(tag, TagView.OffsetOf(tag, in expression.Expression.ConstantBuffer), ExpressionConstant.Class,
+            constantStride);
         if (code.Count > 4096 || constants.Count > 256)
             throw new InvalidDataException("Behavior expression exceeds the decoding limit.");
         List<BehaviorInput> bindings = [];
         List<BehaviorConstant> values = [];
         for (int i = 0; i < inputs.Count; i++)
         {
-            int row = inputs.Data + i * 8;
-            bindings.Add(new(reader.U8(row), reader.U32(row + 4), row));
+            int row = inputs.Data + i * inputStride;
+            ref readonly var input = ref TagView.At<BehaviorExpressionInput>(tag, row);
+            bindings.Add(new(input.ObjectSelector, input.Channel, row));
         }
         for (int i = 0; i < constants.Count; i++)
         {
-            int row = constants.Data + i * 16;
-            float Float(int lane) => BinaryPrimitives.ReadSingleLittleEndian(bytes.Span[(row + lane * 4)..]);
-            values.Add(new(i, row, new(Float(0), Float(1), Float(2), Float(3))));
+            int row = constants.Data + i * constantStride;
+            values.Add(new(i, row, TagView.At<ExpressionConstant>(tag, row).Value));
         }
-        int native = reader.I32(offset + 0x3C);
+        int native = expression.Expression.EvaluatorOverride;
         List<BehaviorInstruction> instructions = [];
         string? output = null, diagnostic = native != 0 ? "Native evaluator" : null;
         var stack = new Stack<string>();

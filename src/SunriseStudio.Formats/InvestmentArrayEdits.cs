@@ -1,31 +1,36 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
 public sealed partial class InvestmentCatalog
 {
-    private const uint StatsBlockClass = 0x808077B9, StatRowClass = 0x80803033, PerkRowClass = 0x808077BC;
     /** The editor bounds array work without changing the native index spaces. */
     private const int MaximumAuthoredRows = 4096;
 
     public byte[] AddStat(uint tag, ReadOnlyMemory<byte> current, byte index, int value)
     {
         if (!statNames.ContainsKey(index)) throw new InvalidDataException("Choose a stat from this installation.");
-        byte[] row = new byte[40]; row[0] = index;
-        BinaryPrimitives.WriteInt32LittleEndian(row.AsSpan(4), value);
+        byte[] row = new byte[Unsafe.SizeOf<SItemStatRow>()];
+        ref var stat = ref TagView.Edit<SItemStatRow>(row).ItemStat;
+        stat.StatIndex = index; stat.Value = value;
         return RewriteStatRows(tag, current, false, row, null);
     }
 
     public byte[] RemoveStat(uint tag, ReadOnlyMemory<byte> current, InvestmentStat stat)
     {
         if (!ReadItem(tag, current).Stats.Contains(stat)) throw new InvalidDataException("This stat changed. Reopen its editor.");
-        return RewriteStatRows(tag, current, false, null, stat.Field.Offset - 4);
+        return RewriteStatRows(tag, current, false, null, stat.Field.Offset - TagView.FieldOffset<SItemStatRow>("ItemStat.Value"));
     }
 
     public byte[] AddPerk(uint tag, ReadOnlyMemory<byte> current, ushort index)
     {
         if (index >= PerkCount) throw new InvalidDataException("Choose a sandbox perk from this installation.");
-        byte[] row = new byte[24]; BinaryPrimitives.WriteUInt16LittleEndian(row, index);
+        byte[] row = new byte[Unsafe.SizeOf<ItemSandboxPerk>()];
+        TagView.Edit<ItemSandboxPerk>(row).SandboxPerkIndex = index;
         return RewriteStatRows(tag, current, true, row, null);
     }
 
@@ -41,67 +46,81 @@ public sealed partial class InvestmentCatalog
         if (FindItem(tag) is not { } item || item.Tag != tag)
             throw new InvalidDataException("Open an item definition to change its rows.");
         RequireClass(catalog, tag, ItemClass);
-        var data = new TagReader(current);
-        if (!data.Has(0, 188) || data.U64(0) != (ulong)current.Length)
+        var data = current.Span;
+        if (!TagView.FitsThrough<ItemDefinition>(data, 0, "InventoryItemBlock.Instanced")
+            || TagView.At<ulong>(data, TagView.FieldOffset<ItemDefinition>("TagSize")) != (ulong)current.Length)
             throw new InvalidDataException("Item size header is invalid.");
-        int block = data.Relative(112);
-        int stride = perks ? 24 : 40, field = perks ? 16 : 0;
-        uint rowClass = perks ? PerkRowClass : StatRowClass;
+        int pointer = TagView.FieldOffset<ItemDefinition>("StatsItemBlock");
+        int block = TagPointer.Checked(data, pointer);
+        int stride = perks ? Unsafe.SizeOf<ItemSandboxPerk>() : Unsafe.SizeOf<SItemStatRow>();
+        uint rowClass = perks ? ItemSandboxPerk.Class : SItemStatRow.Class;
         (int Count, int Data, uint Class) rows = (0, 0, rowClass);
         if (block >= 0)
         {
-            if (block < 4 || !data.Has(block, 32) || data.U32(block - 4) != StatsBlockClass)
+            if (block < TagView.ClassWordSize || !TagView.Fits<SItemSandboxPerkBlock>(data, block) || TagView.ClassAt(data, block) != SItemSandboxPerkBlock.Class)
                 throw new InvalidDataException("Item stats block has an unsupported layout.");
-            data.Array(block + (perks ? 0 : 16), perks ? StatRowClass : PerkRowClass, perks ? 40 : 24);
-            rows = data.Array(block + field, rowClass, stride);
+            ref readonly var lists = ref TagView.At<SItemSandboxPerkBlock>(data, block);
+            if (perks) TagArray.Checked(data, TagView.OffsetOf(data, in lists.ItemStats), SItemStatRow.Class, Unsafe.SizeOf<SItemStatRow>());
+            else TagArray.Checked(data, TagView.OffsetOf(data, in lists.ItemPerks), ItemSandboxPerk.Class, Unsafe.SizeOf<ItemSandboxPerk>());
+            rows = perks ? TagArray.Checked(data, TagView.OffsetOf(data, in lists.ItemPerks), rowClass, stride)
+                : TagArray.Checked(data, TagView.OffsetOf(data, in lists.ItemStats), rowClass, stride);
         }
         if (removed is { } old && (old < rows.Data || (old - rows.Data) % stride != 0 || (old - rows.Data) / stride >= rows.Count))
             throw new InvalidDataException("The removed row is outside its array.");
         int count = rows.Count + (added is null ? 0 : 1) - (removed is null ? 0 : 1);
         if (count < 0 || count > MaximumAuthoredRows)
             throw new InvalidDataException($"The editor supports up to {MaximumAuthoredRows} rows per stat or perk array.");
-        int nextBlock = checked((current.Length + 11) & ~7);
-        int header = checked(nextBlock + 40), start = checked(header + 16);
-        byte[] output = new byte[checked(start + count * stride)]; current.Span.CopyTo(output);
-        Write32(nextBlock - 4, StatsBlockClass);
+        // The block, a pad word, the array marker, the array header, then the rows.
+        int blockBytes = checked(Unsafe.SizeOf<SItemSandboxPerkBlock>() + sizeof(uint) + TagView.ClassWordSize);
+        byte[] output = current.ToArray();
+        int nextBlock = TagRelocator.AppendObject(ref output, SItemSandboxPerkBlock.Class,
+            checked(blockBytes + TagArray.HeaderSize + count * stride), 8);
+        int header = checked(nextBlock + blockBytes), start = checked(header + TagArray.HeaderSize);
         if (block >= 0)
         {
-            current.Span.Slice(block, 32).CopyTo(output.AsSpan(nextBlock));
-            Rebase(block + 8, nextBlock + 8);
-            Rebase(block + 24, nextBlock + 24);
+            data.Slice(block, Unsafe.SizeOf<SItemSandboxPerkBlock>()).CopyTo(output.AsSpan(nextBlock));
+            ref readonly var lists = ref TagView.At<SItemSandboxPerkBlock>(data, block);
+            Rebase(data, TagView.OffsetOf(data, in lists.ItemStats.Relative), nextBlock - block);
+            Rebase(data, TagView.OffsetOf(data, in lists.ItemPerks.Relative), nextBlock - block);
         }
-        Write64(112, nextBlock - 112);
-        Write64(nextBlock + field, count);
-        Write64(nextBlock + field + 8, count == 0 ? 0 : header - nextBlock - field - 8);
+        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(pointer), nextBlock - pointer);
+        ref readonly var next = ref TagView.At<SItemSandboxPerkBlock>(output, nextBlock);
+        int field = perks ? TagView.OffsetOf(output, in next.ItemPerks) : TagView.OffsetOf(output, in next.ItemStats);
+        if (count == 0) output.AsSpan(field, TagArray.FieldSize).Clear();
+        else TagArray.WriteField(output, field, count, header);
         if (count > 0)
         {
-            Write32(header - 4, 0x80809FBD); Write64(header, count); Write64(header + 8, rowClass);
+            TagArray.WriteHeader(output, header, count, rowClass);
             int target = start;
             for (int i = 0; i < rows.Count; i++)
             {
                 int source = rows.Data + i * stride;
                 if (source == removed) continue;
-                current.Span.Slice(source, stride).CopyTo(output.AsSpan(target));
-                Expression(source + 8, target + 8);
-                if (!perks) Expression(source + 24, target + 24);
+                data.Slice(source, stride).CopyTo(output.AsSpan(target));
+                if (perks) Expression(data, in TagView.At<ItemSandboxPerk>(data, source).HEb6220de.ExpressionSteps, target - source);
+                else
+                {
+                    ref readonly var row = ref TagView.At<SItemStatRow>(data, source);
+                    Expression(data, in row.ItemStat.HA46186f1.ExpressionSteps, target - source);
+                    Expression(data, in row.HEb6220de.ExpressionSteps, target - source);
+                }
                 target += stride;
             }
             if (added is not null) added.CopyTo(output, target);
         }
-        Write64(0, output.Length);
+        TagView.Edit<ulong>(output, TagView.FieldOffset<ItemDefinition>("TagSize")) = (ulong)output.Length;
         return output;
 
-        void Expression(int source, int target)
+        void Expression(ReadOnlySpan<byte> source, ref readonly TagArray<InvestmentExpressionRow> steps, int delta)
         {
-            data.Array(source, 0x80807D31, 8);
-            Rebase(source + 8, target + 8);
+            TagArray.Checked(source, TagView.OffsetOf(source, in steps), InvestmentExpressionRow.Class, Unsafe.SizeOf<InvestmentExpressionRow>());
+            Rebase(source, TagView.OffsetOf(source, in steps.Relative), delta);
         }
-        void Rebase(int source, int target)
+        // The pointer at `at` lands `delta` bytes later in the output and keeps its target.
+        void Rebase(ReadOnlySpan<byte> source, int at, int delta)
         {
-            int address = data.Relative(source);
-            Write64(target, address < 0 ? 0 : address - target);
+            int address = TagPointer.Checked(source, at);
+            BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(at + delta), address < 0 ? 0 : address - (at + delta));
         }
-        void Write64(int at, long value) => BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(at), value);
-        void Write32(int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(at), value);
     }
 }

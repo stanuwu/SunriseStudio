@@ -1,0 +1,444 @@
+{
+  "format": "sunrise-merge-annotations",
+  "version": 1,
+  "sidecar": {
+    "constants": [
+      { "id": "magic", "cs": "Magic", "cpp": "kSidecarMagic", "type": "u32", "value": "0x47524D53",
+        "doc": "The bytes 'S','M','R','G' read as a little-endian u32." },
+      { "id": "version", "cs": "Version", "cpp": "kSidecarVersion", "type": "u16", "value": 3,
+        "doc": "Any layout change bumps this; other versions are ignored." },
+      { "id": "oldest_version", "cs": "OldestVersion", "cpp": "kOldestSidecarVersion", "type": "u16", "value": 2,
+        "doc": "Version 2 is version 3 without object shapes, so it still reads." },
+      { "id": "byte_limit", "cs": "ByteLimit", "cpp": "kSidecarByteLimit", "type": "size", "value": "64 << 20",
+        "doc": "Bound on one sidecar file, so a damaged file cannot exhaust memory." },
+      { "id": "top_level_op", "cs": "TopLevelOp", "cpp": "kTopLevelOp", "type": "u32", "value": "0xFFFFFFFF",
+        "doc": "OpRecord::parentOp value of an op that sits directly in the entry." },
+      { "id": "no_element_shape", "cs": "NoElementShape", "cpp": "kNoElementShape", "type": "u16", "value": "0xFFFF",
+        "doc": "ShapeField::ref value of an owned array whose elements hold no pointers." },
+      { "id": "op_local_target", "cs": "OpLocalTarget", "cpp": "kOpLocalTarget", "type": "u16", "value": "0x8000",
+        "doc": "SiteRecord::target bit that names an op of the same entry instead of a target." },
+      { "id": "unique_key", "cs": "UniqueKey", "cpp": "kUniqueKey", "type": "u8", "value": "0x01",
+        "doc": "OpRecord::flags bit: no two merged rows may share a key." },
+      { "id": "ordered", "cs": "Ordered", "cpp": "kOrdered", "type": "u8", "value": "0x02",
+        "doc": "OpRecord::flags bit: merged keys must stay strictly ascending." },
+      { "id": "signed_site", "cs": "SignedSite", "cpp": "kSignedSite", "type": "u8", "value": "0x01",
+        "doc": "SiteRecord::flags bit: the site value is signed." },
+      { "id": "key_width", "cs": "KeyWidth", "cpp": "kKeyWidth", "type": "u8", "value": 4,
+        "doc": "Bytes of a u32 key, the only key width." },
+      { "id": "byte_site", "cs": "ByteSite", "cpp": "kByteSite", "type": "u8", "value": 1,
+        "doc": "Width of a site that holds a u8 row number." },
+      { "id": "short_site", "cs": "ShortSite", "cpp": "kShortSite", "type": "u8", "value": 2,
+        "doc": "Width of a site that holds a u16 row number." },
+      { "id": "word_site", "cs": "WordSite", "cpp": "kWordSite", "type": "u8", "value": 4,
+        "doc": "Width of a site that holds a u32 row number." },
+      { "id": "digest_size", "cs": "DigestSize", "cpp": "kSidecarDigestSize", "type": "size", "value": 20,
+        "doc": "Bytes of the package header digest a sidecar is bound to." },
+      { "id": "sha256_size", "cs": "Sha256Size", "cpp": "kStockDigestSize", "type": "size", "value": 32,
+        "doc": "Bytes of one SHA-256 digest." }
+    ],
+    "enums": [
+      { "id": "entry_kind", "cs": "SidecarEntryKind", "cpp": "EntryKind", "type": "u8",
+        "doc": "How the runtime may merge one entry.",
+        "values": [
+          { "name": "opaque", "value": 0 },
+          { "name": "table", "value": 1 },
+          { "name": "manifest", "value": 2 },
+          { "name": "added", "value": 3 }
+        ] },
+      { "id": "field_kind", "cs": "MergeFieldKind", "cpp": "FieldKind", "type": "u8",
+        "doc": "How a row field holds a pointer.",
+        "values": [
+          { "name": "owned_array", "value": 1, "bytes": 16, "doc": "A 16-byte typed array descriptor {i64 count, i64 rel}." },
+          { "name": "row_pointer", "value": 2, "bytes": 8, "doc": "An 8-byte self-relative pointer to a row start." },
+          { "name": "object_pointer", "value": 3, "bytes": 8,
+            "doc": "An 8-byte self-relative pointer to an object outside every rebuilt array." }
+        ] },
+      { "id": "op_kind", "cs": "MergeOpKind", "cpp": "OpKind", "type": "u8",
+        "doc": "How one op's rows merge.",
+        "values": [
+          { "name": "append", "value": 1 },
+          { "name": "sorted_map", "value": 2 }
+        ] }
+    ],
+    "records": [
+      { "id": "file_header", "cs": "SidecarFileHeader", "cpp": "FileHeader", "cs_size": "HeaderSize",
+        "doc": "Sidecar file header.",
+        "fields": [
+          { "name": "magic", "type": "u32" },
+          { "name": "version", "type": "u16" },
+          { "name": "flags", "type": "u16" },
+          { "name": "package_id", "type": "u16" },
+          { "name": "patch_id", "type": "u16" },
+          { "name": "metadata_digest", "type": "byte", "count": "digest_size",
+            "doc": "Copy of the package header's metadata digest." },
+          { "name": "target_count", "type": "u32" },
+          { "name": "shape_count", "type": "u32" },
+          { "name": "entry_count", "type": "u32" },
+          { "name": "reserved", "type": "u32", "reserved": true }
+        ] },
+      { "id": "target", "cs": "SidecarTarget", "cpp": "TargetRecord", "cs_size": "TargetSize", "public": true,
+        "doc": "One index space: a top-level append op of an installed table entry.",
+        "fields": [
+          { "name": "table_tag", "cs": "Table", "type": "u32" },
+          { "name": "descriptor_offset", "cs": "Descriptor", "type": "u32" },
+          { "name": "stock_count", "type": "u32" },
+          { "name": "mod_count", "type": "u32", "doc": "This mod's final row count." }
+        ] },
+      { "id": "shape_header", "cs": "SidecarShapeHeader", "cpp": "ShapeHeader", "cs_size": "ShapeHeaderSize",
+        "doc": "Row layout header; its fields follow it.",
+        "fields": [
+          { "name": "stride", "type": "u32" },
+          { "name": "field_count", "type": "u32" }
+        ] },
+      { "id": "shape_field", "cs": "SidecarShapeField", "cpp": "ShapeField", "cs_size": "ShapeFieldSize", "public": true,
+        "doc": "One pointer-bearing field of a row.",
+        "fields": [
+          { "name": "row_offset", "type": "u32" },
+          { "name": "kind", "type": "field_kind" },
+          { "name": "reserved", "type": "u8", "reserved": true },
+          { "name": "ref", "type": "u16",
+            "doc": "Op of a row pointer; shape of an owned array's elements or of an object, or none." }
+        ] },
+      { "id": "entry_header", "cs": "SidecarEntryHeader", "cpp": "EntryHeader", "cs_size": "EntryHeaderSize",
+        "doc": "One entry's merge description; diffs, ops and sites follow it.",
+        "fields": [
+          { "name": "entry_index", "cs": "Index", "type": "u32" },
+          { "name": "kind", "type": "entry_kind" },
+          { "name": "reserved", "type": "u8", "count": 3, "reserved": true },
+          { "name": "stock_size", "type": "u32" },
+          { "name": "built_size", "type": "u32", "doc": "Must equal the entry's size in the package." },
+          { "name": "stock_sha256", "type": "byte", "count": "sha256_size" },
+          { "name": "diff_count", "type": "u32" },
+          { "name": "op_count", "type": "u32" },
+          { "name": "site_count", "type": "u32" },
+          { "name": "reserved2", "type": "u32", "reserved": true }
+        ] },
+      { "id": "diff_header", "cs": "SidecarDiffHeader", "cpp": "DiffHeader", "cs_size": "DiffHeaderSize",
+        "doc": "One changed stock range; its old bytes follow it.",
+        "fields": [
+          { "name": "offset", "type": "u32" },
+          { "name": "length", "type": "u32" }
+        ] },
+      { "id": "op", "cs": "SidecarOp", "cpp": "OpRecord", "cs_size": "OpSize", "public": true,
+        "doc": "One typed array the merge rebuilds.",
+        "fields": [
+          { "name": "kind", "type": "op_kind" },
+          { "name": "flags", "type": "u8" },
+          { "name": "key_width", "type": "u8", "doc": "0, or 4 for a u32 key." },
+          { "name": "reserved", "type": "u8", "reserved": true },
+          { "name": "key_offset", "type": "u32" },
+          { "name": "parent_op", "type": "u32", "doc": "kTopLevelOp, or the op whose row holds this descriptor." },
+          { "name": "parent_row", "type": "u32" },
+          { "name": "descriptor_offset", "cs": "Descriptor", "type": "u32",
+            "doc": "Entry offset at top level, else offset inside the parent row." },
+          { "name": "shape", "type": "u32" },
+          { "name": "stock_count", "type": "u32" },
+          { "name": "mod_count", "type": "u32" },
+          { "name": "limit", "type": "u32", "doc": "Largest allowed merged count." },
+          { "name": "pair_group", "type": "u32", "doc": "0, or the id shared by tables whose rows are added in step." }
+        ] },
+      { "id": "site", "cs": "SidecarSite", "cpp": "SiteRecord", "cs_size": "SiteSize", "public": true,
+        "doc": "One field that holds the number of a row this mod added.",
+        "fields": [
+          { "name": "offset", "type": "u32" },
+          { "name": "width", "type": "u8", "doc": "1, 2 or 4 bytes." },
+          { "name": "flags", "type": "u8" },
+          { "name": "target", "type": "u16", "doc": "A targets[] index, or kOpLocalTarget | op." }
+        ] }
+    ]
+  },
+  "recipes": {
+    "limits": [
+      { "name": "EditorRowLimit", "value": 1048576, "doc": "Studio's typed-array writers stop at this many rows." },
+      { "name": "SignedRowLimit", "value": 32768, "doc": "Native readers sign-extend a 16-bit row number." },
+      { "name": "ShortRowLimit", "value": 32767, "doc": "Studio stops these tables at short.MaxValue rows." },
+      { "name": "StatGroupLimit", "value": 128, "doc": "An item display picks its stat group with a signed byte." },
+      { "name": "ActivityRowLimit", "value": 4095, "doc": "Sunrise reads at most this many activity rows." },
+      { "name": "DestinationRowLimit", "value": 256, "doc": "An activity names its destination row with one byte." }
+    ],
+    "classes": [
+      { "name": "ItemClass", "class": "item_definition" },
+      { "name": "ItemDisplayClass", "class": "item_display_strings" },
+      { "name": "VendorClass", "class": "s_investment_vendor" },
+      { "name": "VendorDisplayClass", "class": "s_investment_vendor_display" },
+      { "name": "ActivityRecordClass", "class": "activity_definition" },
+      { "name": "ActivityTextClass", "class": "activity_text_record",
+        "doc": "A client activity record's first pointer names a text block of string references." }
+    ],
+    "tags": [
+      { "name": "ItemIndex", "tag": "0x81327CCB", "class": "item_index_table" },
+      { "name": "ItemDisplayIndex", "tag": "0x81613CF1", "class": "c_80805cdb" },
+      { "name": "IconIndex", "tag": "0x81A291C2", "class": "icon_map" },
+      { "name": "ItemArt", "tag": "0x81A28B23", "class": "s_item_art_table" },
+      { "name": "Collectibles", "tag": "0x81327CDE", "class": "collectible_table" },
+      { "name": "CollectibleDisplays", "tag": "0x81327D67", "class": "c_80802e5b" },
+      { "name": "PresentationNodes", "tag": "0x8131933F", "class": "c_80803041" },
+      { "name": "PerkDefinitions", "tag": "0x81319327", "class": "s_sandbox_perk_definition_table" },
+      { "name": "PerkDisplays", "tag": "0x81613D28", "class": "s_sandbox_perk_display_table" },
+      { "name": "SocketTypes", "tag": "0x8131932F", "class": "c_80807ab5" },
+      { "name": "SocketTypeDisplays", "tag": "0x81613D06", "class": "c_80805945" },
+      { "name": "LoreText", "tag": "0x81613CF2", "class": "c_80805ab6" },
+      { "name": "LoreRows", "tag": "0x81319348", "class": "c_808077ee" },
+      { "name": "StatGroups", "tag": "0x81613D08", "class": "s_stat_group_table" },
+      { "name": "Gear", "tag": "0x81613D27", "class": "s_gear_table (tag 0x81613D27)" },
+      { "name": "GearDefinitions", "tag": "0x81319326", "class": "s_gear_definition_table (tag 0x81319326)" },
+      { "name": "Arrangements", "tag": "0x81613D23", "class": "s_arrangement_table (tag 0x81613D23)" },
+      { "name": "ArrangementDefinitions", "tag": "0x81319329", "class": "s_arrangement_definition_table (tag 0x81319329)" },
+      { "name": "Vendors", "tag": "0x8131931D", "class": "s_vendor_index" },
+      { "name": "VendorDisplays", "tag": "0x81A2926D", "class": "s_vendor_display_index" },
+      { "name": "StringBankIndex", "tag": "0x81A27211", "class": "string_bank_index" },
+      { "name": "RuntimeNames", "tag": "0x80EC3F60", "class": "s_runtime_name_map" },
+      { "name": "ArtNames", "tag": "0x80EC3F61", "class": "s_art_name_map (tag 0x80EC3F61)" },
+      { "name": "HudIcons", "tag": "0x80EFC07B", "class": "s_icon_library" },
+      { "name": "PlugSets", "tag": "0x81319349", "class": "c_80802cb6" },
+      { "name": "NodeDisplays", "tag": "0x81613CF8", "class": "presentation_node_display_table" },
+      { "name": "ActivityDefinitions", "tag": "0x81327CF0", "class": "activity_definition_table" },
+      { "name": "ActivityTexts", "tag": "0x81327D35", "class": "activity_client_table" },
+      { "name": "Destinations", "tag": "0x81327CDA", "class": "c_80807768" },
+      { "name": "DestinationTexts", "tag": "0x81327D6B", "class": "c_80805b27" }
+    ],
+    "shapes": [
+      { "name": "StatRow", "class": "s_stat_group_row",
+        "fields": [ { "owned": "display_curve", "rows": true } ] },
+      { "name": "Holder", "class": "s_arrangement_holder", "doc": "A holder owns the art group it points at.",
+        "local": [
+          { "member": "group",
+            "target": { "class": "arrangement_art_group", "fields": [ { "owned": "h_3265b065", "rows": true } ] } }
+        ] },
+      { "name": "ActivityShape", "class": "activity_definition",
+        "doc": "Records sit outside every array, so the merge moves an added one with its bytes and rewrites these.",
+        "fields": [
+          { "owned": "labels" }, { "object": "h_e498016b" }, { "object": "matchmaking_config" }, { "object": "unk_28" },
+          { "object": "movie_route" }, { "object": "unk_38" }, { "object": "h_e86aaee5" }, { "object": "unk_48" },
+          { "object": "unk_50" }, { "object": "unk_58" }, { "object": "internal_name" }, { "object": "unk_70" },
+          { "owned": "h_01709271" }, { "owned": "h_0b198503" }, { "owned": "h_92e5392f" }, { "object": "unk_c0" },
+          { "owned": "h_122cd61c" }
+        ] },
+      { "name": "ActivityTextShape", "class": "activity_text_record",
+        "fields": [
+          { "object": "text_block" }, { "object": "unk_10" }, { "owned": "h_1c2a8c12" },
+          { "owned": "skulls", "element": { "class": "c_8080306b", "fields": [ { "object": "unk_0" } ] } },
+          { "object": "h_e86aaee5" }, { "object": "unk_50" }, { "object": "unk_60" },
+          { "owned": "h_277e8058.h_8732a78f" }, { "object": "unk_78" }
+        ] },
+      { "name": "DestinationShape", "class": "c_8080776c",
+        "fields": [
+          { "owned": "h_01709271", "rows": true },
+          { "owned": "bubbles", "element": { "class": "c_80807772", "fields": [ { "owned": "h_01709271", "rows": true } ] } }
+        ] },
+      { "name": "DestinationTextShape", "class": "destination_text_row",
+        "fields": [
+          { "owned": "h_1c2a8c12", "element": { "class": "c_808076d8", "fields": [ { "owned": "h_90b11fae.expression_steps" } ] } },
+          { "owned": "h_ee2699dc", "rows": true }
+        ] }
+    ],
+    "tables": [
+      { "tag": "ItemIndex", "name": "item index",
+        "arrays": [ { "name": "rows", "member": "table", "row": "item_index_row", "pair": "item", "limit": "SignedRowLimit",
+          "key": "item_hash", "unique": true } ] },
+      { "tag": "ItemDisplayIndex", "name": "item display index",
+        "arrays": [ { "name": "rows", "member": "table", "row": "item_strings_index_row", "pair": "item",
+          "limit": "SignedRowLimit", "key": "item_hash", "unique": true } ] },
+      { "tag": "IconIndex", "name": "icon index",
+        "arrays": [ { "name": "rows", "member": "table", "row": "c_80802957", "limit": "SignedRowLimit" } ] },
+      { "tag": "ItemArt", "name": "item art",
+        "arrays": [
+          { "name": "handles", "member": "handles", "row": "tag_reference_element", "limit": "EditorRowLimit" },
+          { "name": "integers", "member": "untyped_indices", "row": "s_i32_element", "limit": "EditorRowLimit" },
+          { "name": "fields", "member": "fields", "row": "s_item_art_field", "limit": "EditorRowLimit" },
+          { "name": "items", "member": "items", "row": "s_item_art_row", "pair": "item", "limit": "SignedRowLimit" }
+        ] },
+      { "tag": "Collectibles", "name": "collectibles",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "collectible", "limit": "SignedRowLimit",
+          "key": "collectible_hash", "unique": true,
+          "row": { "class": "collectible_row", "fields": [
+            { "owned": "parent_nodes", "rows": true },
+            { "owned": "h_e5440b42.expression_steps" }, { "owned": "h_38d50966.expression_steps" },
+            { "owned": "h_824262f2.expression_steps" }, { "owned": "h_d0921683.expression_steps" },
+            { "owned": "h_c5bb1f46.expression_steps" }, { "owned": "unknown_array_136" },
+            { "owned": "socket_overrides" }
+          ] } } ] },
+      { "tag": "CollectibleDisplays", "name": "collectible displays",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "collectible", "limit": "SignedRowLimit",
+          "row": { "class": "collectible_display_row", "fields": [ { "owned": "h_be049c85.h_913dc0f2.expression_steps" } ] } } ] },
+      { "tag": "PresentationNodes", "name": "presentation nodes",
+        "arrays": [ { "name": "rows", "member": "table", "limit": "SignedRowLimit",
+          "row": { "class": "presentation_node_row", "fields": [
+            { "owned": "parent_nodes" }, { "owned": "h_d61b5e99.expression_steps" },
+            { "owned": "h_38d50966.expression_steps" },
+            { "owned": "requirements.h_25cb7f2d.expression_steps" },
+            { "owned": "children.h_8cc46c76", "rows": true },
+            { "owned": "children.collectibles", "rows": true, "nestable": true },
+            { "owned": "children.records", "rows": true },
+            { "owned": "children.metrics", "rows": true }
+          ] } } ] },
+      { "tag": "PerkDefinitions", "name": "sandbox perk definitions",
+        "arrays": [ { "name": "rows", "member": "table", "row": "s_sandbox_perk_definition", "pair": "perk",
+          "limit": "SignedRowLimit" } ] },
+      { "tag": "PerkDisplays", "name": "sandbox perk displays",
+        "arrays": [
+          { "name": "rows", "member": "table", "pair": "perk", "limit": "SignedRowLimit",
+            "row": { "class": "s_sandbox_perk_display_row", "fields": [ { "row_pointer": "display", "array": "text" } ] } },
+          { "name": "text", "member": "component_storage.displays", "row": "s_sandbox_perk_display_text",
+            "limit": "EditorRowLimit" }
+        ] },
+      { "tag": "SocketTypes", "name": "socket types",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "socket_type", "limit": "ShortRowLimit",
+          "row": { "class": "socket_type_row", "fields": [
+            { "owned": "h_0db6e645.expression_steps" }, { "owned": "h_8127180a", "rows": true },
+            { "owned": "h_321354a2" }, { "owned": "h_e0b00974" }
+          ] } } ] },
+      { "tag": "SocketTypeDisplays", "name": "socket type displays",
+        "arrays": [ { "name": "rows", "member": "table", "row": "c_80805949", "pair": "socket_type", "limit": "ShortRowLimit" } ] },
+      { "tag": "LoreText", "name": "lore text",
+        "arrays": [ { "name": "rows", "member": "table", "row": "lore_text_row", "pair": "lore", "limit": "ShortRowLimit" } ] },
+      { "tag": "LoreRows", "name": "lore rows",
+        "arrays": [ { "name": "rows", "member": "table", "row": "lore_row", "pair": "lore", "limit": "ShortRowLimit" } ] },
+      { "tag": "StatGroups", "name": "stat groups",
+        "arrays": [ { "name": "rows", "member": "table", "limit": "StatGroupLimit",
+          "row": { "class": "s_stat_group", "fields": [
+            { "owned": "stats", "element": "StatRow" }, { "owned": "spare_array" }
+          ] } } ] },
+      { "tag": "Gear", "name": "gear",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "gear", "limit": "SignedRowLimit",
+          "row": { "class": "s_gear_row", "fields": [ { "object": "object_pointer" }, { "owned": "owned_0x20" } ] } } ] },
+      { "tag": "GearDefinitions", "name": "gear definitions",
+        "arrays": [ { "name": "rows", "member": "table", "row": "s_gear_definition_row", "pair": "gear",
+          "limit": "SignedRowLimit" } ] },
+      { "tag": "Arrangements", "name": "arrangements", "doc": "The group pool stays in place: stock holders point into it.",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "arrangement", "limit": "SignedRowLimit",
+          "row": { "class": "s_arrangement_row", "fields": [ { "owned": "gear_set.regions", "element": "Holder" } ] } } ] },
+      { "tag": "ArrangementDefinitions", "name": "arrangement definitions",
+        "arrays": [ { "name": "rows", "member": "table", "row": "s_arrangement_definition_row", "pair": "arrangement",
+          "limit": "SignedRowLimit" } ] },
+      { "tag": "Vendors", "name": "vendor index",
+        "arrays": [ { "name": "rows", "member": "table", "row": "vendor_index_row", "pair": "vendor", "limit": "ShortRowLimit" } ] },
+      { "tag": "VendorDisplays", "name": "vendor display index",
+        "arrays": [ { "name": "rows", "member": "table", "row": "c_808058ec", "pair": "vendor", "limit": "ShortRowLimit" } ] },
+      { "tag": "StringBankIndex", "name": "string bank index",
+        "arrays": [ { "name": "rows", "member": "table", "row": "string_bank_row", "limit": "SignedRowLimit",
+          "key": "name_hash", "unique": true, "ordered_when_stock_ascending": true } ] },
+      { "tag": "RuntimeNames", "name": "runtime name map",
+        "doc": "The runtime name map's second array is not rebuilt; Studio never changes it.",
+        "arrays": [ { "name": "rows", "member": "tag_entries", "row": "s_runtime_name_row", "sorted": true, "key": "name_hash" } ] },
+      { "tag": "ArtNames", "name": "art name map",
+        "arrays": [ { "name": "rows", "member": "tag_entries", "row": "s_art_name_row", "sorted": true, "key": "art_name" } ] },
+      { "tag": "HudIcons", "name": "HUD icon library",
+        "arrays": [ { "name": "rows", "member": "icons", "row": "s_icon_library_row", "sorted": true, "key": "glyph_name_hash" } ] },
+      { "tag": "ActivityDefinitions", "name": "activity definitions",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "activity", "limit": "ActivityRowLimit",
+          "key": "definition_hash", "unique": true,
+          "row": { "class": "activity_record", "fields": [ { "object": "activity_pointer", "target": "ActivityShape" } ] } } ] },
+      { "tag": "ActivityTexts", "name": "activity texts",
+        "doc": "A new record carries its own text block, so the installed text block array is not rebuilt.",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "activity", "limit": "ActivityRowLimit",
+          "key": "hash", "unique": true,
+          "row": { "class": "activity_client_index_row", "fields": [ { "object": "activity_pointer", "target": "ActivityTextShape" } ] } } ] },
+      { "tag": "Destinations", "name": "destinations",
+        "arrays": [ { "name": "rows", "member": "table", "row": "DestinationShape", "pair": "destination",
+          "limit": "DestinationRowLimit", "key": "unk_0", "unique": true } ] },
+      { "tag": "DestinationTexts", "name": "destination texts",
+        "arrays": [ { "name": "rows", "member": "table", "row": "DestinationTextShape", "pair": "destination",
+          "limit": "DestinationRowLimit", "key": "destination_hash", "unique": true } ] }
+    ],
+    "paths": [
+      { "name": "SocketRows", "steps": [ { "pointer": "sockets_item_block", "marker": true }, { "each": "sockets" } ] },
+      { "name": "TranslationBlock", "steps": [ { "pointer": "translation_item_block" } ] },
+      { "name": "TextBlock",
+        "steps": [ { "each": "table" }, { "pointer": "activity_pointer", "marker": true }, { "pointer": "text_block" } ] },
+      { "name": "ArtFields", "steps": [ { "each": "fields" } ] },
+      { "name": "Rows", "steps": [ { "each": "table" } ] },
+      { "name": "PerkTexts", "steps": [ { "each": "component_storage.displays" } ] }
+    ],
+    "class_sites": [
+      { "class": "ItemClass", "rules": [
+        { "name": "lore row", "path": [ { "pointer": "lore_item_block", "marker": true } ], "field": "lore_text_row",
+          "target": "LoreText" },
+        { "name": "socket type", "path": [ { "use": "SocketRows" } ], "field": "socket_type", "target": "SocketTypes" },
+        { "name": "initial plug", "path": [ { "use": "SocketRows" } ], "field": "initial_plug_item", "target": "ItemIndex" },
+        { "name": "socket plug", "path": [ { "use": "SocketRows" }, { "each": "embedded_plugs" } ], "field": "plug_item_index",
+          "target": "ItemIndex" },
+        { "name": "sandbox perk", "path": [ { "pointer": "stats_item_block", "marker": true }, { "each": "item_perks" } ],
+          "field": "sandbox_perk_index", "target": "PerkDefinitions" },
+        { "name": "gear row", "path": [ { "use": "TranslationBlock" } ], "field": "gear_index", "target": "Gear" },
+        { "name": "arrangement row", "path": [ { "use": "TranslationBlock" }, { "each": "art_rows" } ],
+          "field": "arrangement_row", "target": "Arrangements" }
+      ] },
+      { "class": "ItemDisplayClass", "rules": [
+        { "name": "icon row", "path": [], "field": "display_properties.icon_index", "target": "IconIndex" },
+        { "name": "name bank", "path": [], "field": "display_properties.name_bank", "target": "StringBankIndex" },
+        { "name": "type bank", "path": [], "field": "display_properties.type_bank", "target": "StringBankIndex" },
+        { "name": "flavor bank", "path": [], "field": "display_properties.description_bank", "target": "StringBankIndex" },
+        { "name": "stat group", "path": [ { "pointer": "talent_grid_item_block", "marker": true } ], "field": "stat_group_index",
+          "signed": true, "target": "StatGroups" }
+      ] },
+      { "class": "VendorClass", "rules": [
+        { "name": "sale item", "path": [ { "each": "item_list" } ], "field": "sale_item_index", "target": "ItemIndex" },
+        { "name": "cost item", "path": [ { "each": "item_list" }, { "each": "costs" } ], "field": "cost_item_index",
+          "target": "ItemIndex" }
+      ] },
+      { "class": "VendorDisplayClass", "rules": [
+        { "name": "name bank", "path": [], "field": "display_properties.name_bank", "target": "StringBankIndex" },
+        { "name": "subtitle bank", "path": [], "field": "display_properties.subtitle_bank", "target": "StringBankIndex" }
+      ] }
+    ],
+    "table_sites": [
+      { "tag": "Collectibles", "rules": [
+        { "name": "item row", "path": [ { "use": "Rows" } ], "field": "item_index", "target": "ItemIndex" }
+      ] },
+      { "tag": "CollectibleDisplays", "rules": [
+        { "name": "icon row", "path": [ { "use": "Rows" } ], "field": "icon_index", "target": "IconIndex" },
+        { "name": "name bank", "path": [ { "use": "Rows" } ], "field": "name_bank", "target": "StringBankIndex" },
+        { "name": "flavor bank", "path": [ { "use": "Rows" } ], "field": "flavor_bank", "target": "StringBankIndex" },
+        { "name": "source bank", "path": [ { "use": "Rows" } ], "field": "source_bank", "target": "StringBankIndex" }
+      ] },
+      { "tag": "PresentationNodes", "rules": [
+        { "name": "collectible row", "path": [ { "use": "Rows" }, { "each": "children.collectibles" } ],
+          "field": "collectible_index", "target": "Collectibles" }
+      ] },
+      { "tag": "NodeDisplays", "rules": [
+        { "name": "name bank", "path": [ { "use": "Rows" } ], "field": "name_bank", "target": "StringBankIndex" }
+      ] },
+      { "tag": "PerkDisplays", "rules": [
+        { "name": "icon row", "path": [ { "use": "PerkTexts" } ], "field": "icon_index", "target": "IconIndex" },
+        { "name": "name bank", "path": [ { "use": "PerkTexts" } ], "field": "name_bank", "target": "StringBankIndex" },
+        { "name": "description bank", "path": [ { "use": "PerkTexts" } ], "field": "description_bank",
+          "target": "StringBankIndex" }
+      ] },
+      { "tag": "LoreText", "rules": [
+        { "name": "title bank", "path": [ { "use": "Rows" } ], "field": "title_bank", "target": "StringBankIndex" },
+        { "name": "subtitle bank", "path": [ { "use": "Rows" } ], "field": "subtitle_bank", "target": "StringBankIndex" },
+        { "name": "body bank", "path": [ { "use": "Rows" } ], "field": "body_bank", "target": "StringBankIndex" }
+      ] },
+      { "tag": "PlugSets", "rules": [
+        { "name": "plug item", "path": [ { "use": "Rows" }, { "each": "entries" } ], "field": "plug_item_index",
+          "target": "ItemIndex" }
+      ] },
+      { "tag": "ActivityDefinitions", "rules": [
+        { "name": "destination", "path": [ { "use": "Rows" }, { "pointer": "activity_pointer", "marker": true } ],
+          "field": "destination", "target": "Destinations" }
+      ] },
+      { "tag": "ActivityTexts", "rules": [
+        { "name": "title bank", "path": [ { "use": "TextBlock" } ], "field": "title_bank", "target": "StringBankIndex" },
+        { "name": "description bank", "path": [ { "use": "TextBlock" } ], "field": "description_bank", "target": "StringBankIndex" },
+        { "name": "expansion bank", "path": [ { "use": "TextBlock" } ], "field": "expansion_bank", "target": "StringBankIndex" }
+      ] },
+      { "tag": "DestinationTexts", "rules": [
+        { "name": "name bank", "path": [ { "use": "Rows" } ], "field": "name_bank", "target": "StringBankIndex" },
+        { "name": "subtitle bank", "path": [ { "use": "Rows" } ], "field": "subtitle_bank", "target": "StringBankIndex" }
+      ] },
+      { "tag": "ItemArt", "rules": [
+        { "name": "first field", "path": [ { "each": "items" } ], "field": "first_field", "signed": true,
+          "target": "ItemArt", "array": "fields", "op_local": true },
+        { "name": "first handle", "path": [ { "use": "ArtFields" }, { "is": "field_type", "value": 1 } ], "field": "first_value",
+          "signed": true, "target": "ItemArt", "array": "handles", "op_local": true },
+        { "name": "first integer", "path": [ { "use": "ArtFields" }, { "is": "field_type", "value": 5 } ], "field": "first_value",
+          "signed": true, "target": "ItemArt", "array": "integers", "op_local": true },
+        { "name": "sandbox perk",
+          "path": [ { "use": "ArtFields" }, { "is": "field_type", "value": 5 },
+            { "pool": "untyped_indices", "first": "first_value", "count": "value_count" } ],
+          "field": "value", "target": "PerkDefinitions" }
+      ] }
+    ]
+  }
+}

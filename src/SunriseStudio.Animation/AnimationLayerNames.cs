@@ -1,4 +1,5 @@
 using System.Text;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Animation;
 
@@ -20,7 +21,7 @@ public static class AnimationLayerNames
     /** FNV-1 over ASCII bytes, exact case; each non-ASCII char hashes as '?'. */
     public static uint Hash(string name)
     {
-        uint hash = 0x811C9DC5;
+        uint hash = StringHash.Empty;
         foreach (byte value in Encoding.ASCII.GetBytes(name)) hash = unchecked(hash * 0x01000193) ^ value;
         return hash;
     }

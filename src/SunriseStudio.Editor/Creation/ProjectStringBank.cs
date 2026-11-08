@@ -1,7 +1,8 @@
-using System.Buffers.Binary;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Editor.Creation;
 
@@ -34,8 +35,8 @@ public sealed class ProjectStringBank
         var template = StringBankWriter.FindTemplate(packages, preferredTemplates.Concat(rows.Select(row => row.ContainerTag)), strings);
         if (!packages.TryGetEntry(template.ContainerTag, out var containerEntry) || !packages.TryGetEntry(template.DataTag, out var dataEntry))
             throw new InvalidDataException("The template string bank is missing.");
-        if (firstEntry + 1 >= 8192) throw new InvalidDataException("The package has no room for a string bank.");
-        uint containerTag = ProjectTags.Tag(packageId, firstEntry), dataTag = ProjectTags.Tag(packageId, firstEntry + 1);
+        if (firstEntry + 1 >= TagHashes.EntriesPerPackage) throw new InvalidDataException("The package has no room for a string bank.");
+        uint containerTag = TagHashes.Make(packageId, firstEntry), dataTag = TagHashes.Make(packageId, firstEntry + 1);
         var (container, data) = StringBankWriter.Write(template, dataTag, strings);
         uint nameHash = InvestmentItemClone.NewBankNameHash($"sunrise_strings_{packageId:x4}", rows);
         var (table, index) = InvestmentItemClone.AppendBankRow(bankTable, nameHash, containerTag);
@@ -59,12 +60,14 @@ public sealed class ProjectStringBank
     private static ProjectStringBank Extend(PackageCatalog packages, StudioProject project, AddedProjectAsset owner,
         IReadOnlyList<InvestmentBankRow> rows, IReadOnlyList<StringBankText> strings)
     {
-        uint containerTag = ProjectTags.Tag(owner.Native!.PackageId, owner.Native.EntryIndex ?? 0);
+        uint containerTag = TagHashes.Make(owner.Native!.PackageId, owner.Native.EntryIndex ?? 0);
         byte[] container = packages.Read(containerTag);
-        if (container.Length < 0x1C) throw new InvalidDataException("The project string bank is truncated.");
-        uint dataTag = BinaryPrimitives.ReadUInt32LittleEndian(container.AsSpan(0x18));
+        const string languageData = nameof(SLocalizedStrings.LanguageData);
+        if (!TagView.FitsThrough<SLocalizedStrings>(container, 0, languageData))
+            throw new InvalidDataException("The project string bank is truncated.");
+        uint dataTag = TagView.At<uint>(container, TagView.FieldOffset<SLocalizedStrings>(languageData));
         var data = project.AddedAssets.FirstOrDefault(asset => asset.Native is { } native
-            && ProjectTags.Tag(native.PackageId, native.EntryIndex ?? 0) == dataTag)
+            && TagHashes.Make(native.PackageId, native.EntryIndex ?? 0) == dataTag)
             ?? throw new InvalidDataException("The project string bank's English data is missing.");
         if (owner.BaseTagHash is not uint baseContainer || data.BaseTagHash is not uint baseData)
             throw new InvalidDataException("The project string bank has no installed template.");

@@ -191,12 +191,17 @@ try
     WideHashChecks.Run(root);
     TransactionChecks.Run(root, catalog, firstTag);
     ObjectEditChecks.Run(root, catalog, firstTag);
+    ObjectEditChecks.Structural(root, catalog, firstTag);
     ObjectNameChecks.Run(root);
     ObjectGroupChecks.Run(root);
     PublicationAuditChecks.Run(root, catalog, firstTag);
     ModInstallChecks.Run(root);
     MergeSidecarChecks.Run(root);
     DependencyTableChecks.Run();
+    TftBuildChecks.Run(root);
+    LiveBuildChecks.Run(root);
+    TagAllocationChecks.Run(root);
+    ReferenceMapChecks.Run(root);
     foreach (string check in checks) Console.WriteLine("PASS " + check);
     Console.WriteLine($"PASS checks={checks.Count}");
 }

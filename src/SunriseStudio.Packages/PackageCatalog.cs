@@ -1,9 +1,13 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Microsoft.Win32.SafeHandles;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using SunriseStudio.Tags.Views;
 using static SunriseStudio.Packages.PackageFile;
+using AliasRow = SunriseStudio.Tags.Generated.Hash64ReferenceRow;
+using NamedRow = SunriseStudio.Tags.Generated.PackageNamedTagRow;
 
 namespace SunriseStudio.Packages;
 
@@ -187,8 +191,8 @@ public sealed partial class PackageCatalog : IDisposable
             if (overlay?.Entry is not { } entry || overlay.WideHashes is null)
                 throw new InvalidDataException("Overlay entry is missing.");
             if (entry.Size < 0 || entry.Type is < 0 or > 127 || entry.SubType is < 0 or > 7
-                || entry.EntryIndex is < 0 or >= 8192
-                || entry.TagHash != checked(0x80800000U + ((uint)entry.PackageId << 13) + (uint)entry.EntryIndex)
+                || entry.EntryIndex is < 0 or >= TagHashes.EntriesPerPackage
+                || entry.TagHash != TagHashes.Make(entry.PackageId, entry.EntryIndex)
                 || entry.Type != (int)((entry.TypeInfo >> 9) & 127)
                 || entry.SubType != (int)((entry.TypeInfo >> 6) & 7)
                 || string.IsNullOrWhiteSpace(entry.PackageName) || entry.PackageName.IndexOfAny(['/', '\\', '\0']) >= 0
@@ -233,17 +237,18 @@ public sealed partial class PackageCatalog : IDisposable
         }
     }
 
-    /** Baseline checks must reread payloads; changed package metadata needs a newly opened catalog. */
-    /** Loads the package keys now, so a missing key source fails when the installation opens. */
+    /** Loads the package keys now, so a missing key source fails when the installation opens; one with no encrypted block needs none. */
     public void EnsureKeys()
     {
         lock (readLock)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            keys ??= PackageKeys.Load(GameRoot, keySourceExecutable);
+            if (packages.Values.Any(package => package.Blocks.Any(block => (block.Flags & 2) != 0)))
+                keys ??= PackageKeys.Load(GameRoot, keySourceExecutable);
         }
     }
 
+    /** Baseline checks must reread payloads; changed package metadata needs a newly opened catalog. */
     public void InvalidateReadCache()
     {
         lock (readLock)
@@ -507,6 +512,14 @@ public sealed partial class PackageCatalog : IDisposable
         handleOrder.Clear();
     }
 
+    // The misc region holds typed arrays of named-tag rows and wide-hash alias rows.
+    private static readonly int NamedRowTag = TagView.FieldOffset<NamedRow>(nameof(NamedRow.Tag)),
+        NamedRowClass = TagView.FieldOffset<NamedRow>(nameof(NamedRow.ClassReference)),
+        NamedRowName = TagView.FieldOffset<NamedRow>(nameof(NamedRow.Name)),
+        AliasRowWide = TagView.FieldOffset<AliasRow>(nameof(AliasRow.WideHash)),
+        AliasRowTag = TagView.FieldOffset<AliasRow>(nameof(AliasRow.Tag)),
+        AliasRowClass = TagView.FieldOffset<AliasRow>(nameof(AliasRow.ClassReference));
+
     /** Names keep class-compatible sources; wide hashes use current packages only. */
     private void LoadNames(IReadOnlyList<PackageFile> sources)
     {
@@ -518,35 +531,24 @@ public sealed partial class PackageCatalog : IDisposable
             if (package.MiscOffset == 0 || package.MiscOffset >= package.EntryOffset) continue;
             byte[] data = ReadAt(package.Path, package.MiscOffset,
                 checked((int)(package.EntryOffset - package.MiscOffset)));
-            var seen = new HashSet<(long Header, uint Class)>();
-            for (int field = 0; field <= data.Length - 16; field += 8)
+            foreach (var array in PackageMisc.RowArrays(data))
             {
-                ulong count = U64(data, field);
-                long relative = I64(data, field + 8);
-                if (count == 0 || count > 1_000_000 || relative < -field || relative > data.Length)
-                    continue;
-                long header = field + 8L + relative;
-                if (header < 4 || header > data.Length - 16
-                    || U32(data, (int)header - 4) != 0x80809FBD) continue;
-                uint elementClass = U32(data, (int)header + 8);
-                if (elementClass is not (0x80809EEC or 0x80809D02)
-                    || !seen.Add((header, elementClass))) continue;
-                long start = header + 16;
-                if (start + (long)count * 16 > data.Length) continue;
-                for (int i = 0; i < (int)count; i++)
+                bool named = array.Named;
+                int stride = array.Stride;
+                for (int i = 0; i < array.Count; i++)
                 {
-                    int row = (int)start + i * 16;
-                    uint tag = U32(data, row + (elementClass == 0x80809EEC ? 0 : 8));
-                    uint classHash = U32(data, row + (elementClass == 0x80809EEC ? 4 : 12));
-                    if (elementClass == 0x80809D02)
+                    int row = array.Start + i * stride;
+                    uint tag = U32(data, row + (named ? NamedRowTag : AliasRowTag));
+                    uint classHash = U32(data, row + (named ? NamedRowClass : AliasRowClass));
+                    if (!named)
                     {
-                        installedWideHashClaims.Add(U64(data, row));
+                        installedWideHashClaims.Add(U64(data, row + AliasRowWide));
                         if (!isCurrent) continue;
                     }
                     if (!byTag.TryGetValue(tag, out var entry) || entry.Reference != classHash) continue;
-                    if (elementClass == 0x80809EEC)
+                    if (named)
                     {
-                        long nameOffset = row + 8L + I64(data, row + 8);
+                        long nameOffset = row + (long)NamedRowName + I64(data, row + NamedRowName);
                         if (nameOffset < 0 || nameOffset >= data.Length) continue;
                         int available = Math.Min(4096, data.Length - (int)nameOffset);
                         int length = data.AsSpan((int)nameOffset, available).IndexOf((byte)0);
@@ -564,7 +566,7 @@ public sealed partial class PackageCatalog : IDisposable
                     }
                     else
                     {
-                        ulong wide = U64(data, row);
+                        ulong wide = U64(data, row + AliasRowWide);
                         if (!wideCandidates.TryGetValue(wide, out var tags))
                             wideCandidates.Add(wide, tags = []);
                         tags.Add(tag);

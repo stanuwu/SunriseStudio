@@ -1,7 +1,9 @@
 using System.Numerics;
+using SunriseStudio.Authoring;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
 using SunriseStudio.Scene.Collision;
+using SunriseStudio.Tags.Generated;
 using static Checks;
 
 /** Sphere and capsule triangles, entity physics on bones, and trigger rows that draw one shape. */
@@ -81,8 +83,8 @@ internal static class PhysicsChecks
         var owner = Matrix4x4.CreateScale(3) * Matrix4x4.CreateRotationY(MathF.PI / 2) * Matrix4x4.CreateTranslation(40, 20, 10);
         var scene = new SceneDocument();
         foreach (uint tag in new[] { localEntity, worldEntity })
-            scene.Markers.Add(new SceneMarker { TagHash = tag, SourceTag = sourceList, SourceOffset = (int)(tag & 0x1FFF),
-                ObjectPlacement = new SceneObjectPlacement(sourceList, (int)(tag & 0x1FFF), owner) });
+            scene.Markers.Add(new SceneMarker { TagHash = tag, SourceTag = sourceList, SourceOffset = TagHashes.Entry(tag),
+                ObjectPlacement = new SceneObjectPlacement(sourceList, TagHashes.Entry(tag), owner) });
         var all = new CollisionSceneLoader(catalog).Load(scene);
         var localPlaced = all.Placements.Single(p => all.Entities[p.Entity].Tag == localEntity);
         var worldPlaced = all.Placements.Single(p => all.Entities[p.Entity].Tag == worldEntity);
@@ -92,7 +94,7 @@ internal static class PhysicsChecks
         var rows = (Dictionary<uint, PlacedPayload[]>)typeof(CollisionScene).GetProperty("ListRows",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(all)!;
         rows[sourceList] = StaticCollisionReader.PlacedPayloads(catalog.Read(sourceList), sourceList)
-            .Where(row => row.Marker is StaticCollisionReader.CollisionMarker or CollisionSceneLoader.ShapeArrayMarker).ToArray();
+            .Where(row => row.Marker is SStaticCollisionPayload.Class or TriggerShapeReference.Class).ToArray();
         Check(CollisionSceneUpdate.Apply(catalog, all, [sourceList], out var reason) is null && reason.Contains("inline trigger"),
             "An inline class placement stayed stale when its list changed without a collision payload change.");
         Console.WriteLine("PASS collision-inline-owned config=80C00948 entity=80C0094A radius=4 length=3 split=1/3 placed-scale=ignored world-axis=80C599F4");
@@ -160,11 +162,15 @@ internal static class PhysicsChecks
             ? BitConverter.ToUInt32(config, (int)payload + 0x380) : 0;
     }
 
-    /** Config tags of a class definition's +0x10 rows; none when the array does not read. */
+    /** Config tags of a class definition's component rows; none when the array does not read. */
     private static IEnumerable<uint> Configs(byte[] definition)
     {
-        var rows = new SunriseStudio.Authoring.NativeRows(definition);
-        try { return rows.Rows(0x10, 0x80809C04, 12).Select(rows.U32).ToArray(); }
+        try
+        {
+            return TagRows.Offsets<SEntity, SPatternComponent>(definition, nameof(SEntity.Components), SPatternComponent.Class)
+                .Select(row => ObjectRows.Field<SPatternComponent, uint>(definition, row,
+                    nameof(SPatternComponent.Config))).ToArray();
+        }
         catch (InvalidDataException) { return []; }
     }
 

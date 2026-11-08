@@ -1,7 +1,9 @@
 using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Formats;
+using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
@@ -56,7 +58,7 @@ public sealed partial class CuiPage : IPreparedStudioPage
         if (selected < 0)
             selected = Enumerable.Range(0, rectangles.Count).FirstOrDefault(i =>
                 preview?.LocalContent.GetValueOrDefault(rectangles[i].Component.Offset) is { } content
-                && (content.TextHash is not 0 and not 0x811C9DC5 || content.TextureTag != 0), rectangles.Count > 0 ? 0 : -1);
+                && (content.TextHash is not 0 and not StringHash.Empty || content.TextureTag != 0), rectangles.Count > 0 ? 0 : -1);
         if (selected >= 0) edited = rectangles[selected].Rectangle;
         revealSelection = selected >= 0;
         int requestedComposed = pendingWidgetSelection >= 0 ? pendingWidgetSelection : previousComposed;
@@ -87,7 +89,7 @@ public sealed partial class CuiPage : IPreparedStudioPage
         if (error.Length != 0) ImGui.TextWrapped(error);
         UpdateLiveWatch(context.Workspace);
         if (document is null) return;
-        if (document.ClassHash == 0x8080496A)
+        if (document.ClassHash == SCuiHierarchy.Class)
         {
             if (composition is not null) DrawComposition(context, composition);
             else if (ImGui.Button("Open widget resource")) context.Workspace.Select(document.RootResource);
@@ -387,7 +389,7 @@ public sealed partial class CuiPage : IPreparedStudioPage
         if (content.TextureTag != 0 && textures.TryGetValue(content.TextureTag, out var texture))
             draw.AddImage(texture.ImGuiId, min, max, Vector2.Zero, Vector2.One);
         // Hash zero with text is a string copied from the game, which has no key to resolve.
-        if (content.TextHash is not 0 and not 0x811C9DC5 || content.TextHash == 0 && content.Text.Length > 0)
+        if (content.TextHash is not 0 and not StringHash.Empty || content.TextHash == 0 && content.Text.Length > 0)
         {
             string text = content.TextHash == 0 ? content.Text : context.Workspace.ResolveHash(content.TextHash) ?? content.Text;
             if (content.NativeText is { } style && fontAtlases.TryGetValue(style.FontSetKey, out var atlas))

@@ -21,7 +21,6 @@ var tests = new (string Name, Action Run)[]
 {
     ("scalar edits preserve other bytes", ScalarEdits),
     ("CUI program graph and bounds", CuiGraph),
-    ("item stats and socket field locations", InvestmentFields),
     ("behavior graph rejects cycles safely", BehaviorCycles),
     ("behavior expressions and condition ownership", BehaviorExpressionChecks.Run),
     ("OBJ import handles negative indices and polygons", ObjRead),
@@ -102,9 +101,7 @@ static void CuiGraph()
     S(bytes, 68, 0); S(bytes, 70, 1); S(bytes, 72, 1); S(bytes, 74, 2);
     var service = new AssetInspectionService();
     var result = service.Inspect(new(1, 0x8080496A, bytes));
-    Check(result.Diagnostics.Count == 0 && result.Sections[1].Children!.Count == 3
-        && result.Graph!.Nodes.Count == 3 && result.Graph.Edges.Count == 2, "CUI edges missing.");
-    Check(result.References.Single().TagHash == 0x81234567, "Root resource missing.");
+    Check(result.Diagnostics.Count == 0 && result.Graph!.Nodes.Count == 3 && result.Graph.Edges.Count == 2, "CUI edges missing.");
     S(bytes, 68, 0x7FFF);
     var removed = service.Inspect(new(1, 0x8080496A, bytes));
     Check(removed.Diagnostics.Count == 0 && removed.Graph!.Nodes.Single().Id == "node:0" && removed.Graph.Edges.Count == 0,
@@ -116,23 +113,6 @@ static void CuiGraph()
     Check(service.Inspect(new(1, 0x8080496A, bytes)).Diagnostics.Count == 1, "Bad CUI pointer not reported.");
 }
 
-static void InvestmentFields()
-{
-    var bytes = new byte[512];
-    U(bytes, 180, 99); bytes[184] = 2;
-    Q(bytes, 104, 200 - 104); Q(bytes, 112, 232 - 112);
-    ArrayAt(bytes, 200, 272, 1, 0x808077C4); S(bytes, 288, 7); S(bytes, 290, 42);
-    ArrayAt(bytes, 232, 368, 1, 0x808077B9); bytes[384] = 3; U(bytes, 388, 15);
-    ArrayAt(bytes, 248, 432, 1, 0x808077BC); S(bytes, 448, 88);
-    var result = new AssetInspectionService().Inspect(new(0x81323456, 0x80807BEA, bytes));
-    Check(result.Diagnostics.Count == 0, string.Join(',', result.Diagnostics));
-    var value = result.Sections.Single(x => x.Name == "Stats").Children!.Single().Properties.Single(x => x.Name == "Value");
-    Check(value.Offset == 388 && value.Value == "15", "Stat payload includes an extra array header.");
-    var edited = AssetEdit.Apply(bytes, value, "23");
-    Check(BinaryPrimitives.ReadInt32LittleEndian(edited.AsSpan(388)) == 23, "Stat edit failed.");
-    Check(result.Sections.Single(x => x.Name == "Sockets").Children![0].Properties[1].Value == "42", "Socket plug offset differs.");
-}
-
 static void BehaviorCycles()
 {
     var bytes = new byte[128];
@@ -140,7 +120,8 @@ static void BehaviorCycles()
     U(bytes, 76, 0x80804E31);
     ArrayAt(bytes, 96, 32, 1, 0x80809420);
     var result = new AssetInspectionService().Inspect(new(1, 0x8080941E, bytes));
-    Check(result.Diagnostics.Count == 0 && result.Sections.Count > 0, "Shared behavior graph failed.");
+    Check(result.Diagnostics.Count == 0 && result.Graph!.Nodes.Any(node => node.Id == "node:80")
+        && result.Graph.Nodes.Count(node => node.Id.StartsWith("root:", StringComparison.Ordinal)) == 2, "Shared behavior graph failed.");
 }
 
 static void ObjRead()
@@ -346,7 +327,9 @@ static void PropertyJson()
     {
         var bytes = new byte[200]; U(bytes, 180, 99);
         var context = new AssetInspectionContext(1, 0x80807BEA, bytes);
-        var inspection = new AssetInspectionService().Inspect(context);
+        var service = new AssetInspectionService(includeDefaults: false);
+        service.Register(new StackInspector());
+        var inspection = service.Inspect(context);
         PropertyInterchange.Write(path, context, inspection);
         var document = File.ReadAllText(path).Replace("\"99\"", "\"44\"");
         File.WriteAllText(path, document);
@@ -509,4 +492,14 @@ static void InstalledAssets(string gameRoot)
         Console.WriteLine("pass installed_animation_bones=57");
     }
     finally { File.Delete(animationPath); }
+}
+
+/** One editable u32 at 180, in place of a typed inspector. */
+internal sealed class StackInspector : IAssetInspector
+{
+    public string Id => "test.stack";
+    public string DisplayName => "Stack";
+    public bool CanInspect(AssetInspectionContext context) => true;
+    public AssetInspection Inspect(AssetInspectionContext context) => new(DisplayName, "", [new("Item",
+        [new("Maximum stack", BinaryPrimitives.ReadUInt32LittleEndian(context.Data.Span[180..]).ToString(), 180, ScalarEncoding.UInt32, true)])], [], []);
 }

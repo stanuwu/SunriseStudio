@@ -39,8 +39,8 @@ internal static class DependencyTableChecks
     {
         byte[] data = BuildManifest();
         var manifest = PackageManifest.Read(data);
-        Require(manifest.Lists(0x80800000U + (0x0300U << 13) + 2) && manifest.Lists(0x80800000U + (0x0500U << 13) + 3)
-            && !manifest.Lists(0x80800000U + (0x0500U << 13) + 1), "The synthetic manifest read wrongly.");
+        Require(manifest.Lists(TagHashes.Make(0x0300, 2)) && manifest.Lists(TagHashes.Make(0x0500, 3))
+            && !manifest.Lists(TagHashes.Make(0x0500, 1)), "The synthetic manifest read wrongly.");
         byte[] grown = PackageManifest.AddGroup(data, 0x0400, [7, 9]);
         var reread = PackageManifest.Read(grown);
         Require(reread.Groups.Select(group => group.PackageId).SequenceEqual(new ushort[] { 0x0300, 0x0400, 0x0500 }),

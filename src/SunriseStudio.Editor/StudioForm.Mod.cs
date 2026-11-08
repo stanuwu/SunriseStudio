@@ -61,10 +61,10 @@ public sealed partial class StudioForm
         if (SettleModCommand("Build and install", "installing")) workspace.Run(workspace.BuildAndInstall);
     }
 
-    /** Replaces changed scripts in the installed mod and reloads them in the running game. */
+    /** Writes changed packages and scripts into the installed mod and loads them in the running game. */
     public void UpdateRunningGame()
     {
-        if (SettleModCommand("Update running game", "updating")) workspace.Run(workspace.UpdateRunningGame);
+        if (SettleModCommand("Update running game", "updating")) workspace.Run(() => workspace.UpdateRunningGame());
     }
 
     /** Returns false when the mod details are unset or the user keeps an unsaved mission draft open. */

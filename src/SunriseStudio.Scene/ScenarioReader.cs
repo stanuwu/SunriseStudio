@@ -1,5 +1,7 @@
 using System.Numerics;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -26,26 +28,25 @@ public sealed partial class AssetSceneLoader
     /** Describes authored states without selecting runtime activity state. */
     public ScenarioInfo DescribeScenario(uint tag)
     {
-        if (Class(tag) != 0x80809994) throw new InvalidDataException("Tag is not a scenario.");
-        var data = new TagData(catalog.Read(tag));
+        if (Class(tag) != SScenario.Class) throw new InvalidDataException("Tag is not a scenario.");
+        var data = catalog.Read(tag);
         CollectInlineNames(tag, data);
+        ref readonly var scenario = ref TagView.Checked<SScenario>(data, 0);
         var bubbles = new List<ScenarioBubbleInfo>();
-        foreach (var bubble in data.Rows(0x50, 0x8080924D, 24))
+        foreach (ref readonly var bubble in TagView.Rows(data, in scenario.Bubbles, ScenarioBubble.Class))
         {
-            var bubbleHash = data.U32(bubble);
             var states = new List<ScenarioStateInfo>();
             var ordinal = 0;
-            foreach (var state in data.Rows(bubble + 8, 0x8080924F, 76))
+            foreach (ref readonly var state in TagView.Rows(data, in bubble.States, SliceSetState.Class))
             {
-                var entryTag = data.U32(state + 68);
-                if (Class(entryTag) != 0x8080925B) throw new InvalidDataException("Scenario state has an invalid entry class.");
-                var entry = new TagData(catalog.Read(entryTag));
-                var stateHash = data.U32(state + 4);
-                states.Add(new ScenarioStateInfo(bubbleHash, ordinal++, stateHash,
-                    ResolveHashName(stateHash).Name, data.U8(state) != 0, data.U8(state + 12) != 0,
-                    entryTag, entry.U32(16), entry.U32(20), data.U32(state + 28)));
+                if (Class(state.Entry) != SScenarioStateEntry.Class) throw new InvalidDataException("Scenario state has an invalid entry class.");
+                ref readonly var entry = ref TagView.Checked<SScenarioStateEntry>(catalog.Read(state.Entry), 0);
+                // Each flag is the low byte of its word.
+                states.Add(new ScenarioStateInfo(bubble.NameHash, ordinal++, state.StateHash,
+                    ResolveHashName(state.StateHash).Name, state.Enabled != 0, (byte)state.PublicFlag != 0,
+                    state.Entry, entry.Index, entry.Link, state.MapBubbleIndex));
             }
-            bubbles.Add(new ScenarioBubbleInfo(bubbleHash, BubbleDisplayName(bubbleHash), states));
+            bubbles.Add(new ScenarioBubbleInfo(bubble.NameHash, BubbleDisplayName(bubble.NameHash), states));
         }
         return new ScenarioInfo(tag, Name(tag), bubbles);
     }
@@ -107,28 +108,27 @@ public sealed partial class AssetSceneLoader
     }
 
     /** Slot ordinals belong to the object's complete slot array, not a per-type counter. */
-    private void VisitAuthoredObject(uint tag, TagData data, uint bubble, Matrix4x4 transform, int depth)
+    private void VisitAuthoredObject(uint tag, byte[] data, uint bubble, Matrix4x4 transform, int depth)
     {
-        var registryKey = data.U32(12);
+        ref readonly var authored = ref TagView.Checked<SAuthoredObject>(data, 0);
+        var registryKey = authored.RegistryKey;
         var slots = new List<AuthoredSlotInfo>();
         var ordinal = 0;
-        foreach (var row in data.Rows(32, 0x80809B3A, 8))
+        foreach (ref readonly var slot in TagView.Rows(data, in authored.SlotTable.Slots, ObjectSlot.Class))
         {
-            var identity = new AuthoredSlotIdentity(registryKey, checked((ushort)data.U32(row)), checked((ushort)ordinal++));
-            var nameHash = data.U32(row + 4);
-            if (slotNames.TryGetValue(identity, out var previous) && previous != nameHash)
+            var identity = new AuthoredSlotIdentity(registryKey, checked((ushort)slot.SlotType), checked((ushort)ordinal++));
+            if (slotNames.TryGetValue(identity, out var previous) && previous != slot.NameHash)
                 throw new InvalidDataException("Authored slot identity has conflicting names.");
-            slotNames[identity] = nameHash;
-            slots.Add(new AuthoredSlotInfo(identity, nameHash, ResolveHashName(nameHash).Name));
+            slotNames[identity] = slot.NameHash;
+            slots.Add(new AuthoredSlotInfo(identity, slot.NameHash, ResolveHashName(slot.NameHash).Name));
         }
         if (scene.AuthoredObjects.All(o => o.TagHash != tag))
             scene.AuthoredObjects.Add(new AuthoredObjectInfo(tag, registryKey, slots));
-        foreach (var row in data.Rows(56, 0x80809464, 24))
+        foreach (ref readonly var filter in TagView.Rows(data, in authored.EntryFilters, ObjectBubbleBlock.Class))
         {
-            var declared = data.I32(row);
-            if (activeEntryIndex != uint.MaxValue && declared != -1 && declared != activeEntryIndex) continue;
-            foreach (var handle in data.Rows(row + 8, 0x80809466, 4))
-                Visit(data.U32(handle), bubble, transform, depth + 1);
+            if (activeEntryIndex != uint.MaxValue && filter.BubbleIndex != -1 && filter.BubbleIndex != activeEntryIndex) continue;
+            foreach (ref readonly var handle in TagView.Rows(data, in filter.Handles, PlacedHandle.Class))
+                Visit(handle.Handle, bubble, transform, depth + 1);
         }
     }
 }

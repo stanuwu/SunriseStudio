@@ -1,4 +1,6 @@
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -19,36 +21,42 @@ internal sealed class NativeLayoutCatalog
     /** Equivalent bootstrap/global copies agree; conflicting declaration ids are refused. */
     public NativeLayoutCatalog(PackageCatalog catalog)
     {
-        TagData Read(uint tag, uint expected)
+        byte[] Read(uint tag, uint expected)
         {
             if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != expected)
                 throw new InvalidDataException($"Layout dependency 0x{tag:X8} has the wrong class.");
-            return new TagData(catalog.Read(tag));
+            return catalog.Read(tag);
         }
-        foreach (var root in catalog.Entries.Where(e => e.Reference == 0x80806CB1))
+        foreach (var root in catalog.Entries.Where(e => e.Reference == SRendererRoot.Class))
         {
-            var global = Read(root.TagHash, 0x80806CB1);
-            var resource = Read(global.U32(8), 0x808072A6);
-            var pool = Read(resource.U32(12), 0x808072AD);
-            var poolRows = pool.Rows(8, 0x808072AF, 16);
-            var declarationTag = resource.U32(40);
-            var table = Read(declarationTag, 0x808072A9);
-            foreach (var row in table.Rows(8, 0x808072AC, 28))
+            var global = Read(root.TagHash, SRendererRoot.Class);
+            var resource = Read(TagRead.U32(global, TagView.FieldOffset<SRendererRoot>(nameof(SRendererRoot.RenderResource))),
+                UnknownRenderGlobalResource.Class);
+            // The second word of Unk8 is the stream pool tag.
+            var pool = Read(TagRead.U32(resource, TagView.FieldOffset<UnknownRenderGlobalResource>("Unk8[1].LayoutElementPool")), SClothPool.Class);
+            ref readonly var streamGroups = ref TagView.At<TagArray<SVertexStreamGroup>>(pool,
+                TagView.FieldOffset<SClothPool>(nameof(SClothPool.StreamGroups)));
+            var poolRows = TagView.Rows(pool, in streamGroups, SVertexStreamGroup.Class);
+            var declarationTag = TagRead.U32(resource, TagView.FieldOffset<UnknownRenderGlobalResource>(nameof(UnknownRenderGlobalResource.LayoutDeclarations)));
+            var table = Read(declarationTag, SClothDeclaration.Class);
+            ref readonly var declarationRows = ref TagView.At<TagArray<SVertexDeclarationRow>>(table,
+                TagView.FieldOffset<SClothDeclaration>(nameof(SClothDeclaration.Declarations)));
+            foreach (ref readonly var row in TagView.Rows(table, in declarationRows, SVertexDeclarationRow.Class))
             {
-                var id = table.U16(row);
+                var id = row.DeclarationId;
                 var elements = new List<NativeInputElement>();
                 for (var slot = 0; slot < 4; ++slot)
                 {
-                    var group = table.I32(row + 8 + slot * 4);
+                    var group = row.SlotStreamGroup[slot];
                     if (group == -1) continue;
                     if ((uint)group >= poolRows.Length) throw new InvalidDataException("Layout stream group index is invalid.");
                     var offset = 0;
-                    var instance = table.U8(row + 2 + slot);
+                    var instance = row.SlotInstanceFlags[slot];
                     if (instance > 1) throw new InvalidDataException("Layout instance classification is invalid.");
-                    foreach (var element in pool.Rows(poolRows[group], 0x808072B2, 3))
+                    foreach (ref readonly var element in TagView.Rows(pool, in poolRows[group].Elements, SVertexElement.Class))
                     {
-                        var semantic = pool.U8(element);
-                        var format = (int)pool.U8(element + 2);
+                        var semantic = element.SemanticCode;
+                        var format = (int)element.FormatCode;
                         if (semantic >= Semantics.Length || format <= 0 || format >= Formats.Length)
                             throw new InvalidDataException("Native layout element code is invalid.");
                         var visits = 0;
@@ -58,7 +66,7 @@ internal sealed class NativeLayoutCatalog
                             if (format <= 0 || format >= Formats.Length || ++visits > Formats.Length)
                                 throw new InvalidDataException("Native layout format fallback does not terminate.");
                         }
-                        elements.Add(new NativeInputElement(Semantics[semantic], pool.U8(element + 1), slot,
+                        elements.Add(new NativeInputElement(Semantics[semantic], element.SemanticIndex, slot,
                             offset, (NativeVertexFormat)Formats[format], instance != 0, instance));
                         offset += Widths[format];
                     }

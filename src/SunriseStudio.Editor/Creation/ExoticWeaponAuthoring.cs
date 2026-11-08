@@ -2,6 +2,7 @@ using SunriseStudio.Authoring;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
 using System.Text.Json;
 using System.Security.Cryptography;
 
@@ -165,7 +166,8 @@ public static partial class ExoticWeaponAuthoring
                     investment.ReadItem(weapon.Tag, weaponBytes).Stats.Last(stat => stat.Index == row.Index));
             weaponBytes = investment.AddStat(weapon.Tag, weaponBytes, index, value);
         }
-        var rarity = investment.ReadItem(weapon.Tag, weaponBytes).Fields.Single(field => field.Offset == 186);
+        var rarity = investment.ReadItem(weapon.Tag, weaponBytes).Fields
+            .Single(field => field.Offset == ItemFields.Tier);
         weaponBytes = investment.Edit(weapon.Tag, weaponBytes, rarity, "5");
         weaponBytes = InvestmentWeaponType.SetType(weaponBytes, definition.ArchetypeName,
             catalog.Read(InvestmentWeaponType.TraitTableTag), catalog.Read(InvestmentWeaponType.TraitCategoryTableTag)).Definition;
@@ -175,7 +177,7 @@ public static partial class ExoticWeaponAuthoring
 
         var models = prepareAssets(catalog, art.Variants, plan.NextEntry);
         if (models.Assets.Count == 0) throw new InvalidDataException("Import the weapon's Blender assets before creation.");
-        var importedEntities = models.Assets.Where(asset => asset.Native?.Reference == 0x80809C0F)
+        var importedEntities = models.Assets.Where(asset => asset.Native?.Reference == SEntity.Class)
             .Select(asset => asset.Native!.Tag()).ToHashSet();
         if (models.VariantEntities.Values.Any(tag => !importedEntities.Contains(tag)))
             throw new InvalidDataException("Every weapon art part must use a newly imported entity.");
@@ -269,7 +271,7 @@ public static partial class ExoticWeaponAuthoring
             uint gameplayTag = plan.TagAtNextEntry;
             perk.Behavior.ProgramTag = gameplayTag;
             byte[] gameplay = NativePerkBehavior.Compile(perk.Behavior);
-            uint hash = InvestmentItemClone.NewDefinitionHash(
+            uint hash = StringHash.NewDefinitionHash(
                 $"sunrise.perk:{project.Name}:{gameplayTag:X8}:{perk.Name}",
                 investment.PerkDefinitions.Select(row => row.Hash).ToHashSet());
             uint runtimeName = InvestmentSandboxPerkAuthoring.NewRuntimeNameHash(
@@ -372,7 +374,7 @@ public static partial class ExoticWeaponAuthoring
         public List<ProjectAssetAddition> Assets { get; } = [];
         public Dictionary<uint, byte[]> Changes { get; } = [];
         public int NextEntry { get; private set; }
-        public uint TagAtNextEntry => ProjectTags.Tag(package, NextEntry);
+        public uint TagAtNextEntry => TagHashes.Make(package, NextEntry);
 
         public PlanCatalog(PackageCatalog source, StudioProject project, ushort package)
         {

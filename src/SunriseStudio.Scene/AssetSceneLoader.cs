@@ -1,5 +1,9 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -15,7 +19,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
     }
     // The placed terrain resource row while its terrain tag is visited; its +0x10 word is the AO key.
     private ReadOnlyMemory<byte> terrainResource;
-    private readonly Dictionary<uint, TagData> tags = [];
+    private readonly Dictionary<uint, byte[]> tags = [];
     private readonly HashSet<SceneVisitKey> visited = [];
     private CancellationToken cancellation;
     private SceneDocument scene = new();
@@ -73,11 +77,11 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
         stateRanges.Clear();
         squadMembers.Clear();
         scene = new SceneDocument { Name = Name(tag), TagHash = tag };
-        hasMapLayerCatalog = Class(tag) == 0x808091DE;
+        hasMapLayerCatalog = Class(tag) == SMapRoot.Class;
         if (hasMapLayerCatalog)
             scene.MapLayers.AddRange(DescribeMapLayers(tag));
         ValidateMapSelection();
-        if (Class(tag) == 0x80809994)
+        if (Class(tag) == SScenario.Class)
         {
             scene.Scenario = DescribeScenario(tag);
             ValidateScenarioSelection(scene.Scenario);
@@ -92,7 +96,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
         FinishMapLayers();
         AddEffectMarkers();
         TagSceneItems();
-        if (Class(tag) == 0x80809C0F)
+        if (Class(tag) == SEntity.Class)
         {
             try { scene.Attachments = DescribeEntityAttachments(tag); }
             catch (Exception error) when (error is InvalidDataException or ArgumentException
@@ -119,32 +123,32 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
     // A tag hash is not an FNV name hash, so the name resolver does not apply to it.
     private string Name(uint tag) => catalog.GetName(tag) ?? $"0x{tag:X8}";
     private uint Class(uint tag) => catalog.TryGetEntry(tag, out var entry) ? entry.Reference : 0;
-    private TagData Read(uint tag)
+    private byte[] ReadBytes(uint tag)
     {
         cancellation.ThrowIfCancellationRequested();
         if (!tags.TryGetValue(tag, out var data))
         {
-            tags[tag] = data = new TagData(Source?.Invoke(tag) ?? catalog.Read(tag));
+            tags[tag] = data = Source?.Invoke(tag) ?? catalog.Read(tag);
             scene.ReadTagSet.Add(tag);
             if (catalog.TryGetEntry(tag, out var entry))
             {
                 if (entry.Type is 8 or 16) CollectInlineNames(tag, data);
                 if (entry.Type is 8 or 16 && WorldPlacementUpdate.SnapshotClasses.Contains(entry.Reference))
-                    scene.PlacementSources[tag] = data.Bytes;
+                    scene.PlacementSources[tag] = data;
             }
         }
         return data;
     }
 
-    private uint Resolve(TagData data, int row) => data.U32(row) == uint.MaxValue
-        ? catalog.Resolve64(data.U64(row + 8)) ?? throw new InvalidDataException($"Wide tag 0x{data.U64(row + 8):X16} is not in the package table.")
-        : data.U32(row);
+    private uint Resolve(uint narrow, ulong wide) => narrow == uint.MaxValue
+        ? catalog.Resolve64(wide) ?? throw new InvalidDataException($"Wide tag 0x{wide:X16} is not in the package table.")
+        : narrow;
 
     /** An unresolved reference cannot suppress later siblings in the same authored array. */
-    private void VisitReference(uint owner, TagData data, int row, uint bubble, Matrix4x4 transform, int depth)
+    private void VisitReference(uint owner, int row, uint narrow, ulong wide, uint bubble, Matrix4x4 transform, int depth)
     {
         uint child;
-        try { child = Resolve(data, row); }
+        try { child = Resolve(narrow, wide); }
         catch (InvalidDataException error)
         {
             scene.DecodeErrorCount++;
@@ -180,63 +184,74 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
         var firstMarker = scene.Markers.Count;
         try
         {
-            var data = Read(tag);
+            var data = ReadBytes(tag);
             switch (entry.Reference)
             {
-                case 0x808091DE:
-                    foreach (var row in data.Rows(0x10, 0x80807D53, 16))
-                        VisitReference(tag, data, row, 0, transform, depth + 1);
+                case SMapRoot.Class:
+                {
+                    var entries = SceneReads.Rows<SMapRoot, MapBubbleRef>(data, 0, nameof(SMapRoot.MapEntries), MapBubbleRef.Class);
+                    foreach (ref readonly var row in entries)
+                        VisitReference(tag, TagView.OffsetOf(data, in row), row.NarrowTag, row.WideTag, 0, transform, depth + 1);
                     break;
-                case 0x80809994:
+                }
+                case SScenario.Class:
                     VisitScenario(tag, transform, depth);
                     break;
-                case 0x8080925B:
-                    Visit(data.U32(20), bubble, transform, depth + 1);
+                case SScenarioStateEntry.Class:
+                    Visit(TagView.Member<SScenarioStateEntry, uint>(data, 0, nameof(SScenarioStateEntry.Link)),
+                        bubble, transform, depth + 1);
                     break;
-                case 0x8080925E:
-                    foreach (var descriptor in new[] { 8, 24, 40 })
-                        foreach (var row in data.Rows(descriptor, 0x80809260, 4))
-                            Visit(data.U32(row), bubble, transform, depth + 1);
+                case SScenarioTagSet.Class:
+                    foreach (var set in new[] { nameof(SScenarioTagSet.TagSetA), nameof(SScenarioTagSet.TagSetB), nameof(SScenarioTagSet.TagSetC) })
+                        foreach (ref readonly var row in SceneReads.Rows<SScenarioTagSet, RegistryObjectRef>(data, 0, set, RegistryObjectRef.Class))
+                            Visit(row.Tag, bubble, transform, depth + 1);
                     break;
-                case 0x80809462:
+                case SAuthoredObject.Class:
                     VisitAuthoredObject(tag, data, bubble, transform, depth);
                     break;
-                case 0x80807DAE:
+                case SBubbleParent.Class:
+                {
                     bubble = tag;
-                    var nameHash = data.U32(0x18);
+                    var nameHash = TagView.Member<SBubbleParent, uint>(data, 0, "Metadata.BubbleNameHash");
                     var authored = NameResolver?.Invoke(nameHash) ?? Name(tag);
                     scene.Bubbles.Add(new BubbleInfo(tag, nameHash, GameNames?.BubbleTitle(nameHash, authored) ?? authored));
                     // A bubble outside the selection is listed but its content is not decoded.
                     if (options.BubbleNameHashes is null || options.BubbleNameHashes.Contains(nameHash))
-                        Visit(data.U32(8), bubble, transform, depth + 1);
+                        Visit(TagView.Member<SBubbleParent, uint>(data, 0, nameof(SBubbleParent.BubbleLink)), bubble, transform, depth + 1);
                     break;
-                case 0x808091E0:
-                    foreach (var row in data.Rows(8, 0x808084C1, 16))
-                        VisitReference(tag, data, row, bubble, transform, depth + 1);
+                }
+                case SBubbleDefinition.Class:
+                {
+                    var children = SceneReads.Rows<SBubbleDefinition, SBubbleChildRef>(data, 0, nameof(SBubbleDefinition.BubbleChildren),
+                        SBubbleChildRef.Class);
+                    foreach (ref readonly var row in children)
+                        VisitReference(tag, TagView.OffsetOf(data, in row), row.NarrowTag, row.WideTag, bubble, transform, depth + 1);
                     break;
-                case 0x80808A54:
+                }
+                case SMapContainer.Class:
                     VisitMapContainer(tag, data, bubble, transform, depth);
                     break;
-                case 0x808099D6:
+                case SMapPlacements.Class:
                     Placements(tag, data, bubble, transform, depth);
                     break;
-                case 0x80806EF4:
-                    Visit(data.U32(8), bubble, transform, depth + 1);
+                case SMapResourceLink.Class:
+                    Visit(TagView.Member<SMapResourceLink, uint>(data, 0, nameof(SMapResourceLink.InstanceTable)),
+                        bubble, transform, depth + 1);
                     break;
-                case 0x8080966D:
+                case SStaticMeshInstances.Class:
                     Instances(tag, data, bubble, transform);
                     break;
-                case 0x8080713A:
+                case SLightCollection.Class:
                     scene.LightTables.Add(new PlacedLightTable(bubble, tag, -1, -1,
                         transform, ReadLightTable(tag, cancellation), null));
                     break;
-                case 0x808071A7:
+                case SStaticMesh.Class:
                     var staticPlacement = new SceneObjectPlacement(tag, -1, transform);
                     foreach (var mesh in StaticMesh(tag))
                         scene.Instances.Add(new MeshInstance { Mesh = mesh, Transform = transform,
                             ObjectPlacement = staticPlacement, Name = Name(tag), BubbleHash = bubble });
                     break;
-                case 0x8080714F:
+                case STerrain.Class:
                     var terrainPlacement = new SceneObjectPlacement(tag, -1, transform);
                     foreach (var mesh in TerrainMesh(tag))
                         scene.Instances.Add(new MeshInstance
@@ -250,7 +265,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                             NativeInstanceData = terrainResource
                         });
                     break;
-                case 0x808073A5:
+                case SEntityModel.Class:
                     var modelPlacement = new SceneObjectPlacement(tag, -1, transform);
                     foreach (var mesh in EntityMesh(tag))
                         scene.Instances.Add(new MeshInstance
@@ -266,30 +281,34 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                         });
                     AddDiagnostic("Entity mesh uses its bind pose; animation and material variants are not evaluated.");
                     break;
-                case 0x80809C0F:
+                case SEntity.Class:
                     ClassMeshes(tag, bubble, transform);
                     break;
-                case 0x80809B14:
-                    Visit(data.U32(12), bubble, transform, depth + 1);
+                case SEntityLink.Class:
+                    Visit(TagView.Member<SEntityLink, uint>(data, 0, nameof(SEntityLink.Next)), bubble, transform, depth + 1);
                     break;
-                case 0x80809C36:
+                case SEntityConfig.Class:
                     ReadConfigVolumes(tag, bubble, Name(tag));
                     ReadConfigPoints(tag, data, bubble);
                     ReadSquadConfig(tag, data, bubble);
                     break;
-                case 0x80806F95:
+                case SSkyObjects.Class:
                     SkyEntities(tag, data, bubble, transform);
                     break;
-                case 0x80809162:
+                case SSpawnPoints.Class:
                     SpawnPoints(tag, data, bubble);
                     break;
-                case 0x80809468:
-                    if (data.U32(8) != uint.MaxValue)
-                        Visit(data.U32(8), bubble, transform, depth + 1);
+                case SAuthoredObjectSet.Class:
+                {
+                    var direct = TagView.Member<SAuthoredObjectSet, uint>(data, 0, nameof(SAuthoredObjectSet.DirectTarget));
+                    if (direct != uint.MaxValue)
+                        Visit(direct, bubble, transform, depth + 1);
                     else
-                        foreach (var row in data.Rows(16, 0x80809B13, 4))
-                            Visit(data.U32(row), bubble, transform, depth + 1);
+                        foreach (ref readonly var row in SceneReads.Rows<SAuthoredObjectSet, SAuthoredObjectSetTarget>(data, 0,
+                                     nameof(SAuthoredObjectSet.Objects), SAuthoredObjectSetTarget.Class))
+                            Visit(row.Redirect, bubble, transform, depth + 1);
                     break;
+                }
                 default:
                     scene.UnsupportedCount++;
                     scene.Diagnostics.Add($"Unsupported class 0x{entry.Reference:X8}: {Name(tag)}.");
@@ -310,11 +329,8 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
     }
 
     /** Quaternion normalization matches the native row-vector placement convention. */
-    internal static Matrix4x4 Placement(TagData data, int offset)
+    private static Matrix4x4 Placement(Quaternion q, Vector3 position, float scale)
     {
-        var q = data.Q4(offset);
-        var position = data.V3(offset + 16);
-        var scale = data.F32(offset + 28);
         if (!Finite(position) || !float.IsFinite(scale) || !float.IsFinite(q.LengthSquared()))
             throw new InvalidDataException("Placement contains non-finite values.");
         q = q.LengthSquared() > 0.0001f ? Quaternion.Normalize(q) : Quaternion.Identity;
@@ -323,53 +339,88 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
 
     private static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
 
-    /** A static instance row holds its QTS at +0; the visit's transform applies after it. */
-    internal static Matrix4x4 InstanceTransform(TagData data, int row, Matrix4x4 parent) => Placement(data, row) * parent;
-
-    /** A 0x808099D8 row holds its QTS at +0x10; the visit's transform applies after it. */
-    internal static Matrix4x4 RowTransform(TagData data, int row, Matrix4x4 parent) => Placement(data, row + 0x10) * parent;
-
-    /** Offset and class of a placement row's +0x78 resource; both are zero without one. */
-    internal static (int Offset, uint Class) PlacementResource(TagData data, int row)
+    /** The visit's transform applies after the instance row's own placement. */
+    internal static Matrix4x4 InstanceTransform(byte[] data, int row, Matrix4x4 parent)
     {
-        var field = row + 0x78;
-        var resource = data.I64(field) != 0 ? data.Relative(field) : 0;
-        return (resource, resource > 4 && data.Has(resource - 4, 4) ? data.U32(resource - 4) : 0);
+        ref readonly var instance = ref TagView.At<SStaticInstanceTransform>(data, row);
+        return Placement(instance.Rotation, instance.Position, instance.Scale) * parent;
+    }
+
+    /** The visit's transform applies after the placement row's own placement. */
+    internal static Matrix4x4 RowTransform(byte[] data, int row, Matrix4x4 parent) => EntryPlacement(data, row) * parent;
+
+    /** Reads only the row's QTS, so a row cut short after it still places. */
+    internal static Matrix4x4 EntryPlacement(byte[] data, int row)
+    {
+        var rotation = TagView.Member<AuthoredPlacementEntry, Quaternion>(data, row, nameof(AuthoredPlacementEntry.Rotation));
+        var position = TagView.Member<AuthoredPlacementEntry, Vector3>(data, row, nameof(AuthoredPlacementEntry.Position));
+        var scale = TagView.Member<AuthoredPlacementEntry, float>(data, row, nameof(AuthoredPlacementEntry.UniformScale));
+        return Placement(rotation, position, scale);
+    }
+
+    /** Offset and class of a placement row's payload; both are zero without one. */
+    internal static (int Offset, uint Class) PlacementResource(byte[] data, int row)
+    {
+        ref readonly var payload = ref TagView.At<AuthoredPlacementEntry>(data, row).Payload;
+        var resource = TagView.TargetOffset(data, in payload) ?? 0;
+        return (resource, resource > TagView.ClassWordSize ? TagView.TargetClass(data, in payload) ?? 0 : 0);
     }
 
     /** A row whose resource names decoded content visits it; any other row becomes a marker. */
-    internal bool VisitsChild(TagData data, int resource, uint resourceClass) => resourceClass switch
+    internal bool VisitsChild(byte[] data, int resource, uint resourceClass) => resourceClass switch
     {
-        0x808071B3 or 0x80809160 or 0x80806F91 => data.Has(resource, 0x14),
-        0x8080714B => data.Has(resource, 0x20),
+        SStaticInstancesPayload.Class => TagView.FitsThrough<SStaticInstancesPayload>(data, resource,
+            nameof(SStaticInstancesPayload.StaticOwner)),
+        SSpawnPointsPayload.Class => TagView.FitsThrough<SSpawnPointsPayload>(data, resource, nameof(SSpawnPointsPayload.SpawnPoints)),
+        SSkyPayload.Class => TagView.FitsThrough<SSkyPayload>(data, resource, nameof(SSkyPayload.SkyObjects)),
+        STerrainPayload.Class => TagView.Fits<STerrainPayload>(data, resource),
         // A placed model with a physics shape at +0x40; Farm and other maps place their water this way.
-        0x80806DE0 => data.Has(resource, 0x14) && Class(data.U32(resource + 0x10)) == 0x808073A5,
+        UnknownPlacedModelPayload.Class => TagView.FitsThrough<UnknownPlacedModelPayload>(data, resource,
+                nameof(UnknownPlacedModelPayload.Model))
+            && Class(TagView.Member<UnknownPlacedModelPayload, uint>(data, resource, nameof(UnknownPlacedModelPayload.Model)))
+                == SEntityModel.Class,
         _ => false
     };
 
-    /** Spawn rows hold world coordinates: rotation at +0, position at +16. */
-    internal static (Vector3 Position, Quaternion Rotation) SpawnPose(TagData data, int row) =>
-        (data.V3(row + 16), data.Q4(row));
+    /** The child tag of a spawn, sky or placed-model payload that VisitsChild accepted. */
+    private static uint PayloadChild(byte[] data, int resource, uint resourceClass) => resourceClass switch
+    {
+        SSpawnPointsPayload.Class => TagView.Member<SSpawnPointsPayload, uint>(data, resource, nameof(SSpawnPointsPayload.SpawnPoints)),
+        SSkyPayload.Class => TagView.Member<SSkyPayload, uint>(data, resource, nameof(SSkyPayload.SkyObjects)),
+        UnknownPlacedModelPayload.Class => TagView.Member<UnknownPlacedModelPayload, uint>(data, resource,
+            nameof(UnknownPlacedModelPayload.Model)),
+        _ => throw new InvalidDataException($"Payload class 0x{resourceClass:X8} names no child.")
+    };
+
+    /** Spawn rows hold world coordinates. */
+    internal static (Vector3 Position, Quaternion Rotation) SpawnPose(byte[] data, int row)
+    {
+        ref readonly var spawn = ref TagView.At<SSpawnPointRow>(data, row);
+        return (spawn.Position, spawn.Rotation);
+    }
 
     /** Ranges select exact resource and transform rows; geometry stays shared between instances. */
-    private void Instances(uint tag, TagData data, uint bubble, Matrix4x4 parent)
+    private void Instances(uint tag, byte[] data, uint bubble, Matrix4x4 parent)
     {
-        var transforms = data.Rows(0x40, 0x808071A3, 48);
-        var resources = data.Rows(0x58, 0x8080967D, 4);
-        var ranges = data.Rows(0x68, 0x80807190, 8);
+        var transforms = SceneReads.Rows<SStaticMeshInstances, SStaticInstanceTransform>(data, 0, "Instances.Transforms",
+            SStaticInstanceTransform.Class);
+        var resources = SceneReads.Rows<SStaticMeshInstances, SStaticInstanceResource>(data, 0, "Instances.Resources",
+            SStaticInstanceResource.Class);
+        var ranges = SceneReads.Rows<SStaticMeshInstances, SStaticMeshInstanceGroup>(data, 0, "Instances.Ranges",
+            SStaticMeshInstanceGroup.Class);
         var inRegion = InRegion(data, transforms.Length, parent);
         var placements = new Dictionary<int, SceneObjectPlacement>();
-        foreach (var row in ranges)
+        foreach (ref readonly var range in ranges)
         {
             cancellation.ThrowIfCancellationRequested();
-            var count = data.U16(row);
-            var first = data.U16(row + 2);
-            var resourceIndex = data.U16(row + 4);
+            var count = range.Count;
+            var first = range.FirstInstance;
+            var resourceIndex = range.ResourceIndex;
             if (resourceIndex >= resources.Length || first + count > transforms.Length)
                 throw new InvalidDataException("Instance range leaves its typed array.");
             if (inRegion is not null && !inRegion.AsSpan(first, count).Contains(true)) continue;
-            var resource = data.U32(resources[resourceIndex]);
-            if (Class(resource) != 0x808071A7)
+            var resource = resources[resourceIndex].StaticMesh;
+            if (Class(resource) != SStaticMesh.Class)
             {
                 scene.UnsupportedCount++;
                 scene.Diagnostics.Add($"Unsupported instance resource {Name(resource)}.");
@@ -387,7 +438,8 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
             {
                 if (inRegion is not null && !inRegion[i] || ReplacedInstance(tag, i)) continue;
                 var origin = InstanceOrigin(tag, i);
-                var transform = InstanceTransform(data, transforms[i], parent);
+                var transformRow = TagView.OffsetOf(data, in transforms[i]);
+                var transform = InstanceTransform(data, transformRow, parent);
                 if (!placements.TryGetValue(i, out var objectPlacement))
                     placements[i] = objectPlacement = new SceneObjectPlacement(origin.Tag, origin.Index, transform);
                 foreach (var part in parts)
@@ -403,7 +455,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                         InstanceSourceIndex = origin.Index,
                         PlacementSourceTag = staticPlacement?.SourceTag ?? 0,
                         PlacementSourceOffset = staticPlacement?.SourceOffset ?? -1,
-                        NativeInstanceData = data.Bytes.AsMemory(transforms[i], 48)
+                        NativeInstanceData = data.AsMemory(transformRow, Unsafe.SizeOf<SStaticInstanceTransform>())
                     });
             }
         }
@@ -413,22 +465,24 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
      * Which rows of an instance table meet the region, by their bounds rows in table space.
      * @return Null when there is no region, or when the bounds table does not match its rows.
      */
-    private bool[]? InRegion(TagData table, int count, Matrix4x4 parent)
+    private bool[]? InRegion(byte[] table, int count, Matrix4x4 parent)
     {
         if (Region is not { } region) return null;
-        int[] boxes;
-        TagData bounds;
+        ReadOnlySpan<SInstanceBoundsRow> boxes;
         try
         {
-            bounds = Read(table.U32(0x18));
-            boxes = bounds.Rows(8, 0x80809673, 48);
+            var bounds = ReadBytes(TagView.Member<SStaticMeshInstances, uint>(table, 0, nameof(SStaticMeshInstances.BoundsTable)));
+            boxes = SceneReads.Rows<SInstanceBoundsTable, SInstanceBoundsRow>(bounds, 0, nameof(SInstanceBoundsTable.Boxes),
+                SInstanceBoundsRow.Class);
         }
         catch (Exception error) when (error is InvalidDataException or ArgumentException or KeyNotFoundException) { return null; }
         if (boxes.Length != count) return null;
         var result = new bool[count];
         for (int i = 0; i < count; i++)
         {
-            Vector3 min = bounds.V3(boxes[i]), max = bounds.V3(boxes[i] + 16), low = new(float.PositiveInfinity), high = -low;
+            ref readonly var box = ref boxes[i];
+            Vector3 min = new(box.MinimumW1.X, box.MinimumW1.Y, box.MinimumW1.Z);
+            Vector3 max = new(box.MaximumW1.X, box.MaximumW1.Y, box.MaximumW1.Z), low = new(float.PositiveInfinity), high = -low;
             for (int corner = 0; corner < 8; corner++)
             {
                 var point = Vector3.Transform(new Vector3((corner & 1) == 0 ? min.X : max.X,
@@ -443,51 +497,63 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
     }
 
     /** Placement resources retain their authored transform and their exact source identity. */
-    private void Placements(uint tag, TagData data, uint bubble, Matrix4x4 parent, int depth)
+    private void Placements(uint tag, byte[] data, uint bubble, Matrix4x4 parent, int depth)
     {
         var ordinal = 0;
-        foreach (var row in data.Rows(8, 0x808099D8, 144))
+        foreach (ref readonly var entry in SceneReads.Rows<SMapPlacements, AuthoredPlacementEntry>(data, 0,
+                     nameof(SMapPlacements.Placements), AuthoredPlacementEntry.Class))
         {
             cancellation.ThrowIfCancellationRequested();
+            var row = TagView.OffsetOf(data, in entry);
             var transform = RowTransform(data, row, parent);
-            var classTag = data.U32(row);
-            var nameHash = data.U32(row + 0x64);
-            authoredPlacements.Add(new PlacementFact(data.U64(row + 0x70), tag, row, classTag,
-                bubble, activeEntryIndex, transform.Translation, data.Q4(row + 0x10), nameHash));
+            var classTag = entry.ClassTag;
+            var nameHash = entry.NameHash;
+            authoredPlacements.Add(new PlacementFact(entry.PlacementIdentity, tag, row, classTag,
+                bubble, activeEntryIndex, transform.Translation, entry.Rotation, nameHash));
             var className = catalog.GetName(classTag);
             var label = className ?? $"Placement {ordinal}";
             var (resource, resourceClass) = PlacementResource(data, row);
-            var occlusion = resourceClass == 0x80806F38 && data.Has(resource, 0x14);
-            var lights = resourceClass == 0x80806F5A && data.Has(resource, 0x14);
-            var cubemap = resourceClass == 0x80806B7F;
-            // The atmosphere loader 0x7FF742EF7B60 copies resource bytes +0x10 to +0xF0.
-            var atmosphere = resourceClass == 0x80807086 && data.Has(resource, 0xF0);
+            var occlusion = resourceClass == SAmbientOcclusionPayload.Class
+                && TagView.FitsThrough<SAmbientOcclusionPayload>(data, resource, nameof(SAmbientOcclusionPayload.OcclusionMap));
+            var lights = resourceClass == SLightsPayload.Class
+                && TagView.FitsThrough<SLightsPayload>(data, resource, nameof(SLightsPayload.LightCollection));
+            var cubemap = resourceClass == UnknownCubemapPayload.Class;
+            var atmosphere = resourceClass == UnknownAtmospherePayload.Class && TagView.Fits<UnknownAtmospherePayload>(data, resource);
             if (atmosphere)
-                scene.Atmospheres.Add(new PlacedAtmosphere(bubble, tag, row, data.Bytes.AsSpan(resource + 0x10, 0xE0).ToArray()));
-            // The time-of-day loader 0x7FF742E05F50 reads resource +0x10, +0x14 and +0x18.
-            var timeOfDay = resourceClass == 0x80806F61 && data.Has(resource, 0x1C);
+                scene.Atmospheres.Add(new PlacedAtmosphere(bubble, tag, row,
+                    data.AsSpan(resource, Unsafe.SizeOf<UnknownAtmospherePayload>()).ToArray()));
+            // The time-of-day loader 0x7FF742E05F50 reads these three fields.
+            var timeOfDay = resourceClass == UnknownTimeOfDayPayload.Class
+                && TagView.FitsThrough<UnknownTimeOfDayPayload>(data, resource, nameof(UnknownTimeOfDayPayload.StartTime));
             if (timeOfDay)
-                scene.TimesOfDay.Add(new PlacedTimeOfDay(bubble, tag, data.U32(resource + 0x10), data.F32(resource + 0x14),
-                    data.F32(resource + 0x18)));
+                scene.TimesOfDay.Add(new PlacedTimeOfDay(bubble, tag,
+                    TagView.Member<UnknownTimeOfDayPayload, uint>(data, resource, nameof(UnknownTimeOfDayPayload.CurveSet)),
+                    TagView.Member<UnknownTimeOfDayPayload, float>(data, resource, nameof(UnknownTimeOfDayPayload.DaySeconds)),
+                    TagView.Member<UnknownTimeOfDayPayload, float>(data, resource, nameof(UnknownTimeOfDayPayload.StartTime))));
             if (occlusion)
             {
-                var map = data.U32(resource + 0x10);
-                if (Class(map) != 0x80807268)
+                var map = TagView.Member<SAmbientOcclusionPayload, uint>(data, resource, nameof(SAmbientOcclusionPayload.OcclusionMap));
+                if (Class(map) != SOcclusionMap.Class)
                     throw new InvalidDataException("Placed AO resource has the wrong map class.");
                 scene.OcclusionOwners.Add(new NativeOcclusionOwner(bubble, tag, row, map));
             }
-            if (VisitsChild(data, resource, resourceClass) && resourceClass == 0x8080714B)
+            if (VisitsChild(data, resource, resourceClass) && resourceClass == STerrainPayload.Class)
             {
-                terrainResource = data.Bytes.AsMemory(resource, 0x20);
-                try { Visit(data.U32(resource + 0x18), bubble, transform, depth + 1); }
+                terrainResource = data.AsMemory(resource, Unsafe.SizeOf<STerrainPayload>());
+                try { Visit(TagView.At<STerrainPayload>(data, resource).Terrain, bubble, transform, depth + 1); }
                 finally { terrainResource = default; }
             }
-            else if (VisitsChild(data, resource, resourceClass) && resourceClass == 0x808071B3)
-                VisitStaticPlacement(tag, row, ordinal, data.U32(resource + 0x10), bubble, transform, depth + 1);
+            else if (VisitsChild(data, resource, resourceClass) && resourceClass == SStaticInstancesPayload.Class)
+                VisitStaticPlacement(tag, row, ordinal,
+                    TagView.Member<SStaticInstancesPayload, uint>(data, resource, nameof(SStaticInstancesPayload.StaticOwner)),
+                    bubble, transform, depth + 1);
             else if (VisitsChild(data, resource, resourceClass))
-                Visit(data.U32(resource + 0x10), bubble, transform, depth + 1);
-            else if (resourceClass == DecoratorResourceClass && data.Has(resource, 0x14)
-                && Class(data.U32(resource + 0x10)) == DecoratorPayloadClass && TryDecorators(data.U32(resource + 0x10), bubble, transform)) { }
+                Visit(PayloadChild(data, resource, resourceClass), bubble, transform, depth + 1);
+            else if (resourceClass == UnknownDecoratorPlacementPayload.Class && TagView.FitsThrough<UnknownDecoratorPlacementPayload>(data, resource,
+                         nameof(UnknownDecoratorPlacementPayload.DecoratorPayload))
+                     && TagView.Member<UnknownDecoratorPlacementPayload, uint>(data, resource,
+                         nameof(UnknownDecoratorPlacementPayload.DecoratorPayload)) is var decorator
+                     && Class(decorator) == DecoratorTags.PayloadClass && TryDecorators(decorator, bubble, transform)) { }
             else
             {
                 if (!occlusion && !lights && !cubemap && !atmosphere && !timeOfDay)
@@ -502,7 +568,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                     NameSourceTag = className != null ? classTag : 0,
                     SourceTag = tag,
                     SourceOffset = row,
-                    PlacementIdentity = data.U64(row + 0x70),
+                    PlacementIdentity = entry.PlacementIdentity,
                     Semantic = occlusion ? "ambient occlusion resource"
                         : lights ? "chunked lights resource" : atmosphere ? "atmosphere resource"
                         : timeOfDay ? "time-of-day resource" : cubemap ? "cubemap resource"
@@ -512,12 +578,13 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                     Layer = SceneLayer.Objects,
                     Position = transform.Translation,
                     Extents = new Vector3(0.25f),
-                    Rotation = data.Q4(row + 0x10),
+                    Rotation = entry.Rotation,
                     Color = new Vector4(0.8f, 0.75f, 0.2f, 1)
                 };
                 scene.Markers.Add(marker);
                 if (lights)
-                    ReadPlacedLights(data.U32(resource + 0x10), marker, resource, transform);
+                    ReadPlacedLights(TagView.Member<SLightsPayload, uint>(data, resource, nameof(SLightsPayload.LightCollection)),
+                        marker, resource, transform);
                 if (cubemap)
                     ReadPlacedCubemap(tag, resource, transform, marker);
                 QueuePlacedClassModels(marker, transform);
@@ -528,11 +595,13 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
     }
 
     /** Spawn positions use the package's world coordinates. */
-    private void SpawnPoints(uint tag, TagData data, uint bubble)
+    private void SpawnPoints(uint tag, byte[] data, uint bubble)
     {
-        foreach (var row in data.Rows(8, 0x80809164, 48))
+        foreach (ref readonly var point in SceneReads.Rows<SSpawnPoints, SSpawnPointRow>(data, 0, nameof(SSpawnPoints.SpawnPoints),
+                     SSpawnPointRow.Class))
         {
-            var hash = data.U32(row + 32);
+            var row = TagView.OffsetOf(data, in point);
+            var hash = point.SpawnNameIdentity;
             var pose = SpawnPose(data, row);
             scene.Markers.Add(new SceneMarker
             {
@@ -550,5 +619,31 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                 Color = new Vector4(0.2f, 1, 0.4f, 1)
             });
         }
+    }
+}
+
+/** Scene array reads with the scene readers' checks and messages. */
+internal static class SceneReads
+{
+    /** @return The rows of the array `member` of the TOwner at `owner`; Rows(tag, field, class) checks them. */
+    public static ReadOnlySpan<TRow> Rows<TOwner, TRow>(ReadOnlySpan<byte> tag, int owner, string member, uint? elementClass)
+        where TOwner : unmanaged where TRow : unmanaged =>
+        Rows<TRow>(tag, owner + TagView.FieldOffset<TOwner>(member), elementClass);
+
+    /**
+     * Rows of the array field at `field`. A zero count with no header is empty; otherwise the count, the
+     * header, the element class and the row extent must all hold.
+     * @param elementClass Null accepts any class.
+     */
+    public static ReadOnlySpan<TRow> Rows<TRow>(ReadOnlySpan<byte> tag, int field, uint? elementClass) where TRow : unmanaged
+    {
+        var array = new TagArray(tag, field);
+        long count = array.Count;
+        if (count == 0 && !array.HasHeader) return [];
+        if (count < 0 || count > TagArray.MaximumReaderRows) throw new InvalidDataException("Array count is out of range.");
+        int stride = Unsafe.SizeOf<TRow>();
+        if (!array.IsWellFormed || elementClass is { } expected && array.ElementClass != expected || !array.RowsFit(stride))
+            throw new InvalidDataException($"Array 0x{field:X} does not match class 0x{elementClass ?? 0:X8}.");
+        return MemoryMarshal.Cast<byte, TRow>(tag.Slice(array.DataOffset, (int)count * stride));
     }
 }

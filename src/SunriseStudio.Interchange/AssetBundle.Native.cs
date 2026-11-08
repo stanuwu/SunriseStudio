@@ -13,7 +13,7 @@ public static partial class AssetBundle
         var queue = new Queue<uint>(seeds.Where(catalog.ContainsTag));
         var seen = new HashSet<uint>(); var output = new List<BundleNativeAsset>();
         var added = options.Project?.AddedAssets.Where(asset => asset.Native?.EntryIndex is not null)
-            .ToDictionary(asset => checked(0x80800000u + ((uint)asset.Native!.PackageId << 13) + (uint)asset.Native.EntryIndex!.Value)) ?? [];
+            .ToDictionary(asset => TagHashes.Make(asset.Native!.PackageId, asset.Native.EntryIndex!.Value)) ?? [];
         while (queue.TryDequeue(out uint tag))
         {
             token.ThrowIfCancellationRequested();

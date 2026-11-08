@@ -3,13 +3,13 @@ using ImGuiNET;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Editor.Creation;
 
 /** A clone of an installed material with its own texture bindings and constants, or edits to the open one. */
 public sealed class MaterialWorkflow : CreationWorkflow
 {
-    private const uint MaterialClass = 0x808071E8;
     private readonly StudioWorkspace workspace;
     private readonly StudioDocument? target;
     private readonly CreationField template, name, package, slots, constants;
@@ -84,7 +84,7 @@ public sealed class MaterialWorkflow : CreationWorkflow
 
     /** A Clone source may be preset to any tag; only an installed material is a valid template. */
     private static bool IsInstalledMaterial(PackageCatalog? catalog, uint tag) =>
-        catalog is not null && catalog.TryGetEntry(tag, out var entry) && entry is { Reference: MaterialClass, Type: 8 or 16 }
+        catalog is not null && catalog.TryGetEntry(tag, out var entry) && entry is { Reference: STechnique.Class, Type: 8 or 16 }
         && catalog.ContainsInstalledPackage(entry.PackageId);
 
     private void DrawSlots()

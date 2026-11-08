@@ -1,6 +1,9 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using SunriseStudio.Packages;
+using SunriseStudio.Packages.Registry;
+using SunriseStudio.Tags.Tft;
+using SunriseStudio.World.Sdk;
 
 namespace SunriseStudio.Projects;
 
@@ -33,9 +36,13 @@ public static partial class ModInstaller
     public static string ModsDirectory(string gameRoot) =>
         Path.Combine(Path.GetFullPath(gameRoot), "bin", "x64", "Sunrise", "mods");
 
-    /** Progress receives each stage name before that stage starts. */
+    /**
+     * Builds the project and installs it in the mods folder.
+     * @param progress Receives each stage name before that stage starts.
+     * @param tagSchema The registry that types references for the reference map; the shipped one when null.
+     */
     public static ModInstallResult BuildAndInstall(StudioProject project, PackageCatalog catalog,
-        IReadOnlyList<ModScriptFile> scripts, Action<string>? progress = null)
+        IReadOnlyList<ModScriptFile> scripts, Action<string>? progress = null, RegistryIndex? tagSchema = null)
     {
         progress?.Invoke("Checking mod details");
         scripts = ProjectScripts(project, scripts);
@@ -44,9 +51,12 @@ public static partial class ModInstaller
         catalog.InvalidateReadCache();
         var (metadata, native) = Check(project, catalog, scripts, sdk);
         if (native) progress?.Invoke("Building packages");
-        var build = native ? project.Build(catalog, invalidate: false) : null;
+        var build = native ? project.Build(catalog, invalidate: false, tagSchema: tagSchema) : null;
         progress?.Invoke("Copying files into the mods folder");
         var staged = Stage(metadata, build, scripts, catalog.GameRoot, catalog.ContainsInstalledPackage, sdk);
+        // Live updates compare their builds with what this install serves.
+        try { (build is null ? new LiveModState() : LiveModState.FromBuild(build, catalog)).Save(staged.StagingDirectory); }
+        catch { TryDelete(staged.StagingDirectory); throw; }
         progress?.Invoke("Replacing the installed mod");
         Swap(staged.StagingDirectory, staged.ModDirectory);
         return new(staged.ModDirectory, staged.PackageFiles, staged.PatchFiles, staged.ScriptFiles, build) { SdkFiles = staged.SdkFiles };
@@ -68,7 +78,9 @@ public static partial class ModInstaller
             .Where(IsStartupPackage).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray();
         if (startup.Length > 0) throw StartupRefusal(startup);
         bool native = project.Changes.Count > 0 || objectTags.Any()
-            || project.AddedAssets.Any(asset => asset.Native is not null);
+            || project.AddedAssets.Any(asset => asset.Native is not null)
+            || Directory.Exists(project.ContentDirectory)
+               && Directory.EnumerateFiles(project.ContentDirectory, "*" + TftNames.FileExtension, SearchOption.AllDirectories).Any();
         if (!native && scripts.Count == 0 && sdk.Count == 0) throw new InvalidOperationException("The project has nothing to install.");
         return (metadata, native);
     }
@@ -97,6 +109,7 @@ public static partial class ModInstaller
         if (plan.Restart is { } restart) throw new InvalidOperationException(restart);
         ApplyUpdate(target, plan, installed.Scripts ?? new Dictionary<string, byte[]>(),
             scripts.Select(file => file.RelativePath), installed.SourceReceiptBytes);
+        WriteReferenceMap(target, FullReferenceMap(build, scripts, sdk));
         return new(metadata.Id, target, plan.Writes.Count, plan.Deletes.Count, build);
     }
 
@@ -135,6 +148,9 @@ public static partial class ModInstaller
         foreach (string folder in new[] { "packages", "patches" }.Select(name => Path.Combine(target, name)).Where(Directory.Exists))
             foreach (string file in UnlinkedFiles(folder))
                 packages[Relative(target, file)] = Hash(file);
+        // The game reads the activity SDK pack at boot, like a package.
+        string sdkPack = Path.Combine(target, ModActivitySdk.FileName);
+        if (File.Exists(sdkPack)) packages[ModActivitySdk.FileName] = Hash(sdkPack);
         string root = Path.Combine(target, "scripts");
         Dictionary<string, byte[]>? scripts = null;
         if (Directory.Exists(root))
@@ -163,9 +179,10 @@ public static partial class ModInstaller
             packages[folder + Path.GetFileName(package.Path)] = package.Sha256;
             if (sidecar is not null) packages[folder + Path.GetFileName(sidecar.Path)] = sidecar.Sha256;
         }
+        if (build?.ActivitySdkPack is { } sdkPack) packages[Path.GetFileName(sdkPack)] = Hash(sdkPack);
         var files = scripts.Count == 0 ? null
             : scripts.ToDictionary(script => script.RelativePath, script => script.Data, StringComparer.OrdinalIgnoreCase);
-        return new(ModManifest.Serialize(metadata, build?.ConfigBindings), packages, files)
+        return new(ModManifest.Serialize(metadata, build?.ConfigBindings, build?.ReferenceMap.Packages), packages, files)
         { Sdk = sdk.Count == 0 ? null : sdk.ToDictionary(file => file.RelativePath,
             file => Convert.ToHexString(SHA256.HashData(file.Data)), StringComparer.OrdinalIgnoreCase) };
     }
@@ -205,7 +222,9 @@ public static partial class ModInstaller
         try
         {
             Directory.CreateDirectory(staging);
-            File.WriteAllBytes(Path.Combine(staging, ModManifest.FileName), ModManifest.Serialize(metadata, build?.ConfigBindings));
+            File.WriteAllBytes(Path.Combine(staging, ModManifest.FileName),
+                ModManifest.Serialize(metadata, build?.ConfigBindings, build?.ReferenceMap.Packages));
+            WriteReferenceMap(staging, FullReferenceMap(build, scripts, sdk));
             foreach (var (package, sidecar) in packages)
             {
                 bool patch = isInstalled(package.PackageId);
@@ -216,6 +235,7 @@ public static partial class ModInstaller
                 if (sidecar is not null) CopyBuilt(sidecar.Path, folder, sidecar.Sha256);
                 if (patch) patches++; else newPackages++;
             }
+            if (build?.ActivitySdkPack is { } sdkPack) File.Copy(sdkPack, Path.Combine(staging, Path.GetFileName(sdkPack)));
             foreach (var script in scripts)
             {
                 string path = Path.Combine(staging, "scripts", script.RelativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -232,6 +252,21 @@ public static partial class ModInstaller
         }
         catch { TryDelete(staging); throw; }
         return new(staging, target, newPackages, patches, scripts.Count, sdk.Count);
+    }
+
+    /** The map a mod ships: the build's rows and every script or SDK literal naming an own tag; null without own packages. */
+    internal static ReferenceMap? FullReferenceMap(ProjectBuildResult? build, IReadOnlyList<ModScriptFile> scripts, IReadOnlyList<ModScriptFile> sdk) =>
+        build is { ReferenceMap.Packages.Count: > 0 }
+            ? ReferenceMapBuilder.WithLua(build.ReferenceMap, scripts.Select(file => ("scripts", file)).Concat(sdk.Select(file => ("sdk", file))))
+            : null;
+
+    /** Writes refmap.bin beside mod.json when its bytes differ, and removes it when the mod has no own packages. */
+    internal static void WriteReferenceMap(string folder, ReferenceMap? map)
+    {
+        string path = Path.Combine(folder, ReferenceMap.FileName);
+        if (map is null) { if (File.Exists(path)) File.Delete(path); return; }
+        byte[] bytes = map.Write();
+        if (!File.Exists(path) || !File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes)) ProjectPaths.AtomicWrite(path, bytes);
     }
 
     /** The previous install is renamed aside and deleted only after the staged folder takes its name. */

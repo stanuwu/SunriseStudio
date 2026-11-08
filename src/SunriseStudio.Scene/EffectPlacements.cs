@@ -1,5 +1,9 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Animation;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -10,11 +14,9 @@ public sealed partial class AssetSceneLoader
     private sealed record EffectRig(IReadOnlyDictionary<uint, IReadOnlyList<AuthoredAttachmentPoint>> Points,
         IReadOnlySet<uint> Conflicts, Matrix4x4[]? Bones, string? Problem);
 
-    // FNV-1 hash of the empty name; a point with it is the entity root.
-    private const uint EmptyNameHash = 0x811C9DC5;
     // A point source pair: the half at +4 names its peer, which holds the point rows at +0x50.
-    private const uint PointSourceClass = 0x80808569;
-    private const uint PointSourcePeerClass = 0x80808568;
+    private const uint PointSourceClass = UnknownDeclaredPointSourcePrimary.Class;
+    private const uint PointSourcePeerClass = UnknownDeclaredPointSourceSecondary.Class;
     // Source flag 0x80 rebuilds a found frame's rotation with X along world up.
     private const byte UpPassFlag = 0x80;
     private EffectReader? effects;
@@ -27,9 +29,9 @@ public sealed partial class AssetSceneLoader
         var rigs = new Dictionary<uint, EffectRig>();
         var notes = new Dictionary<string, int>();
         var triggers = new Dictionary<string, int>();
-        var placements = scene.Markers.Where(m => m.Semantic == "authored placement" && Class(m.SourceTag) == 0x808099D6).ToList();
+        var placements = scene.Markers.Where(m => m.Semantic == "authored placement" && Class(m.SourceTag) == SMapPlacements.Class).ToList();
         // An entity opened on its own is placed at the origin.
-        if (Class(scene.TagHash) == 0x80809C0F)
+        if (Class(scene.TagHash) == SEntity.Class)
             placements.Add(new SceneMarker { Name = Name(scene.TagHash), TagHash = scene.TagHash, SourceTag = scene.TagHash });
         foreach (var placement in placements)
         {
@@ -146,7 +148,8 @@ public sealed partial class AssetSceneLoader
                 note($"Particle location kind {source.Kind} (sub-object 0x{source.SubObject:X2}) not decoded; uses entity root.");
                 return [root];
         }
-        if (source.Point == EmptyNameHash) return [root];
+        // An empty point name is the entity root.
+        if (source.Point == StringHash.Empty) return [root];
         if (source.Kind == 3) note("Particle location kind 3 read as kind 2 (assumed).");
         if (!rigs.TryGetValue(entity, out var rig)) rigs[entity] = rig = ReadEffectRig(entity);
         if (rig.Problem is { } problem) { note(problem); return [root]; }
@@ -184,18 +187,23 @@ public sealed partial class AssetSceneLoader
         var conflicts = new HashSet<uint>();
         try
         {
-            var definition = Read(entity);
-            foreach (var build in definition.Rows(0x10, 0x80809C04, 12))
+            // Only the components field must lie inside the entity tag.
+            var definition = ReadBytes(entity);
+            foreach (ref readonly var build in TagView.Rows(definition, in TagView.At<TagArray<SPatternComponent>>(definition,
+                         TagView.FieldOffset<SEntity>(nameof(SEntity.Components))), SPatternComponent.Class))
             {
-                uint config = definition.U32(build);
-                if (Class(config) != 0x80809C36) continue;
-                var data = Read(config);
-                for (int at = 0; at + 16 <= data.Length; at += 4)
+                uint config = build.Config;
+                if (Class(config) != SEntityConfig.Class) continue;
+                var data = ReadBytes(config);
+                int link = Unsafe.SizeOf<TagOffsetPointer>();
+                for (int at = 0; at + link <= data.Length; at += 4)
                 {
-                    if (data.U32(at) != config || data.U32(at + 4) != PointSourcePeerClass) continue;
-                    ulong peer = data.U64(at + 8);
-                    if (peer > (ulong)(data.Length - 16) || data.U32((int)peer) != config
-                        || data.U32((int)peer + 4) != PointSourceClass || data.U64((int)peer + 8) != (ulong)at) continue;
+                    var owner = TagOffsetPointer.Read(data, at);
+                    if (owner.Tag != config || owner.Word != PointSourcePeerClass) continue;
+                    ulong peer = unchecked((ulong)owner.Offset);
+                    if (peer > (ulong)(data.Length - link)) continue;
+                    var back = TagOffsetPointer.Read(data, (int)peer);
+                    if (back.Tag != config || back.Word != PointSourceClass || unchecked((ulong)back.Offset) != (ulong)at) continue;
                     var set = ReadAttachmentPoints(entity, config, data, at, PointSourceClass, PointSourcePeerClass, "Effect points");
                     foreach (var rows in set.Points.GroupBy(point => point.NameHash))
                     {
@@ -231,16 +239,20 @@ public sealed partial class AssetSceneLoader
         Matrix4x4.Decompose(transform, out _, out var rotation, out var position)
             ? (position, rotation) : (transform.Translation, Quaternion.Identity);
 
-    /** The placement row's resource link at +0x78 selects a class-0x80806CBF flare resource. */
+    /** The placement row's resource link selects a class-0x80806CBF flare resource. */
     private uint? FlareTag(SceneMarker placement)
     {
-        if (Class(placement.SourceTag) != 0x808099D6) return null;
-        var data = Read(placement.SourceTag);
-        int field = placement.SourceOffset + 0x78;
-        if (!data.Has(field, 8) || data.I64(field) == 0) return null;
-        int resource = data.Relative(field);
-        if (!data.Has(resource - 4, 0x18) || data.U32(resource - 4) != EffectReader.FlareResourceClass) return null;
-        uint flare = data.U32(resource + 0x10);
+        if (Class(placement.SourceTag) != SMapPlacements.Class) return null;
+        // Only the link and the flare field must lie inside the tag.
+        var data = ReadBytes(placement.SourceTag);
+        int field = placement.SourceOffset + TagView.FieldOffset<AuthoredPlacementEntry>(nameof(AuthoredPlacementEntry.Payload));
+        if (!TagView.Fits<RelativePointer<Unknown>>(data, field)) return null;
+        ref readonly var link = ref TagView.At<RelativePointer<Unknown>>(data, field);
+        if (TagView.TargetOffset(data, in link) is not { } resource) return null;
+        if (resource < TagView.ClassWordSize
+            || !TagView.FitsThrough<SLensFlarePayload>(data, resource, nameof(SLensFlarePayload.LensFlare))
+            || TagView.ClassAt(data, resource) != EffectReader.FlareResourceClass) return null;
+        uint flare = TagView.At<uint>(data, resource + TagView.FieldOffset<SLensFlarePayload>(nameof(SLensFlarePayload.LensFlare)));
         return Class(flare) == EffectReader.FlareClass ? flare : null;
     }
 

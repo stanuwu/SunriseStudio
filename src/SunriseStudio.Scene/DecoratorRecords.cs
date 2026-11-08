@@ -1,6 +1,8 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -11,13 +13,14 @@ namespace SunriseStudio.Scene;
 public sealed record DecoratorQuantization(Vector4 Half, Vector4 Middle,
     Vector3 XScale, Vector3 XOffset, Vector3 ZScale, Vector3 ZOffset)
 {
-    public const int Size = 0x60;
+    public static readonly int Size = Unsafe.SizeOf<SDecoratorQuantization>();
 
     public static DecoratorQuantization Read(ReadOnlySpan<byte> record)
     {
         if (record.Length < Size) throw new InvalidDataException("Decorator quantization record is truncated.");
-        var value = new DecoratorQuantization(Row(record, 0), Row(record, 1), Xyz(Row(record, 2)), Xyz(Row(record, 3)),
-            Xyz(Row(record, 4)), Xyz(Row(record, 5)));
+        ref readonly var rows = ref TagView.At<SDecoratorQuantization>(record);
+        var value = new DecoratorQuantization(rows.HalfRange, rows.Middle, Xyz(rows.XAxisScale), Xyz(rows.XAxisOffset),
+            rows.ZAxisScale, rows.ZAxisOffset);
         if (!value.Finite) throw new InvalidDataException("Decorator quantization record is not finite.");
         return value;
     }
@@ -26,24 +29,16 @@ public sealed record DecoratorQuantization(Vector4 Half, Vector4 Middle,
     public void Write(Span<byte> record)
     {
         if (record.Length < Size) throw new InvalidDataException("Decorator quantization record is truncated.");
-        Put(record, 0, Half, 4); Put(record, 1, Middle, 4);
-        Put(record, 2, new(XScale, 0), 3); Put(record, 3, new(XOffset, 0), 3);
-        Put(record, 4, new(ZScale, 0), 3); Put(record, 5, new(ZOffset, 0), 3);
-    }
-
-    private static Vector4 Row(ReadOnlySpan<byte> record, int index) => new(F32(record, index * 16),
-        F32(record, index * 16 + 4), F32(record, index * 16 + 8), F32(record, index * 16 + 12));
-
-    private static void Put(Span<byte> record, int index, Vector4 value, int lanes)
-    {
-        for (int lane = 0; lane < lanes; lane++)
-            BinaryPrimitives.WriteSingleLittleEndian(record[(index * 16 + lane * 4)..], value[lane]);
+        ref var rows = ref TagView.Edit<SDecoratorQuantization>(record);
+        rows.HalfRange = Half; rows.Middle = Middle;
+        (rows.XAxisScale.X, rows.XAxisScale.Y, rows.XAxisScale.Z) = (XScale.X, XScale.Y, XScale.Z);
+        (rows.XAxisOffset.X, rows.XAxisOffset.Y, rows.XAxisOffset.Z) = (XOffset.X, XOffset.Y, XOffset.Z);
+        rows.ZAxisScale = ZScale; rows.ZAxisOffset = ZOffset;
     }
 
     private bool Finite => new[] { Half, Middle }.All(v => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z) && float.IsFinite(v.W))
         && new[] { XScale, XOffset, ZScale, ZOffset }.All(v => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z));
 
-    private static float F32(ReadOnlySpan<byte> bytes, int offset) => BinaryPrimitives.ReadSingleLittleEndian(bytes[offset..]);
     private static Vector3 Xyz(Vector4 value) => new(value.X, value.Y, value.Z);
 }
 
@@ -81,52 +76,52 @@ public readonly record struct DecoratorInstance(Vector3 Position, float Scale, V
 public sealed record DecoratorTags(uint Payload, uint Header, uint Quantization, uint BufferHeader, uint Buffer,
     uint Block, uint Cells)
 {
-    public const uint PayloadClass = 0x80807164, HeaderClass = 0x80807170, QuantizationClass = 0x8080716B,
-        BlockClass = 0x80807173, RecordClass = 0x80807175, CellsClass = 0x80809671;
+    public const uint PayloadClass = SDecoratorPayload.Class, HeaderClass = SDecoratorInstanceHeader.Class, QuantizationClass = SDecoratorQuantization.Class,
+        BlockClass = SDecoratorBlock.Class, RecordClass = SDecoratorRecord.Class, CellsClass = SInstanceBoundsTable.Class;
 
-    /**
-     * Payload +0x48 is the header and +0x4C the cells.
-     * Header +0x14 is the quantization, +0x18 the vertex buffer header and +0x1C the block.
-     */
+    /** The payload names the header and the cells; the header names the quantization, vertex buffer header and block. */
     public static DecoratorTags Read(PackageCatalog catalog, uint payload)
     {
         uint Checked(uint tag, uint expected) => catalog.TryGetEntry(tag, out var entry) && entry.Reference == expected ? tag
             : throw new InvalidDataException($"Tag 0x{tag:X8} is not class 0x{expected:X8}.");
         byte[] data = catalog.Read(Checked(payload, PayloadClass));
-        if (data.Length < 0x90) throw new InvalidDataException("Decorator payload is truncated.");
-        uint header = Checked(BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0x48)), HeaderClass);
-        uint cells = Checked(BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0x4C)), CellsClass);
+        // The payload must reach the end of its bounds; the fields read sit before them.
+        if (!TagView.FitsThrough<SDecoratorPayload>(data, 0, nameof(SDecoratorPayload.BoundsMaximumW1)))
+            throw new InvalidDataException("Decorator payload is truncated.");
+        uint header = Checked(TagView.At<uint>(data, TagView.FieldOffset<SDecoratorPayload>(nameof(SDecoratorPayload.InstanceHeader))),
+            HeaderClass);
+        uint cells = Checked(TagView.At<uint>(data, TagView.FieldOffset<SDecoratorPayload>(nameof(SDecoratorPayload.Cells))),
+            CellsClass);
         byte[] fields = catalog.Read(header);
-        if (fields.Length < 0x20) throw new InvalidDataException("Decorator instance header is truncated.");
-        uint bufferHeader = BinaryPrimitives.ReadUInt32LittleEndian(fields.AsSpan(0x18));
+        if (!TagView.Fits<SDecoratorInstanceHeader>(fields, 0)) throw new InvalidDataException("Decorator instance header is truncated.");
+        ref readonly var instances = ref TagView.At<SDecoratorInstanceHeader>(fields);
+        uint bufferHeader = instances.VertexBufferHeader;
         if (!catalog.TryGetEntry(bufferHeader, out var buffer) || buffer is not { Type: 32, SubType: 4 }
             || !catalog.TryGetEntry(buffer.Reference, out _))
             throw new InvalidDataException("Decorator vertex buffer header is missing.");
-        return new(payload, header, Checked(BinaryPrimitives.ReadUInt32LittleEndian(fields.AsSpan(0x14)), QuantizationClass),
-            bufferHeader, buffer.Reference, Checked(BinaryPrimitives.ReadUInt32LittleEndian(fields.AsSpan(0x1C)), BlockClass), cells);
+        return new(payload, header, Checked(instances.Quantization, QuantizationClass),
+            bufferHeader, buffer.Reference, Checked(instances.InstanceBlock, BlockClass), cells);
     }
 }
 
 /** The 16-byte instance record of a class-0x80807173 block and of its vertex buffer. */
 public static class DecoratorRecords
 {
-    public const int Size = 16;
+    public static readonly int Size = Unsafe.SizeOf<SDecoratorRecord>();
 
-    /** Bytes 0-7 snorm16 position and scale, 8-10 unorm8 X axis, 12-14 unorm8 Z axis. */
+    /** Snorm16 position and scale, then unorm8 X and Z axes. */
     public static DecoratorInstance Decode(ReadOnlySpan<byte> record, DecoratorQuantization quant)
     {
         if (record.Length < Size) throw new InvalidDataException("Decorator record is truncated.");
-        var packed = new Vector4(Snorm(record, 0), Snorm(record, 2), Snorm(record, 4), Snorm(record, 6));
+        ref readonly var row = ref TagView.At<SDecoratorRecord>(record);
+        var packed = new Vector4(GpuBufferData.Snorm(row.PositionXSnorm), GpuBufferData.Snorm(row.PositionYSnorm), GpuBufferData.Snorm(row.PositionZSnorm),
+            GpuBufferData.Snorm(row.ScaleSnorm));
         var value = quant.Middle + packed * quant.Half;
         return new(new(value.X, value.Y, value.Z), value.W,
-            quant.XOffset + Unorm(record, 8) * quant.XScale, quant.ZOffset + Unorm(record, 12) * quant.ZScale);
+            quant.XOffset + Unorm(row.XAxisUnorm8) * quant.XScale, quant.ZOffset + Unorm(row.ZAxisUnorm8) * quant.ZScale);
     }
 
-    internal static float Snorm(ReadOnlySpan<byte> record, int offset) =>
-        Math.Max(BinaryPrimitives.ReadInt16LittleEndian(record[offset..]) / 32767f, -1f);
-
-    private static Vector3 Unorm(ReadOnlySpan<byte> record, int offset) =>
-        new Vector3(record[offset], record[offset + 1], record[offset + 2]) / 255f;
+    private static Vector3 Unorm(Inline3<byte> axis) => new Vector3(axis[0], axis[1], axis[2]) / 255f;
 
     /**
      * The block copy truncates toward zero and the vertex buffer copy rounds to nearest, as installed
@@ -145,20 +140,32 @@ public static class DecoratorRecords
             if (!Ratio(value.XAxis[lane] - quant.XOffset[lane], quant.XScale[lane], 0, out unorm[lane])) return false;
             if (!Ratio(value.ZAxis[lane] - quant.ZOffset[lane], quant.ZScale[lane], 0, out unorm[lane + 3])) return false;
         }
-        for (int lane = 0; lane < 4; lane++)
+        ref var blockRow = ref TagView.Edit<SDecoratorRecord>(block);
+        ref var bufferRow = ref TagView.Edit<SDecoratorRecord>(buffer);
+        (blockRow.PositionXSnorm, bufferRow.PositionXSnorm) = Snorm16(snorm[0]);
+        (blockRow.PositionYSnorm, bufferRow.PositionYSnorm) = Snorm16(snorm[1]);
+        (blockRow.PositionZSnorm, bufferRow.PositionZSnorm) = Snorm16(snorm[2]);
+        (blockRow.ScaleSnorm, bufferRow.ScaleSnorm) = Snorm16(snorm[3]);
+        for (int lane = 0; lane < 3; lane++)
         {
-            float scaled = snorm[lane] * 32767;
-            BinaryPrimitives.WriteInt16LittleEndian(block[(lane * 2)..], (short)MathF.Truncate(scaled));
-            BinaryPrimitives.WriteInt16LittleEndian(buffer[(lane * 2)..], (short)MathF.Round(scaled, MidpointRounding.AwayFromZero));
-        }
-        for (int lane = 0; lane < 6; lane++)
-        {
-            int at = lane < 3 ? 8 + lane : 12 + lane - 3;
-            float scaled = unorm[lane] * 255;
-            block[at] = (byte)MathF.Truncate(scaled);
-            buffer[at] = (byte)MathF.Round(scaled, MidpointRounding.AwayFromZero);
+            (blockRow.XAxisUnorm8[lane], bufferRow.XAxisUnorm8[lane]) = Unorm8(unorm[lane]);
+            (blockRow.ZAxisUnorm8[lane], bufferRow.ZAxisUnorm8[lane]) = Unorm8(unorm[lane + 3]);
         }
         return true;
+    }
+
+    /** @return The block value, truncated, and the vertex buffer value, rounded. */
+    private static (short Block, short Buffer) Snorm16(float ratio)
+    {
+        float scaled = ratio * 32767;
+        return ((short)MathF.Truncate(scaled), (short)MathF.Round(scaled, MidpointRounding.AwayFromZero));
+    }
+
+    /** @return The block value, truncated, and the vertex buffer value, rounded. */
+    private static (byte Block, byte Buffer) Unorm8(float ratio)
+    {
+        float scaled = ratio * 255;
+        return ((byte)MathF.Truncate(scaled), (byte)MathF.Round(scaled, MidpointRounding.AwayFromZero));
     }
 
     /** The narrowest rows that hold every value; lanes with one value keep a zero scale. */

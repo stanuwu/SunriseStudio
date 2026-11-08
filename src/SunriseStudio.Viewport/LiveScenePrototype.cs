@@ -1,3 +1,4 @@
+using SunriseStudio.Tags.Generated;
 using System.Numerics;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
@@ -8,7 +9,7 @@ public sealed record LiveSceneInstance(string Key, uint ClassTag, Matrix4x4 Tran
 public sealed record LiveScenePrototype(uint ClassTag, SceneDocument Scene, NativeScenePlan? NativePlan,
     IReadOnlyList<string> Diagnostics)
 {
-    public const uint EntityClass = 0x80809C0F, EntityModel = 0x808073A5;
+    public const uint EntityClass = SEntity.Class, EntityModel = SEntityModel.Class;
 
     /**
      * Loads rest geometry for an entity class, or for one entity model the game was seen drawing.

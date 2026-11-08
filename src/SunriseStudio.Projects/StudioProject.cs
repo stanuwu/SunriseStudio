@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using SunriseStudio.Packages;
+using SunriseStudio.Packages.Registry;
+using SunriseStudio.Tags;
 
 namespace SunriseStudio.Projects;
 
@@ -343,7 +345,7 @@ public sealed partial class StudioProject
         if (!saved && !PackageWriter.IsNewPackageId(metadata.PackageId))
             throw new InvalidDataException($"New packages need an id from {PackageWriter.NewPackageIdRange}.");
         if (metadata.PackageId < PackageWriter.FirstNewPackageId
-            || metadata.EntryIndex is null or < 0 or >= 8192 || metadata.Name?.Contains('\0') == true)
+            || metadata.EntryIndex is null or < 0 or >= TagHashes.EntriesPerPackage || metadata.Name?.Contains('\0') == true)
             throw new InvalidDataException("Invalid native asset metadata.");
     }
 
@@ -379,6 +381,64 @@ public sealed partial class StudioProject
             StringComparison.OrdinalIgnoreCase);
     }
 
-    public ProjectBuildResult Build(PackageCatalog catalog, string? outputDirectory = null, bool invalidate = true) =>
-        ProjectBuilder.Build(this, catalog, outputDirectory, invalidate);
+    /** @param tagSchema The registry `.tft` files compile against; the shipped one when null. */
+    public ProjectBuildResult Build(PackageCatalog catalog, string? outputDirectory = null, bool invalidate = true,
+        RegistryIndex? tagSchema = null) =>
+        ProjectBuilder.Build(this, catalog, outputDirectory, invalidate, tagSchema);
+
+    public const string ContentFolder = "content";
+    public const string AllocationFileName = "allocation.json";
+
+    /** New and cloned tags live here as `<path>/<name>.<tag_type>.tft`; edits to installed tags stay deltas. */
+    public string ContentDirectory => Path.Combine(DirectoryPath, ContentFolder);
+
+    /** @return The saved allocation table, or null before the project has one. */
+    public TagAllocator? ReadTagAllocator()
+    {
+        string path = Path.Combine(DirectoryPath, AllocationFileName);
+        return File.Exists(path) ? TagAllocator.Parse(File.ReadAllBytes(path)) : null;
+    }
+
+    /** @return The allocation table; without allocation.json the project starts in its preferred package. */
+    public TagAllocator OpenTagAllocator(Func<ushort, bool> taken)
+    {
+        string path = Path.Combine(DirectoryPath, AllocationFileName);
+        return File.Exists(path) ? TagAllocator.Parse(File.ReadAllBytes(path))
+            : new TagAllocator([TagAllocator.PreferredPackage(Mod?.Id ?? Name, taken)]);
+    }
+
+    /** Writes allocation.json when missing; a project with object edits keeps its old generated seed. */
+    public TagAllocator EnsureTagAllocator(PackageCatalog catalog)
+    {
+        var allocator = OpenTagAllocator(id => Taken(catalog, id));
+        if (!File.Exists(Path.Combine(DirectoryPath, AllocationFileName)))
+        {
+            allocator.IdentityGeneratedPackages = ObjectEdits.Count != 0;
+            SaveTagAllocator(allocator);
+        }
+        return allocator;
+    }
+
+    /** @return True for an installed package or one this project's added assets use. */
+    public bool Taken(PackageCatalog catalog, ushort id) =>
+        catalog.ContainsInstalledPackage(id) || AddedAssets.Any(asset => asset.Native?.PackageId == id);
+
+    /**
+     * The package a new added asset goes to: the one the last added asset used, else the first id of
+     * the mod's probe that is free and outside allocation.json, whose entries .tft tags take.
+     */
+    public ushort DefaultAssetPackage(PackageCatalog catalog)
+    {
+        if (AddedAssets.LastOrDefault(asset => asset.Native is not null)?.Native is { } last) return last.PackageId;
+        var allocator = OpenTagAllocator(id => Taken(catalog, id));
+        return TagAllocator.PreferredPackage(Mod?.Id ?? Name, id => Taken(catalog, id) || allocator.Packages.Contains(id));
+    }
+
+    /** Writes allocation.json when it changed. */
+    public void SaveTagAllocator(TagAllocator allocator)
+    {
+        string path = Path.Combine(DirectoryPath, AllocationFileName);
+        byte[] bytes = allocator.ToJson();
+        if (!File.Exists(path) || !File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes)) ProjectPaths.AtomicWrite(path, bytes);
+    }
 }

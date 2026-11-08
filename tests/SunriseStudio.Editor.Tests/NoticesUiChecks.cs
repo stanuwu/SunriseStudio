@@ -12,7 +12,7 @@ internal static class NoticesUiChecks
         string install = Path.Combine(root, "notices-install");
         Directory.CreateDirectory(Path.Combine(install, "packages"));
         PackageWriter.WriteNew(Path.Combine(install, "packages", "w64_notices_0100_0.pkg"), 0x100,
-            [new(0x80807DAE, 0x1000, new byte[32], "Notices bubble")]);
+            [new(0x80807DAE, 0x1000, new byte[80], "Notices bubble")]);
         string settings = Path.Combine(root, "notices-settings.json");
         new StudioSettings().Save(settings);
         capture ??= Path.Combine(root, "notices.png");

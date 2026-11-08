@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -166,7 +165,7 @@ public static class WeaponOriginalAssetImporter
             var donor = template.Part!;
             var stream = donor.Mesh.Native!.VertexStreams[0];
             short palette = donor.Mesh.SourceVertexIndices.Select(vertex =>
-                BinaryPrimitives.ReadInt16LittleEndian(stream.Data.AsSpan(checked((int)vertex * stream.Stride + 6))))
+                VertexStreamCodec.ReadPaletteIndex(stream.Data, stream.Stride, vertex))
                 .GroupBy(value => value).OrderByDescending(group => group.Count()).First().Key;
             var primitives = meshes.Select((mesh, index) => (Mesh: mesh, Index: index))
                 .Where(value => part.Meshes.Contains(value.Mesh.Name)).Select(value =>

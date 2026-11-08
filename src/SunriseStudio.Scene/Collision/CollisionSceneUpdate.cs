@@ -1,5 +1,6 @@
 using System.Numerics;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Scene.Collision;
 
@@ -71,7 +72,7 @@ public static class CollisionSceneUpdate
         // Physics and inline triggers follow their class and placement together.
         if (next.Entities.Any(entity => (entity.Source == CollisionSource.EntityPhysics || entity.InlineTrigger) && entity.ListTag == tag)
             || next.ListRows.TryGetValue(tag, out var inline)
-            && inline.Any(row => row.Marker == CollisionSceneLoader.ShapeArrayMarker && row.Tag == uint.MaxValue))
+            && inline.Any(row => row.Marker == TriggerShapeReference.Class && row.Tag == uint.MaxValue))
             return $"Object list {tag:X8} places entity physics or an inline trigger.";
         // An object list may change rows the layer does not read.
         if (next.ListRows.TryGetValue(tag, out var rows))

@@ -1,5 +1,8 @@
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -104,20 +107,25 @@ public sealed partial class InvestmentCatalog
         uint[] banks = [];
         if (catalog.ContainsTag(sources.StringBanks))
         {
-            var data = new TagReader(catalog.Read(sources.StringBanks));
-            var array = data.Array(8, stride: 8);
-            banks = Enumerable.Range(0, array.Count).Select(index => data.U32(array.Data + index * 8 + 4)).ToArray();
+            byte[] data = catalog.Read(sources.StringBanks);
+            var array = TagArray.Checked(data, TagView.FieldOffset<StringBankIndex>("Table"), stride: Unsafe.SizeOf<StringBankRow>());
+            banks = new uint[array.Count];
+            for (int index = 0; index < array.Count; index++)
+                banks[index] = TagView.At<StringBankRow>(data, array.Data + index * Unsafe.SizeOf<StringBankRow>()).Container;
         }
         strings ??= LocalizedStrings.LoadBanks(catalog, banks, token);
         diagnostics.AddRange(strings.Diagnostics);
-        string Text(TagReader data, int offset)
-        {
-            if (!data.Has(offset, 8)) return "";
-            uint bank = data.U32(offset), hash = data.U32(offset + 4);
-            return bank < banks.Length ? strings.Get(banks[bank], hash)?.Trim() ?? "" : "";
-        }
-        var definitions = ReadIndex(catalog, sources.Items);
-        var displays = ReadIndex(catalog, sources.Displays);
+        string Pair(uint bank, uint hash) => bank < banks.Length ? strings.Get(banks[bank], hash)?.Trim() ?? "" : "";
+        // A display shorter than a line's hash word has no text for that line.
+        string Line(ReadOnlySpan<byte> display, string bank, string hash) =>
+            TagView.FitsThrough<ItemDisplayStrings>(display, 0, hash)
+                ? Pair(TagView.At<ushort>(display, TagView.FieldOffset<ItemDisplayStrings>(bank)),
+                    TagView.At<uint>(display, TagView.FieldOffset<ItemDisplayStrings>(hash)))
+                : "";
+        var definitions = ReadIndex<ItemIndexTable, ItemIndexRow>(catalog.Read(sources.Items),
+            static row => (row.ItemHash, row.ItemDefinition));
+        var displays = ReadIndex<C80805cdb, ItemStringsIndexRow>(catalog.Read(sources.Displays),
+            static row => (row.ItemHash, row.ItemDisplay));
         var items = new InvestmentItem[definitions.Length];
         for (int i = 0; i < definitions.Length; i++)
         {
@@ -128,14 +136,20 @@ public sealed partial class InvestmentCatalog
             try
             {
                 RequireClass(catalog, definition.Tag, ItemClass);
-                var data = new TagReader(catalog.Read(definition.Tag));
-                if (!data.Has(180, 8)) throw new InvalidDataException("Item fixed fields are truncated.");
-                maximum = data.I32(180); bucket = data.U8(184); tier = data.U8(186); instanced = data.U8(187) != 0;
+                byte[] data = catalog.Read(definition.Tag);
+                if (!TagView.FitsThrough<ItemDefinition>(data, 0, "InventoryItemBlock.Instanced"))
+                    throw new InvalidDataException("Item fixed fields are truncated.");
+                maximum = TagView.At<int>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.MaximumStack"));
+                bucket = TagView.At<byte>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.InventoryBucket"));
+                tier = TagView.At<byte>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.Tier"));
+                instanced = TagView.At<byte>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.Instanced")) != 0;
                 if (displayTag != 0)
                 {
                     RequireClass(catalog, displayTag, DisplayClass);
-                    var display = new TagReader(catalog.Read(displayTag));
-                    name = Text(display, 132); type = Text(display, 144); description = Text(display, 152);
+                    byte[] display = catalog.Read(displayTag);
+                    name = Line(display, "DisplayProperties.NameBank", "DisplayProperties.NameHash");
+                    type = Line(display, "DisplayProperties.TypeBank", "DisplayProperties.TypeHash");
+                    description = Line(display, "DisplayProperties.DescriptionBank", "DisplayProperties.DescriptionHash");
                 }
             }
             catch (Exception error) when (Recoverable(error)) { diagnostics.Add($"Item {i}: {error.Message}"); }
@@ -147,13 +161,24 @@ public sealed partial class InvestmentCatalog
         if (catalog.ContainsTag(sources.StatNames))
             try
             {
-                var data = new TagReader(catalog.Read(sources.StatNames)); var array = data.Array(8, stride: 36);
+                byte[] data = catalog.Read(sources.StatNames);
+                int stride = Unsafe.SizeOf<StatDisplayRow>();
+                var array = TagArray.Checked(data, TagView.FieldOffset<C80805cc5>("Table"), stride: stride);
                 for (int i = 0; i < array.Count && i < 256; i++)
-                { string name = Text(data, array.Data + i * 36 + 4); stats[(byte)i] = name.Length != 0 ? name : $"Stat {i}"; }
+                {
+                    ref readonly var row = ref TagView.At<StatDisplayRow>(data, array.Data + i * stride);
+                    string name = Pair(row.NameBank, row.NameHash);
+                    stats[(byte)i] = name.Length != 0 ? name : $"Stat {i}";
+                }
             }
             catch (Exception error) when (Recoverable(error)) { diagnostics.Add("Stat names: " + error.Message); }
-        var vendorRows = ReadIndex(catalog, sources.Vendors, optional: true);
-        var vendorDisplays = ReadIndex(catalog, sources.VendorDisplays, optional: true);
+        (uint Hash, uint Tag)[] vendorRows = [], vendorDisplays = [];
+        if (catalog.ContainsTag(sources.Vendors))
+            vendorRows = ReadIndex<SVendorIndex, VendorIndexRow>(catalog.Read(sources.Vendors),
+                static row => (row.VendorHash, row.DefinitionTag));
+        if (catalog.ContainsTag(sources.VendorDisplays))
+            vendorDisplays = ReadIndex<SVendorDisplayIndex, C808058ec>(catalog.Read(sources.VendorDisplays),
+                static row => (row.Unk0, row.Unk10));
         var vendors = new InvestmentVendor[vendorRows.Length];
         for (int i = 0; i < vendors.Length; i++)
         {
@@ -165,11 +190,13 @@ public sealed partial class InvestmentCatalog
                 try
                 {
                     RequireClass(catalog, display, VendorDisplayClass);
-                    var data = new TagReader(catalog.Read(display));
-                    if (!data.Has(64, 8)) throw new InvalidDataException("Vendor display name is truncated.");
-                    ushort bank = data.U16(64);
+                    byte[] data = catalog.Read(display);
+                    if (!TagView.FitsThrough<SInvestmentVendorDisplay>(data, 0, "DisplayProperties.NameHash"))
+                        throw new InvalidDataException("Vendor display name is truncated.");
+                    ushort bank = TagView.At<ushort>(data, TagView.FieldOffset<SInvestmentVendorDisplay>("DisplayProperties.NameBank"));
+                    uint hash = TagView.At<uint>(data, TagView.FieldOffset<SInvestmentVendorDisplay>("DisplayProperties.NameHash"));
                     string text = bank <= short.MaxValue && bank < banks.Length
-                        ? strings.Get(banks[bank], data.U32(68))?.Trim() ?? "" : "";
+                        ? strings.Get(banks[bank], hash)?.Trim() ?? "" : "";
                     if (text.Length != 0)
                     { name = text.Split('\n')[0]; labelSource = "Authored vendor display name"; }
                 }
@@ -181,8 +208,7 @@ public sealed partial class InvestmentCatalog
             try
             {
                 RequireClass(catalog, sources.Perks, SandboxPerkDisplays.TableClass);
-                string Pair(uint bank, uint hash) => bank < banks.Length ? strings.Get(banks[bank], hash)?.Trim() ?? "" : "";
-                perks = SandboxPerkDisplays.Read(catalog, sources.Perks).Select(row => new InvestmentPerkDefinition(
+                perks =SandboxPerkDisplays.Read(catalog, sources.Perks).Select(row => new InvestmentPerkDefinition(
                     row.Index, row.Hash, Pair(row.NameBank, row.NameHash), Pair(row.DescriptionBank, row.DescriptionHash), row.IconIndex)).ToArray();
                 if (perks.Length > ushort.MaxValue) throw new InvalidDataException("Sandbox perk index exceeds its native range.");
             }
@@ -190,14 +216,20 @@ public sealed partial class InvestmentCatalog
         return new(catalog, strings, banks, items, vendors, stats, diagnostics.ToArray(), sources, perks);
     }
 
-    /** The row index is the native identity; missing rows never shift later indices. */
-    private static (uint Hash, uint Tag)[] ReadIndex(PackageCatalog catalog, uint tag, bool optional = false)
+    /**
+     * The row index is the native identity; missing rows never shift later indices.
+     * @tparam TTable The index table's view; its Table member is the row array.
+     * @param row Picks the definition hash and the target tag from one row.
+     */
+    private static (uint Hash, uint Tag)[] ReadIndex<TTable, TRow>(ReadOnlySpan<byte> tag, Func<TRow, (uint Hash, uint Tag)> row)
+        where TTable : unmanaged where TRow : unmanaged
     {
-        if (optional && !catalog.ContainsTag(tag)) return [];
-        var data = new TagReader(catalog.Read(tag)); var array = data.Array(8, stride: 24);
+        var array = TagArray.Checked(tag, TagView.FieldOffset<TTable>("Table"), stride: Unsafe.SizeOf<TRow>());
         if (array.Count > ushort.MaxValue) throw new InvalidDataException("Investment index exceeds its native range.");
-        return Enumerable.Range(0, array.Count).Select(index =>
-        { int p = array.Data + index * 24; return (data.U32(p), data.U32(p + 16)); }).ToArray();
+        var result = new (uint Hash, uint Tag)[array.Count];
+        for (int index = 0; index < array.Count; index++)
+            result[index] = row(TagView.At<TRow>(tag, array.Data + index * Unsafe.SizeOf<TRow>()));
+        return result;
     }
 
     private static void RequireClass(PackageCatalog catalog, uint tag, uint expected)

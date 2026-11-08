@@ -1,8 +1,11 @@
 using System.Buffers.Binary;
-using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -12,22 +15,19 @@ public sealed record PreparedWeaponArtEntity(uint EntityTag, uint ConfigTag,
 /** Art roots retain their external frame bindings while their model component is cloned. */
 public static class WeaponAssetEntityCompiler
 {
-    private sealed record Profile(uint Config, uint Model, string RootHash, string ConfigHash);
+    private sealed record Profile(uint Config, uint Model);
     private static readonly IReadOnlyDictionary<uint, Profile> Profiles = new Dictionary<uint, Profile>
     {
-        [0x81A6B357] = new(0x81A6B355, 0x81A6B350,
-            "36D53E070E3D2C451C8109EC41EFF3EDF517E24E7D8E451CADE9A64A5FBFB8AB",
-            "64F7F4A72ED5850E77C0434AD3DA95BDEE4D05E0699BDB25BB707F43A63B2A74"),
-        [0x81A6B3A5] = new(0x81A6B3A4, 0x81A6B39F,
-            "C69DF1565D8045C9748A30812DB3766773935A79727A1E1F470999FABB9D230C",
-            "1EB2ADBC0170B134AFCB5116364FA974B933D2E9751315FB32E3754573F2C50C"),
-        [0x81A6B3EC] = new(0x81A6B3EB, 0x81A6B3E7,
-            "0175E4AF5D8E98B70463A0FEA9157ECA8EE5B0F34E861633D5052E7D088E8224",
-            "CAD72E7C0D45A74C65279B01EB504EF947E009CB40D014BB557597711CEDA9E8"),
-        [0x81A6B42E] = new(0x81528E8A, 0x81528E89,
-            "637C2EA51AED87FBEB05700F08667E5A4A109494C76A5220D910F182DF579C62",
-            "D16F832B7DE58082B4423259A74DBDE1A4E100C5ED5CA59464281EEFA22B90EB")
+        [0x81A6B357] = new(0x81A6B355, 0x81A6B350),
+        [0x81A6B3A5] = new(0x81A6B3A4, 0x81A6B39F),
+        [0x81A6B3EC] = new(0x81A6B3EB, 0x81A6B3E7),
+        [0x81A6B42E] = new(0x81528E8A, 0x81528E89)
     };
+    // The members of each model component that Prepare reads or writes.
+    private static readonly string[] PrimaryMembers = ["OwnerPairConfig", "H918e2747.OwnerPair0x80809bd8",
+        "HCa95f655.OwnerPair0x808072cb", "HF5b4dbc0.OwnerPair0x808072c0", "HF75d2aff.OwnerPair0x80807314", "HCa95f655.Channels"];
+    private static readonly string[] ResourceMembers = ["Model", "OwnerConfig", "H918e2747.OwnerPair0x80809bd9",
+        "HCa95f655.OwnerPair0x808072c7", "HF5b4dbc0.OwnerPair0x808072c1", "HF75d2aff.OwnerPair0x80807315", "HCa95f655.Channels"];
 
     public static bool Supports(IReadOnlyList<WeaponArtVariant> variants)
     {
@@ -47,28 +47,38 @@ public static class WeaponAssetEntityCompiler
         if (!PackageWriter.IsNewPackageId(packageId) || catalog.ContainsInstalledPackage(packageId)
             || firstEntry < 0 || firstEntry > 8190)
             throw new InvalidDataException("Weapon art creation needs two unused package entries.");
-        uint Tag(int index) => checked(0x80800000u + ((uint)packageId << 13) + (uint)(firstEntry + index));
+        uint Tag(int index) => TagHashes.Make(packageId, firstEntry + index);
         if (catalog.ContainsTag(Tag(0)) || catalog.ContainsTag(Tag(1)))
             throw new InvalidDataException("A weapon art destination tag is already used.");
-        byte[] root = Read(sourceEntityTag, 0x80809C0F, profile.RootHash);
-        byte[] config = Read(profile.Config, 0x80809C36, profile.ConfigHash);
-        int primary = checked(0x10 + (int)I64(config, 0x10));
-        int resource = checked(0x18 + (int)I64(config, 0x18));
-        if (U32(config, primary - 4) != 0x808072B8 || U32(config, resource - 4) != 0x808072BD
-            || U32(config, resource + 0x1DC) != profile.Model)
+        byte[] root = Read(sourceEntityTag, SEntity.Class);
+        byte[] config = Read(profile.Config, SEntityConfig.Class);
+        // Only the members read or written must fit, so the components are read member by member.
+        Fit<SEntityConfig>(config, 0, [nameof(SEntityConfig.DefaultInstance), "Definition"]);
+        int primary = TagView.TargetOrSelf(config, in Member<SEntityConfig, RelativePointer<Unknown>>(config, 0, nameof(SEntityConfig.DefaultInstance)));
+        int resource = TagView.TargetOrSelf(config, in Member<SEntityConfig, RelativePointer<Unknown>>(config, 0, nameof(SEntityConfig.Definition)));
+        if (TagView.ClassAt(config, primary) != SModelComponentPrimary.Class
+            || TagView.ClassAt(config, resource) != SModelComponent.Class)
             throw new InvalidDataException("Weapon model component layout changed.");
-        Pair(primary, resource, 0x808072B8, 0x808072BD);
-        Pair(primary + 0x30, resource + 0x48, 0x80809BD8, 0x80809BD9);
-        Pair(primary + 0x100, resource + 0x260, 0x808072CB, 0x808072C7);
-        Pair(primary + 0x140, resource + 0x2C0, 0x808072C0, 0x808072C1);
-        Pair(primary + 0x1A0, resource + 0x1E8, 0x80807314, 0x80807315);
-        int[] values = NativeRows.Rows(config, primary + 0x120, 0x80809788, 96);
-        int[] resources = NativeRows.Rows(config, resource + 0x2A8, 0x80809789, 40);
-        if (values.Length != resources.Length)
+        Fit<SModelComponentPrimary>(config, primary, PrimaryMembers);
+        Fit<SModelComponent>(config, resource, ResourceMembers);
+        if (Member<SModelComponent, uint>(config, resource, nameof(SModelComponent.Model)) != profile.Model)
+            throw new InvalidDataException("The weapon model component names another model.");
+        Pairs("OwnerPairConfig", "OwnerConfig", SModelComponentPrimary.Class, SModelComponent.Class);
+        Pairs("H918e2747.OwnerPair0x80809bd8", "H918e2747.OwnerPair0x80809bd9", C80809bd8.Class, C80809bd9.Class);
+        Pairs("HCa95f655.OwnerPair0x808072cb", "HCa95f655.OwnerPair0x808072c7", C808072cb.Class, C808072c7.Class);
+        Pairs("HF5b4dbc0.OwnerPair0x808072c0", "HF5b4dbc0.OwnerPair0x808072c1", C808072c0.Class, C808072c1.Class);
+        Pairs("HF75d2aff.OwnerPair0x80807314", "HF75d2aff.OwnerPair0x80807315", C80807314.Class, C80807315.Class);
+        var values = TagArray.Checked(config, primary + TagView.FieldOffset<SModelComponentPrimary>("HCa95f655.Channels"),
+            SModelValueBank.Class, Unsafe.SizeOf<SModelValueBank>());
+        var resources = TagArray.Checked(config, resource + TagView.FieldOffset<SModelComponent>("HCa95f655.Channels"),
+            SModelValueBankResource.Class, Unsafe.SizeOf<SModelValueBankResource>());
+        if (values.Count != resources.Count)
             throw new InvalidDataException("Weapon model value-bank pairs disagree.");
-        for (int index = 0; index < values.Length; index++)
-            Pair(values[index], resources[index], 0x80809788, 0x80809789);
-        Put32(config, resource + 0x1DC, modelTag);
+        for (int index = 0; index < values.Count; index++)
+            Pair(ref TagView.Edit<SModelValueBank>(config, values.Data + index * Unsafe.SizeOf<SModelValueBank>()).OwnerPair,
+                ref TagView.Edit<SModelValueBankResource>(config, resources.Data + index * Unsafe.SizeOf<SModelValueBankResource>()).OwnerPair,
+                SModelValueBank.Class, SModelValueBankResource.Class);
+        Member<SModelComponent, uint>(config, resource, nameof(SModelComponent.Model)) = modelTag;
         root = WeaponConfigEdits.RetagRoot(root, profile.Config, Tag(0));
         if (ContainsAligned(config, profile.Config))
             throw new NotSupportedException("An unclassified old model-owner reference remains in the art component.");
@@ -85,26 +95,39 @@ public static class WeaponAssetEntityCompiler
 
         PackageEntry Require(uint tag) => catalog.TryGetEntry(tag, out var entry) ? entry
             : throw new InvalidDataException("Weapon art source is missing.");
-        byte[] Read(uint tag, uint type, string hash)
+        byte[] Read(uint tag, uint type)
         {
-            byte[] bytes = catalog.Read(tag);
-            if (Require(tag).Reference != type || Convert.ToHexString(SHA256.HashData(bytes)) != hash)
-                throw new NotSupportedException("Weapon art creation needs the unchanged checked source profile.");
-            return bytes.ToArray();
+            if (Require(tag).Reference != type)
+                throw new NotSupportedException($"Weapon art source {tag:X8} is not of class {type:X8}.");
+            return catalog.Read(tag).ToArray();
         }
-        void Pair(int p, int r, uint pType, uint rType)
+        void Pairs(string owner, string partner, uint ownerType, uint partnerType) =>
+            Pair(ref Member<SModelComponentPrimary, TagOffsetPointer>(config, primary, owner),
+                ref Member<SModelComponent, TagOffsetPointer>(config, resource, partner), ownerType, partnerType);
+        // Each owner of a pair names the config tag, the other owner's class and its offset.
+        void Pair(ref TagOffsetPointer owner, ref TagOffsetPointer partner, uint ownerType, uint partnerType)
         {
-            if (U32(config, p) != profile.Config || U32(config, p + 4) != rType || I64(config, p + 8) != r
-                || U32(config, r) != profile.Config || U32(config, r + 4) != pType || I64(config, r + 8) != p)
+            int p = TagView.OffsetOf(config, in owner), r = TagView.OffsetOf(config, in partner);
+            if (owner.Tag != profile.Config || owner.Word != partnerType || owner.Offset != r
+                || partner.Tag != profile.Config || partner.Word != ownerType || partner.Offset != p)
                 throw new InvalidDataException("Weapon model owner pair is not reciprocal.");
-            Put32(config, p, Tag(0)); Put32(config, r, Tag(0));
+            owner = owner with { Tag = Tag(0) };
+            partner = partner with { Tag = Tag(0) };
         }
     }
 
-    private static bool ContainsAligned(byte[] data, uint tag) =>
-        Enumerable.Range(0, data.Length / 4).Any(index => U32(data, index * 4) == tag);
+    /** Refuses a T at `at` when one of `members` runs past the tag. */
+    private static void Fit<T>(byte[] data, int at, string[] members) where T : unmanaged
+    {
+        foreach (string member in members)
+            if (!TagView.FitsThrough<T>(data, at, member))
+                throw new InvalidDataException($"{typeof(T).Name}.{member} runs past the weapon art component.");
+    }
 
-    private static uint U32(byte[] bytes, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset));
-    private static long I64(byte[] bytes, int offset) => BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(offset));
-    private static void Put32(byte[] bytes, int offset, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset), value);
+    /** @return The `member` of a T at `root`; a member past the end throws ArgumentOutOfRangeException. */
+    private static ref TField Member<T, TField>(byte[] data, int root, string member) where T : unmanaged where TField : unmanaged =>
+        ref MemoryMarshal.AsRef<TField>(data.AsSpan(root + TagView.FieldOffset<T>(member), Unsafe.SizeOf<TField>()));
+
+    private static bool ContainsAligned(byte[] data, uint tag) =>
+        Enumerable.Range(0, data.Length / 4).Any(index => BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(index * 4)) == tag);
 }

@@ -1,55 +1,51 @@
 using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
-/** Art entities of armor and weapon items, read from the item's art block at +136. */
+/** Art entities of armor and weapon items, read from the item's translation block. */
 public static class GuardianArt
 {
-    // Hash of the empty string; a slot holding it names no art.
-    internal const uint EmptyHash = 0x811C9DC5;
-    private const uint ItemArtClass = 0x808077B5, HolderClass = 0x80805DFE, ArtHashClass = 0x80805E01;
-    // Item definition +136 points to the art block; art block +88 is the u16 gear row.
-    private const int ArtBlockField = 136, GearRowField = 88;
     private const ushort NoGearRow = 0xFFFF;
-    // Gear row +16 is the key that picks the weapon's row in each presentation config.
-    private const int GearKeyField = 16;
-    private const uint ComponentRowClass = 0x80809C04, ComponentClass = 0x80809C36;
-    // Weapon resource: a typed row array at +1416, 232-byte rows, a default row at +1184; row +0x6C is the tag.
-    private const uint PresentationClass = 0x80804221, PresentationRowClass = 0x80803E72;
-    private const int PresentationRows = 1416, PresentationDefault = 1184, PresentationRowStride = 232, ThirdPersonField = 0x6C;
     private static readonly ConditionalWeakTable<PackageCatalog, GuardianArtTables> SharedTables = new();
 
     /** Art entities of an armor or weapon item for one class byte and gender. Empty when the item has no art block. */
     public static IReadOnlyList<uint> ItemEntities(PackageCatalog catalog, byte[] itemDefinition, byte classByte, bool female) =>
         ItemEntities(TablesFor(catalog), itemDefinition, classByte, female);
 
-    /** The weapon's gameplay root from gear row +88; 0 when the item has none (+88 == 0xFFFF). */
+    /** The weapon's gameplay root from the art block's gear row; 0 when the item has none (gear row 0xFFFF). */
     public static uint GameplayEntity(PackageCatalog catalog, byte[] itemDefinition) =>
         GameplayEntity(TablesFor(catalog), itemDefinition);
 
     /**
-     * The weapon's third-person animation tag: +0x6C of its presentation row keyed by gear row +16, else of the
-     * default row. The empty hash when the item has no gear row or no presentation component.
+     * The weapon's third-person animation tag: that of its presentation row keyed by the gear row's key, else of
+     * the default row. The empty hash when the item has no gear row or no presentation component.
      */
     public static uint ThirdPersonTag(PackageCatalog catalog, byte[] itemDefinition)
     {
         var tables = TablesFor(catalog);
-        if (GearRow(tables, itemDefinition) is not { } row) return EmptyHash;
-        uint key = tables.Gear.Data.U32(row + GearKeyField);
-        var entity = new TagData(catalog.Read(GameplayEntity(tables, itemDefinition)));
-        foreach (int component in entity.Rows(0x10, ComponentRowClass, 12))
+        if (GearRow(tables, itemDefinition) is not { } row) return StringHash.Empty;
+        uint key = TagView.At<SGearRow>(tables.Gear.Data, row).GearKeyPresentationHudSelector;
+        byte[] entity = catalog.Read(GameplayEntity(tables, itemDefinition));
+        ref readonly var components = ref TagView.At<TagArray<SPatternComponent>>(entity, TagView.FieldOffset<SEntity>(nameof(SEntity.Components)));
+        foreach (ref readonly var component in TagView.Rows(entity, in components, SPatternComponent.Class))
         {
-            uint tag = entity.U32(component);
-            if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != ComponentClass) continue;
-            var config = new TagData(catalog.Read(tag));
-            int resource = config.Relative(0x18);
-            if (!config.Has(resource - 4, 4) || config.U32(resource - 4) != PresentationClass) continue;
-            int selected = config.Rows(resource + PresentationRows, PresentationRowClass, PresentationRowStride)
-                .FirstOrDefault(at => config.U32(at) == key, resource + PresentationDefault);
-            return config.U32(selected + ThirdPersonField);
+            uint tag = component.Config;
+            if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != SEntityConfig.Class) continue;
+            byte[] config = catalog.Read(tag);
+            // A null resource pointer resolves to the field itself, whose class word is not a weapon resource.
+            int resource = TagView.TargetOrSelf(config,
+                in TagView.At<RelativePointer<Unknown>>(config, TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition))));
+            if (TagView.ClassAt(config, resource) != SWeaponResource.Class) continue;
+            ref readonly var presentations = ref TagView.At<TagArray<SWeaponVariantRow>>(config,
+                resource + TagView.FieldOffset<SWeaponResource>(nameof(SWeaponResource.PresentationRows)));
+            foreach (ref readonly var presentation in TagView.Rows(config, in presentations, SWeaponVariantRow.Class))
+                if (presentation.GearSelectorKey0x44a0b334Base == key) return presentation.ThirdPersonAnimation;
+            return TagRead.U32(config, resource + TagView.FieldOffset<SWeaponResource>("HDe30eaea.ThirdPersonAnimation"));
         }
-        return EmptyHash;
+        return StringHash.Empty;
     }
 
     // The public wrappers share one table set per catalog.
@@ -58,7 +54,7 @@ public static class GuardianArt
     internal static uint GameplayEntity(GuardianArtTables tables, byte[] itemDefinition)
     {
         if (GearRow(tables, itemDefinition) is not { } row) return 0;
-        uint name = tables.Gear.Data.U32(row + 4);
+        uint name = TagView.At<SGearRow>(tables.Gear.Data, row).GameplayRuntimeName;
         if (!tables.RuntimeNames.TryGetValue(name, out uint entity))
             throw new InvalidDataException($"Gear name 0x{name:X8} does not resolve.");
         tables.RequireClass(entity, GuardianArtTables.EntityClass);
@@ -68,10 +64,9 @@ public static class GuardianArt
     // Offset of the item's gear row in the gear table; null when the item has none.
     private static int? GearRow(GuardianArtTables tables, byte[] itemDefinition)
     {
-        var item = new TagData(itemDefinition);
-        int art = ArtBlock(item);
+        int art = ArtBlock(itemDefinition);
         if (art < 0) return null;
-        ushort gearRow = item.U16(art + GearRowField);
+        ushort gearRow = TagRead.U16(itemDefinition, art + TagView.FieldOffset<ItemTranslationBlock>(nameof(ItemTranslationBlock.GearIndex)));
         if (gearRow == NoGearRow) return null;
         var rows = tables.Gear.Rows;
         if (gearRow >= rows.Length) throw new InvalidDataException($"Gear row {gearRow} is outside its table.");
@@ -79,27 +74,30 @@ public static class GuardianArt
     }
 
     /**
-     * The first art row whose class byte is -1 or the class byte. A female takes arrangement +12 when it resolves
-     * to a model, else +8. Every item also takes hash 0 of each arrangement group; only weapons have groups today.
+     * The first art row whose class byte is -1 or the class byte. A female takes the female art hash when it
+     * resolves to a model, else the male one. Every item also takes hash 0 of each arrangement group; only weapons
+     * have groups today.
      */
     internal static IReadOnlyList<uint> ItemEntities(GuardianArtTables tables, byte[] itemDefinition, byte classByte, bool female)
     {
-        var item = new TagData(itemDefinition);
-        int art = ArtBlock(item);
+        int art = ArtBlock(itemDefinition);
         if (art < 0) return [];
         int arrangement = -1;
-        foreach (int artRow in item.Rows(art, ItemArtClass, 4))
+        ref readonly var artRows = ref TagView.At<TagArray<ItemArtRow>>(itemDefinition,
+            art + TagView.FieldOffset<ItemTranslationBlock>(nameof(ItemTranslationBlock.ArtRows)));
+        foreach (ref readonly var artRow in TagView.Rows(itemDefinition, in artRows, ItemArtRow.Class))
         {
-            sbyte rowClass = (sbyte)item.U8(artRow);
+            sbyte rowClass = artRow.ClassValue;
             if (rowClass != -1 && rowClass != classByte) continue;
-            arrangement = item.U16(artRow + 2);
+            arrangement = artRow.ArrangementRow;
             break;
         }
         if (arrangement < 0) throw new InvalidDataException($"No art row matches class {classByte}.");
         int row = tables.Arrangement(arrangement);
         var table = tables.Arrangements;
         var result = new List<uint>();
-        uint male = table.U32(row + 8), femaleHash = table.U32(row + 12);
+        ref readonly var gearSet = ref TagView.At<SArrangementRow>(table, row).GearSet;
+        uint male = gearSet.MaleArtHash, femaleHash = gearSet.FemaleArtHash;
         if (female && !IsEmpty(femaleHash) && tables.TryEntity(femaleHash, out uint femaleEntity)) result.Add(femaleEntity);
         else if (!IsEmpty(male)) result.Add(tables.Entity(male));
         foreach (var (_, hashes) in Groups(table, row))
@@ -108,51 +106,59 @@ public static class GuardianArt
     }
 
     /** Selector and art hashes of each group of one arrangement row, in row order; a selector may repeat. */
-    internal static IReadOnlyList<(int Selector, uint[] Hashes)> Groups(TagData table, int row)
+    internal static IReadOnlyList<(int Selector, uint[] Hashes)> Groups(byte[] table, int row)
     {
         var result = new List<(int, uint[])>();
-        foreach (int holder in table.Rows(row + 16, HolderClass, 8))
+        foreach (ref readonly var holder in TagView.Rows(table, in TagView.At<SArrangementRow>(table, row).GearSet.Regions,
+                     SArrangementHolder.Class))
         {
-            if (table.I64(holder) == 0) throw new InvalidDataException("An art group pointer is empty.");
-            int group = table.Relative(holder);
-            result.Add((table.U8(group), table.Rows(group + 8, ArtHashClass, 4).Select(table.U32).ToArray()));
+            if (holder.Group.IsNull) throw new InvalidDataException("An art group pointer is empty.");
+            int group = TagView.TargetOffset(table, in holder.Group)!.Value;
+            byte selector = TagRead.U8(table, group + TagView.FieldOffset<ArrangementArtGroup>(nameof(ArrangementArtGroup.Selector)));
+            ref readonly var hashArray = ref TagView.At<TagArray<SArtHash>>(table,
+                group + TagView.FieldOffset<ArrangementArtGroup>(nameof(ArrangementArtGroup.H3265b065)));
+            var hashes = TagView.Rows(table, in hashArray, SArtHash.Class);
+            var names = new uint[hashes.Length];
+            for (int i = 0; i < names.Length; i++) names[i] = hashes[i].ArtName;
+            result.Add((selector, names));
         }
         return result;
     }
 
-    internal static bool IsEmpty(uint hash) => hash is 0 or EmptyHash;
+    internal static bool IsEmpty(uint hash) => hash is 0 or StringHash.Empty;
 
     // -1 when the item has no art block.
-    private static int ArtBlock(TagData item) => item.I64(ArtBlockField) == 0 ? -1 : item.Relative(ArtBlockField);
+    private static int ArtBlock(byte[] item) => TagView.TargetOffset(item, in TagView.At<RelativePointer<ItemTranslationBlock>>(item,
+        TagView.FieldOffset<ItemDefinition>(nameof(ItemDefinition.TranslationItemBlock)))) ?? -1;
 }
 
 /** The arrangement, gear and map tables of one catalog; thread-safe. */
 internal sealed class GuardianArtTables
 {
-    internal const uint WrapperClass = 0x8080744A, EntityClass = 0x80809C0F;
-    private const uint ArtMapRowClass = 0x808056EC, RuntimeMapRowClass = 0x80809252;
-    private const uint ArrangementRowClass = 0x80805DFB, GearRowClass = 0x80805B7C;
+    internal const uint WrapperClass = SArtWrapper.Class, EntityClass = SEntity.Class;
     private readonly PackageCatalog catalog;
     private readonly int[] arrangementRows;
     private readonly Lazy<Dictionary<uint, uint>> artMap, runtimeMap;
-    private readonly Lazy<(TagData Data, int[] Rows)> gear;
+    private readonly Lazy<(byte[] Data, int[] Rows)> gear;
 
     public GuardianArtTables(PackageCatalog catalog)
     {
         this.catalog = catalog;
         Arrangements = PackageHashMap.ReadStructured(catalog, GuardianAppearance.ArrangementTable);
-        arrangementRows = Arrangements.Rows(8, ArrangementRowClass, 32);
-        artMap = new(() => PackageHashMap.Read(catalog, GuardianAppearance.ArtMap, ArtMapRowClass));
-        runtimeMap = new(() => PackageHashMap.Read(catalog, GuardianAppearance.RuntimeMap, RuntimeMapRowClass));
+        ref readonly var arrangements = ref TagView.At<TagArray<SArrangementRow>>(Arrangements,
+            TagView.FieldOffset<SArrangementTableTag0x81613D23>(nameof(SArrangementTableTag0x81613D23.Table)));
+        arrangementRows = TagView.RowOffsets(Arrangements, TagView.Rows(Arrangements, in arrangements, SArrangementRow.Class));
+        artMap = new(() => PackageHashMap.Read(catalog, GuardianAppearance.ArtMap, SArtNameRow.Class));
+        runtimeMap = new(() => PackageHashMap.Read(catalog, GuardianAppearance.RuntimeMap, SRuntimeNameRow.Class));
         gear = new(() =>
         {
             var data = PackageHashMap.ReadStructured(catalog, GuardianAppearance.GearTable);
-            return (data, data.Rows(8, GearRowClass, 48));
+            return (data, TagView.RowOffsets(data, TagView.Rows(data, in TagView.At<SGearTableTag0x81613D27>(data).Table, SGearRow.Class)));
         });
     }
 
-    public TagData Arrangements { get; }
-    public (TagData Data, int[] Rows) Gear => gear.Value;
+    public byte[] Arrangements { get; }
+    public (byte[] Data, int[] Rows) Gear => gear.Value;
     /** Runtime map 0x80EC3F60: gear name hash -> entity. */
     public IReadOnlyDictionary<uint, uint> RuntimeNames => runtimeMap.Value;
 
@@ -160,16 +166,16 @@ internal sealed class GuardianArtTables
     public int Arrangement(int index) => (uint)index < (uint)arrangementRows.Length ? arrangementRows[index]
         : throw new InvalidDataException($"Arrangement {index} is outside its table.");
 
-    /** Art hash -> map 0x80EC3F61 -> 0x8080744A wrapper; wrapper +16 is the entity. */
+    /** Art hash -> map 0x80EC3F61 -> art wrapper -> the wrapper's entity. */
     public uint Entity(uint hash) => TryEntity(hash, out uint entity) ? entity
         : throw new InvalidDataException($"Art hash 0x{hash:X8} does not resolve to an entity.");
 
-    /** False when the map misses the hash, the wrapper is not 0x8080744A, or wrapper +16 is not an entity. */
+    /** False when the map misses the hash, the wrapper is not an art wrapper, or its art tag is not an entity. */
     public bool TryEntity(uint hash, out uint entity)
     {
         entity = 0;
         if (!artMap.Value.TryGetValue(hash, out uint wrapper) || !IsClass(wrapper, WrapperClass)) return false;
-        uint candidate = new TagData(catalog.Read(wrapper)).U32(16);
+        uint candidate = TagRead.U32(catalog.Read(wrapper), TagView.FieldOffset<SArtWrapper>(nameof(SArtWrapper.ArtTag)));
         if (!IsClass(candidate, EntityClass)) return false;
         entity = candidate;
         return true;

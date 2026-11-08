@@ -1,5 +1,8 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -24,10 +27,11 @@ public static partial class CuiPropertyEdits
         {
             if (!all.Contains(property)) throw new InvalidDataException("The property does not belong to this CUI resource.");
             var pool = document.Pools.Single(pool => pool.DescriptorOffset == property.PoolDescriptor);
-            if (value.Length != pool.Stride || pool.ClassHash is not (0x8080468D or 0x8080468B or 0x80804694
-                or 0x80804693 or 0x80804696 or 0x80804692 or 0x80804690 or 0x8080468F))
+            if (value.Length != pool.Stride || pool.ClassHash is not (SCuiBoolValue.Class or CuiShortValue.Class
+                or SCuiFloatValue.Class or C80804693.Class or CuiIntegerValue.Class or C80804692.Class or C80804690.Class
+                or C8080468f.Class))
                 throw new InvalidDataException("The property value has unsupported storage.");
-            if (pool.ClassHash is 0x80804694 or 0x80804693)
+            if (pool.ClassHash is SCuiFloatValue.Class or C80804693.Class)
                 for (int i = 0; i < value.Length; i += sizeof(float))
                     if (!float.IsFinite(BinaryPrimitives.ReadSingleLittleEndian(value.Span[i..])))
                         throw new InvalidDataException("Enter finite property values.");
@@ -44,28 +48,21 @@ public static partial class CuiPropertyEdits
                 foreach (var (property, value) in group) value.Span.CopyTo(output.AsSpan(property.ValueOffset));
                 continue;
             }
-            int header = checked((output.Length + 11) & ~7);
-            int data = checked(header + 16), count = checked(pool.Count + shared.Count);
-            Array.Resize(ref output, checked(data + count * pool.Stride));
-            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(header - 4), 0x80809FBD);
-            BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(header), count);
-            BinaryPrimitives.WriteUInt64LittleEndian(output.AsSpan(header + 8), pool.ClassHash);
+            int count = checked(pool.Count + shared.Count);
+            int data = TagRelocator.AppendArray(ref output, pool.DescriptorOffset, pool.ClassHash, count, checked(count * pool.Stride), 8);
             bytes.Slice(pool.DataOffset, pool.Count * pool.Stride).CopyTo(output.AsSpan(data));
-            BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(pool.DescriptorOffset), count);
-            BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(pool.DescriptorOffset + 8), header - pool.DescriptorOffset - 8);
             foreach (var property in all.Where(p => p.PoolDescriptor == pool.DescriptorOffset))
-                BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(property.RecordOffset + 16),
-                    data + property.ValueOffset - pool.DataOffset - property.RecordOffset - 16);
+                TagView.SetTarget(output, in TagView.At<CuiPropertyRow>(output, property.RecordOffset).Value,
+                    data + property.ValueOffset - pool.DataOffset);
             int appended = pool.Count;
             foreach (var (property, value) in group)
             {
                 bool detach = shared.Contains(property);
                 int destination = detach ? data + appended++ * pool.Stride : data + property.ValueOffset - pool.DataOffset;
                 value.Span.CopyTo(output.AsSpan(destination));
-                if (detach) BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(property.RecordOffset + 16),
-                    destination - property.RecordOffset - 16);
+                if (detach) TagView.SetTarget(output, in TagView.At<CuiPropertyRow>(output, property.RecordOffset).Value, destination);
             }
-            BinaryPrimitives.WriteInt64LittleEndian(output, output.Length);
+            BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(SizeWord), output.Length);
         }
         return output;
     }

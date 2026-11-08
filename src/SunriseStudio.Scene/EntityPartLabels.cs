@@ -1,4 +1,6 @@
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -16,24 +18,31 @@ public static class EntityPartLabels
     public const uint HelmetShownKey = 0x090E39A4;
     /** Variant key whose value comes from player state. */
     public const uint RuntimeKey = 0x6ED9E9EF;
-    private const uint ConfigClass = 0x80809C36, PartClass = 0x80809C2C, LabelClass = 0x80809C31;
-    private const int PartStride = 24, LabelStride = 8;
 
     /**
-     * Config resource +56 holds the logical parts; part +8 holds its {key, value} label rows.
+     * The config resource holds the logical parts; each part holds its {key, value} label rows.
      * @return One label set per logical part index.
      * @exception InvalidDataException The tag is not a model config or an array does not match.
      */
     public static IReadOnlyList<IReadOnlySet<(uint Key, uint Value)>> Read(PackageCatalog catalog, uint configTag)
     {
-        if (!catalog.TryGetEntry(configTag, out var entry) || entry.Reference != ConfigClass)
+        if (!catalog.TryGetEntry(configTag, out var entry) || entry.Reference != SEntityConfig.Class)
             throw new InvalidDataException($"Tag 0x{configTag:X8} is not a model config.");
-        var config = new TagData(catalog.Read(configTag));
-        if (config.I64(0x18) == 0) throw new InvalidDataException($"Model config 0x{configTag:X8} has no resource.");
-        int resource = config.Relative(0x18);
-        return config.Rows(resource + 56, PartClass, PartStride)
-            .Select(part => (IReadOnlySet<(uint Key, uint Value)>)config.Rows(part + 8, LabelClass, LabelStride)
-                .Select(row => (config.U32(row), config.U32(row + 4))).ToHashSet())
-            .ToArray();
+        byte[] config = catalog.Read(configTag);
+        ref readonly var definition = ref TagView.At<RelativePointer<Unknown>>(config, TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition)));
+        if (definition.IsNull) throw new InvalidDataException($"Model config 0x{configTag:X8} has no resource.");
+        int resource = TagView.TargetOffset(config, in definition)!.Value;
+        ref readonly var logicalParts = ref TagView.At<TagArray<UnknownLogicalPart>>(config,
+            resource + TagView.FieldOffset<SModelComponent>(nameof(SModelComponent.LogicalParts)));
+        var parts = TagView.Rows(config, in logicalParts, UnknownLogicalPart.Class);
+        var result = new IReadOnlySet<(uint Key, uint Value)>[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            var labels = new HashSet<(uint Key, uint Value)>();
+            foreach (ref readonly var label in TagView.Rows(config, in parts[i].HCd67ad14.Labels, UnknownPartLabel.Class))
+                labels.Add((label.LabelKey, label.LabelValue));
+            result[i] = labels;
+        }
+        return result;
     }
 }

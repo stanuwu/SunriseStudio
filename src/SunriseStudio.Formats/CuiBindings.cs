@@ -1,4 +1,8 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -18,23 +22,27 @@ public static class CuiBindings
 {
     // Native path compilation reserves sixteen packed selectors, including the terminal selector.
     public const int MaximumPathLength = 16;
-    public const int BindingStride = 56;
+    public static int BindingStride => Unsafe.SizeOf<CuiBindingRow>();
 
     public static IReadOnlyList<CuiBinding> Read(ReadOnlyMemory<byte> bytes)
     {
-        var r = new TagReader(bytes); var rows = r.Array(88, 0x808046D8, BindingStride);
+        var tag = bytes.Span;
+        var rows = TagArray.Checked(tag, TagView.FieldOffset<CuiResource>("BindingSet.Bindings"), CuiBindingRow.Class, BindingStride);
         List<CuiBinding> result = [];
         for (int index = 0; index < rows.Count; index++)
         {
             int at = rows.Data + index * BindingStride;
-            var source = new CuiBindingEndpoint(r.U16(at + 2), r.U16(at), []);
-            var target = new CuiBindingEndpoint(r.U16(at + 26), r.U16(at + 24), []);
+            ref readonly var row = ref TagView.At<CuiBindingRow>(tag, at);
+            var source = new CuiBindingEndpoint(row.SourceNodeCopy, row.SourceNode, []);
+            var target = new CuiBindingEndpoint(row.TargetNodeCopy, row.TargetNode, []);
             var transform = new CuiBindingTransform(CuiBindingTransformKind.None);
             string error = "";
             try
             {
-                source = Endpoint(r, at); target = Endpoint(r, at + 24);
-                if (r.I64(at + 48) != 0) transform = Transform(r, r.Relative(at + 48));
+                source = Endpoint(tag, row.SourceNodeCopy, row.SourceNode, in row.SourcePathSlot, row.SourceSelector);
+                target = Endpoint(tag, row.TargetNodeCopy, row.TargetNode, in row.TargetPathSlot, row.TargetSelector);
+                if (!row.Conversion.IsNull)
+                    transform = Transform(tag, TagPointer.Checked(tag, TagView.OffsetOf(tag, in row.Conversion)), in row.Conversion);
             }
             catch (Exception failure) when (failure is InvalidDataException or OverflowException or NotSupportedException)
             { error = failure.Message; }
@@ -43,36 +51,53 @@ public static class CuiBindings
         return result;
     }
 
-    private static CuiBindingEndpoint Endpoint(TagReader r, int at)
+    private static CuiBindingEndpoint Endpoint(ReadOnlySpan<byte> tag, ushort node, ushort authoredNode,
+        ref readonly RelativePointer<byte> pathSlot, ulong selector)
     {
-        ulong selector = r.U64(at + 16);
         if (selector > uint.MaxValue) throw new NotSupportedException("Binding selector exceeds its native path word.");
-        int slot = r.Relative(at + 8);
-        var path = slot < 0 ? (Count: 0, Data: 0, Class: 0u) : r.Array(slot, 0x80804949, 4);
+        int slot = TagPointer.Checked(tag, TagView.OffsetOf(tag, in pathSlot));
+        int stride = Unsafe.SizeOf<CuiPathSelector>();
+        // The slot pointer names the selector array field of a path slot.
+        var path = slot < 0 ? (Count: 0, Data: 0, Class: 0u) : TagArray.Checked(tag, slot, CuiPathSelector.Class, stride);
         if (path.Count >= MaximumPathLength) throw new InvalidDataException("Binding path exceeds the native selector capacity.");
         uint[] words = new uint[path.Count + 1];
-        for (int i = 0; i < path.Count; i++) words[i] = r.U32(path.Data + i * 4);
+        for (int i = 0; i < path.Count; i++) words[i] = TagView.At<CuiPathSelector>(tag, path.Data + i * stride).Selector;
         words[^1] = (uint)selector;
-        return new(r.U16(at + 2), r.U16(at), Array.AsReadOnly(words));
+        return new(node, authoredNode, Array.AsReadOnly(words));
     }
 
     /** Tagged transform records distinguish inversion, signed integers, floats, and unsigned hashes. */
-    private static CuiBindingTransform Transform(TagReader r, int at)
+    private static CuiBindingTransform Transform(ReadOnlySpan<byte> tag, int at, ref readonly RelativePointer<Unknown> conversion)
     {
-        if (at < 4 || !r.Has(at, 4)) throw new InvalidDataException("Binding transform leaves the resource.");
-        uint type = r.U32(at - 4);
+        if (at < 4 || !TagView.Fits<uint>(tag, at)) throw new InvalidDataException("Binding transform leaves the resource.");
+        uint type = TagView.TargetClass(tag, in conversion)!.Value;
         var expected = type switch
         {
-            0x808046E0 => CuiBindingTransformKind.Not, 0x808046DC => CuiBindingTransformKind.CompareInteger,
-            0x808046DB => CuiBindingTransformKind.CompareFloat, 0x808046DA => CuiBindingTransformKind.CompareHash,
+            CuiNotTransform.Class => CuiBindingTransformKind.Not, CuiCompareInteger.Class => CuiBindingTransformKind.CompareInteger,
+            CuiCompareFloat.Class => CuiBindingTransformKind.CompareFloat, CuiCompareHash.Class => CuiBindingTransformKind.CompareHash,
             _ => throw new NotSupportedException($"Binding transform {type:X8} is unsupported.")
         };
-        if (r.U8(at) != (byte)expected) throw new InvalidDataException("Binding transform class and operation disagree.");
+        // Every transform record starts with its kind byte.
+        if (TagView.At<CuiNotTransform>(tag, at).Kind != (byte)expected)
+            throw new InvalidDataException("Binding transform class and operation disagree.");
         if (expected == CuiBindingTransformKind.Not) return new(expected, Offset: at, ClassHash: type);
-        if (!r.Has(at, 8) || r.U8(at + 1) > (byte)CuiComparison.Greater)
-            throw new InvalidDataException("Binding comparison is truncated or invalid.");
-        return new(expected, (CuiComparison)r.U8(at + 1), r.U32(at + 4), at, type);
+        if (!TagView.Fits<CuiCompareHash>(tag, at)) throw new InvalidDataException("Binding comparison is truncated or invalid.");
+        (byte comparison, uint operand) = expected switch
+        {
+            CuiBindingTransformKind.CompareInteger => Compare(in TagView.At<CuiCompareInteger>(tag, at)),
+            CuiBindingTransformKind.CompareFloat => Compare(in TagView.At<CuiCompareFloat>(tag, at)),
+            _ => Compare(in TagView.At<CuiCompareHash>(tag, at))
+        };
+        if (comparison > (byte)CuiComparison.Greater) throw new InvalidDataException("Binding comparison is truncated or invalid.");
+        return new(expected, (CuiComparison)comparison, operand, at, type);
     }
+
+    private static (byte Comparison, uint Operand) Compare(ref readonly CuiCompareInteger record) =>
+        (record.Comparison, unchecked((uint)record.Operand));
+    private static (byte Comparison, uint Operand) Compare(ref readonly CuiCompareFloat record) =>
+        (record.Comparison, BitConverter.SingleToUInt32Bits(record.Operand));
+    private static (byte Comparison, uint Operand) Compare(ref readonly CuiCompareHash record) =>
+        (record.Comparison, record.Operand);
 
     /**
      * Points one comparison binding at a new record; the old record stays for other bindings.
@@ -91,14 +116,38 @@ public static class CuiBindings
             throw new InvalidDataException("Only a comparison binding has an operand.");
         if (!Enum.IsDefined(comparison)) throw new InvalidDataException("Choose a supported comparison.");
         if (comparison == binding.Transform.Comparison && operand == binding.Transform.Operand) return bytes.ToArray();
-        // Comparison records are the class word, then kind, comparison, two zero bytes and the operand.
-        int record = checked((bytes.Length + 4 + 7) & ~7);
-        byte[] output = new byte[checked(record + 8)]; bytes.Span.CopyTo(output);
-        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(record - 4), binding.Transform.ClassHash);
-        output[record] = (byte)binding.Transform.Kind; output[record + 1] = (byte)comparison;
-        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(record + 4), operand);
-        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(binding.Offset + 48), record - binding.Offset - 48);
-        BinaryPrimitives.WriteInt64LittleEndian(output, output.Length);
+        byte[] output = bytes.ToArray();
+        // Comparison records are 8 bytes on an 8-byte boundary, after their class word.
+        int record = TagRelocator.AppendObject(ref output, binding.Transform.ClassHash, Unsafe.SizeOf<CuiCompareHash>(), 8);
+        int operandAt;
+        switch (binding.Transform.Kind)
+        {
+            case CuiBindingTransformKind.CompareInteger:
+            {
+                ref var written = ref TagView.Edit<CuiCompareInteger>(output, record);
+                written.Kind = (byte)binding.Transform.Kind; written.Comparison = (byte)comparison;
+                operandAt = TagView.OffsetOf(output, in written.Operand);
+                break;
+            }
+            case CuiBindingTransformKind.CompareFloat:
+            {
+                ref var written = ref TagView.Edit<CuiCompareFloat>(output, record);
+                written.Kind = (byte)binding.Transform.Kind; written.Comparison = (byte)comparison;
+                operandAt = TagView.OffsetOf(output, in written.Operand);
+                break;
+            }
+            default:
+            {
+                ref var written = ref TagView.Edit<CuiCompareHash>(output, record);
+                written.Kind = (byte)binding.Transform.Kind; written.Comparison = (byte)comparison;
+                operandAt = TagView.OffsetOf(output, in written.Operand);
+                break;
+            }
+        }
+        // The operand is copied as bits so a float NaN payload survives.
+        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(operandAt), operand);
+        TagView.SetTarget(output, in TagView.At<CuiBindingRow>(output, binding.Offset).Conversion, record);
+        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(TagView.FieldOffset<CuiResource>("TagSize")), output.Length);
         return output;
     }
 

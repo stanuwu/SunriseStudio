@@ -24,7 +24,7 @@ internal static class AddChecks
         Refusals(catalog, baseline);
     }
 
-    private static ushort Package(uint tag) => (ushort)((tag - 0x80800000) >> 13);
+    private static ushort Package(uint tag) => (ushort)TagHashes.Package(tag);
 
     /** Every owner and compound in the packages writes back to its own bytes. */
     private static void Rewrite(PackageCatalog catalog, ushort[] packages)
@@ -118,7 +118,7 @@ internal static class AddChecks
         var plan = CollisionImport.Plan(catalog, baseline, input, catalog.ReadOriginal, new CollisionShapePackage(ShapePackage, 0));
         Check(plan.ObjectEdits.Count == 0 && plan.AddedShapes.Count == 2 && plan.Assets.Keys.Order().SequenceEqual(new[] { LeviathanCompound, LeviathanOwner }),
             $"The plan has {plan.ObjectEdits.Count} edits, {plan.AddedShapes.Count} shapes and assets {string.Join(",", plan.Assets.Keys.Select(k => k.ToString("X8")))}.");
-        uint convexTag = 0x80800000u + ((uint)ShapePackage << 13), meshTag = convexTag + 1;
+        uint convexTag = TagHashes.Make(ShapePackage, 0), meshTag = convexTag + 1;
         Check(plan.AddedShapes[0].Tag == convexTag && plan.AddedShapes[1].Tag == meshTag
             && plan.AddedShapes.All(s => s.Native.PackageId == ShapePackage && s.Native.Reference == uint.MaxValue), "Added shape tags or metadata differ.");
 
@@ -377,7 +377,7 @@ internal static class AddChecks
             var project = StudioProject.Create(Path.Combine(output, "project"), "Added collision");
             project.ObjectEditCompiler = ObjectEditCompiler.Default;
             var created = project.RestoreTransaction(new(plan.Assets), new Dictionary<string, AddedAssetSnapshot?>(), catalog, null, plan.Additions);
-            Check(created.Count == 2 && created.Select(a => 0x80800000u + ((uint)a.Native!.PackageId << 13) + (uint)a.Native.EntryIndex!.Value)
+            Check(created.Count == 2 && created.Select(a => TagHashes.Make(a.Native!.PackageId, a.Native.EntryIndex!.Value))
                 .SequenceEqual(plan.AddedShapes.Select(s => s.Tag)), "The project did not keep the planned entry indices.");
             var result = ProjectBuilder.Build(project, catalog, Path.Combine(output, "build"));
             catalog.TryGetEntry(LeviathanCompound, out var entry);
@@ -400,7 +400,7 @@ internal static class AddChecks
             var tables = result.PackageFiles.Select(path => PackageDependencyTable.Read(PackageWriter.ReadMisc(path)))
                 .OfType<PackageDependencyTable>().ToArray();
             bool Listed(uint tag) => tables.Any(table => table.Records.Any(record => record.Lists(
-                (ushort)((tag - 0x80800000U) >> 13), (int)((tag - 0x80800000U) & PackageDependencyTable.MaximumEntry))));
+                (ushort)TagHashes.Package(tag), TagHashes.Entry(tag))));
             Check(plan.AddedShapes.All(shape => Listed(shape.Tag)), "No built dependency record lists every new shape.");
             Console.WriteLine($"PASS collision-add-build packages={string.Join(",", result.PackageFiles.Select(Path.GetFileName))} read-back=equal "
                 + $"new-shapes-placed={placed.Length} new-shapes-listed={plan.AddedShapes.Count} "

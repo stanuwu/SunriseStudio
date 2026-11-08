@@ -1,4 +1,7 @@
 using System.Numerics;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -16,112 +19,165 @@ public sealed partial class AssetSceneLoader
     private readonly Dictionary<uint, List<uint[]>> squadMembers = [];
     internal sealed record DescriptorFact(AuthoredSlotIdentity Slot, int Offset, uint ClassId);
 
-    /** Packed references retain the object's registry key, slot type and global slot ordinal. */
-    private static AuthoredSlotIdentity SlotReference(ulong value) =>
-        new((uint)value, (ushort)(value >> 32), (ushort)(value >> 48));
-
     /** Descriptor candidates must repeat the tag, marker, schemas and an existing object slot. */
-    private AuthoredSlotIdentity[] ConfigSlots(uint tag, TagData data, ushort type)
+    private AuthoredSlotIdentity[] ConfigSlots(uint tag, byte[] data, ushort type)
         => ConfigDescriptors(tag, data).Where(d => d.Slot.Type == type).Select(d => d.Slot).Distinct().ToArray();
 
-    private DescriptorFact[] ConfigDescriptors(uint tag, TagData data) =>
+    private DescriptorFact[] ConfigDescriptors(uint tag, byte[] data) =>
         DescriptorCandidates(tag, data).Where(d => slotNames.ContainsKey(d.Slot)).ToArray();
 
-    /** Every word offset that matches the descriptor pattern, before the slot must exist. */
-    internal static IEnumerable<DescriptorFact> DescriptorCandidates(uint tag, TagData data)
+    /** The config's slot descriptor when its classes and schemas are plausible, before the slot must exist. */
+    internal static IEnumerable<DescriptorFact> DescriptorCandidates(uint tag, byte[] data)
     {
-        for (var offset = 0; offset <= data.Length - 128; offset += 4)
-        {
-            if (data.U32(offset) != tag || data.U32(offset + 8) != 0x70
-                || (data.U32(offset + 4) >> 16) != 0x8080) continue;
-            var sense = data.U32(offset + 68);
-            var auth = data.U32(offset + 72);
-            if ((sense != uint.MaxValue && (sense >> 16) != 0x8080)
-                || (auth != uint.MaxValue && (auth >> 16) != 0x8080)) continue;
-            var identity = new AuthoredSlotIdentity(data.U32(offset + 48), data.U16(offset + 52), data.U16(offset + 54));
-            yield return new DescriptorFact(identity, offset, data.U32(offset + 4));
-        }
+        if (ConfigSlotDescriptor.Find(data, tag) is not { } offset) yield break;
+        var header = TagView.At<SlotComponentHeader>(data, offset);
+        if ((header.Handle.Word >> 16) != 0x8080) yield break;
+        var sense = header.SenseSchema;
+        var auth = header.AuthSchema;
+        if ((sense != uint.MaxValue && (sense >> 16) != 0x8080)
+            || (auth != uint.MaxValue && (auth >> 16) != 0x8080)) yield break;
+        var identity = new AuthoredSlotIdentity(header.RegistryKey, header.SlotType, header.SlotIndex);
+        yield return new DescriptorFact(identity, offset, header.Handle.Word);
     }
 
-    /** Reciprocal component links distinguish squad and rule configs from unrelated classes. */
-    private void ReadSquadConfig(uint tag, TagData data, uint bubble)
+    /**
+     * Reciprocal component links distinguish squad and rule configs from unrelated classes.
+     * Components are read field by field: only the fields read must lie inside the tag.
+     */
+    private void ReadSquadConfig(uint tag, byte[] data, uint bubble)
     {
-        var primary = data.Relative(0x10);
-        var secondary = data.Relative(0x18);
-        if (primary < 4 || secondary < 4 || !data.Has(primary, 16) || !data.Has(secondary, 16)) return;
-        var firstClass = data.U32(primary - 4);
-        var secondClass = data.U32(secondary - 4);
-        if (firstClass is not (0x80809A3B or 0x808094CF)) return;
-        if (data.U32(primary) != tag || data.U32(secondary) != tag
-            || data.U32(primary + 4) != secondClass || data.U32(secondary + 4) != firstClass
-            || data.U64(primary + 8) != (ulong)secondary || data.U64(secondary + 8) != (ulong)primary)
+        if (SquadLink(data, nameof(SEntityConfig.DefaultInstance)) is not { } primary) return;
+        var secondaryLink = SquadLink(data, nameof(SEntityConfig.Definition));
+        if (primary < TagView.ClassWordSize || !TagView.Fits<TagOffsetPointer>(data, primary)) return;
+        var firstClass = TagView.ClassAt(data, primary) ?? 0;
+        if (firstClass is not (SSquadComponent.Class or SSquadRuleComponent.Class)) return;
+        // A squad component with no peer cannot agree with it.
+        if (secondaryLink is not { } secondary) throw new InvalidDataException("Squad component peer links do not agree.");
+        if (secondary < TagView.ClassWordSize || !TagView.Fits<TagOffsetPointer>(data, secondary)) return;
+        var secondClass = TagView.ClassAt(data, secondary) ?? 0;
+        var first = TagOffsetPointer.Read(data, primary);
+        var second = TagOffsetPointer.Read(data, secondary);
+        if (first.Tag != tag || second.Tag != tag || first.Word != secondClass || second.Word != firstClass
+            || unchecked((ulong)first.Offset) != (ulong)secondary || unchecked((ulong)second.Offset) != (ulong)primary)
             throw new InvalidDataException("Squad component peer links do not agree.");
-        if (firstClass == 0x80809A3B && secondClass == 0x8080948F)
+        if (firstClass == SSquadComponent.Class && secondClass == SSquadComponentPeer.Class)
         {
-            var members = data.Rows(secondary + 0xA8, 0x80808356, 0x68);
+            ref readonly var cells = ref TagView.At<TagArray<SquadMember>>(data, secondary + PeerField(nameof(C80807eba.Cells)));
+            var members = TagView.RowOffsets(data, TagView.Rows(data, in cells, SquadMember.Class));
             ReadSquadCandidates(tag, data, bubble, members);
-            var references = new[] { SlotReference(data.U64(secondary + 0x98)), SlotReference(data.U64(secondary + 0xA0)) }
+            var references = new[] { PeerRuleSlot(data, secondary, "A"), PeerRuleSlot(data, secondary, "B") }
                 .Where(r => r.Type == 66 && r.RegistryKey != uint.MaxValue).Distinct().ToArray();
             foreach (var slot in ConfigSlots(tag, data, 1))
             {
                 var targets = references;
-                if (references.Length == 0 && data.Has(primary + 0x5D0, 8) && data.I64(primary + 0x5D0) != 0)
+                const string inlinePointSet = $"{nameof(SSquadComponent.H81eeb835)}.{nameof(C80807eb9.InlinePointSet)}";
+                int pointField = primary + TagView.FieldOffset<SSquadComponent>(inlinePointSet);
+                if (references.Length == 0 && TagView.FitsThrough<SSquadComponent>(data, primary, inlinePointSet)
+                    && !TagView.At<RelativePointer<SquadInlinePointSet>>(data, pointField).IsNull)
                 {
-                    var pointSet = data.Relative(primary + 0x5D0);
-                    var placementPeer = data.Relative(secondary + 0xB8);
-                    if (!data.Has(pointSet - 4, 20) || !data.Has(placementPeer - 4, 20)
-                        || data.U32(pointSet - 4) != 0x80807EBE || data.U32(placementPeer - 4) != 0x80807EBF
-                        || data.U32(pointSet) != tag || data.U32(placementPeer) != tag
-                        || data.U32(pointSet + 4) != 0x80807EBF || data.U32(placementPeer + 4) != 0x80807EBE
-                        || data.U64(pointSet + 8) != (ulong)placementPeer || data.U64(placementPeer + 8) != (ulong)pointSet)
+                    var pointSet = TagView.TargetOffset(data, in TagView.At<RelativePointer<SquadInlinePointSet>>(data, pointField))!.Value;
+                    // A null placement peer fails the agreement check below.
+                    var placementPeer = TagView.TargetOffset(data,
+                        in TagView.At<RelativePointer<SquadInlinePlacement>>(data, secondary + PeerField(nameof(C80807eba.InlinePlacement)))) ?? -1;
+                    if (pointSet < TagView.ClassWordSize || !TagView.Fits<TagOffsetPointer>(data, pointSet)
+                        || placementPeer < TagView.ClassWordSize || !TagView.Fits<TagOffsetPointer>(data, placementPeer)
+                        || TagView.ClassAt(data, pointSet) != SquadInlinePointSet.Class
+                        || TagView.ClassAt(data, placementPeer) != SquadInlinePlacement.Class
+                        || !InlinePeersAgree(data, tag, pointSet, placementPeer))
                         throw new InvalidDataException("Inline squad point-set peers do not agree.");
-                    var points = data.Rows(pointSet + 0x40, 0x80809840, 0x48).Select(p => data.U64(p)).ToArray();
-                    var placement = placementPeer + 0x10;
-                    var position = data.V3(placement + 0x20);
-                    var rotation = data.Q4(placement + 0x10);
-                    if (!Finite(position) || !float.IsFinite(rotation.LengthSquared())
-                        || !float.IsFinite(data.F32(placement + 0x2C)))
-                        throw new InvalidDataException("Inline squad transform is not finite.");
-                    authoredPlacements.Add(new PlacementFact(data.U64(placement + 0x70), tag, placement,
-                        data.U32(placement), bubble, activeEntryIndex, position, rotation, data.U32(placement + 0x64)));
+                    var points = RuleIdentities(data, in TagView.At<TagArray<SquadRulePoint>>(data,
+                        pointSet + TagView.FieldOffset<SquadInlinePointSet>($"{nameof(SquadInlinePointSet.HE6533acf)}.{nameof(C80809838.Points)}")));
+                    AddSquadPlacement(data, tag, bubble,
+                        placementPeer + TagView.FieldOffset<SquadInlinePlacement>(nameof(SquadInlinePlacement.PlacementRecord)),
+                        "Inline squad transform is not finite.");
                     authoredRules.Add(new RuleFact(tag, bubble, activeEntryIndex, slot, points));
                     targets = [slot];
                 }
                 authoredSquads.Add(new SquadFact(tag, bubble, activeEntryIndex, slot, members.Length, targets));
             }
         }
-        else if (firstClass == 0x808094CF && secondClass == 0x808094D0)
+        else if (firstClass == SSquadRuleComponent.Class && secondClass == SSquadRuleComponentPeer.Class)
         {
-            var points = data.Rows(primary + 0x1A0, 0x80809840, 0x48).Select(r => data.U64(r)).ToArray();
+            var points = RuleIdentities(data, in TagView.At<TagArray<SquadRulePoint>>(data,
+                primary + TagView.FieldOffset<SSquadRuleComponent>($"{nameof(SSquadRuleComponent.HE6533acf)}.{nameof(C80809838.Points)}")));
             foreach (var slot in ConfigSlots(tag, data, 66))
                 authoredRules.Add(new RuleFact(tag, bubble, activeEntryIndex, slot, points));
         }
     }
 
+    /** @return The target of the config's component link `member`, or null for a null link. */
+    private static int? SquadLink(ReadOnlySpan<byte> bytes, string member) =>
+        new TagPointer(bytes, TagView.FieldOffset<SEntityConfig>(member)).Target;
+
+    /** Offset of a member of the squad peer's body inside SSquadComponentPeer. */
+    private static int PeerField(string member) =>
+        TagView.FieldOffset<SSquadComponentPeer>($"{nameof(SSquadComponentPeer.H81eeb835)}.{member}");
+
+    /** Rule slot A or B the squad peer names. */
+    private static AuthoredSlotIdentity PeerRuleSlot(ReadOnlySpan<byte> bytes, int peer, string slot) => new(
+        TagView.At<uint>(bytes, peer + PeerField($"RuleSlot{slot}ObjectKey")),
+        TagView.At<ushort>(bytes, peer + PeerField($"RuleSlot{slot}SlotType")),
+        TagView.At<ushort>(bytes, peer + PeerField($"RuleSlot{slot}SlotIndex")));
+
+    /**
+     * Records the placement entry at `entry`; only the fields read must lie inside the tag.
+     * @return The entry's class tag.
+     */
+    private uint AddSquadPlacement(ReadOnlySpan<byte> bytes, uint tag, uint bubble, int entry, string notFinite)
+    {
+        var position = SquadPlacementField<Vector3>(bytes, entry, nameof(AuthoredPlacementEntry.Position));
+        var rotation = SquadPlacementField<Quaternion>(bytes, entry, nameof(AuthoredPlacementEntry.Rotation));
+        if (!Finite(position) || !float.IsFinite(rotation.LengthSquared())
+            || !float.IsFinite(SquadPlacementField<float>(bytes, entry, nameof(AuthoredPlacementEntry.UniformScale))))
+            throw new InvalidDataException(notFinite);
+        var identity = SquadPlacementField<ulong>(bytes, entry, nameof(AuthoredPlacementEntry.PlacementIdentity));
+        var classTag = SquadPlacementField<uint>(bytes, entry, nameof(AuthoredPlacementEntry.ClassTag));
+        authoredPlacements.Add(new PlacementFact(identity, tag, entry, classTag, bubble, activeEntryIndex, position, rotation,
+            SquadPlacementField<uint>(bytes, entry, nameof(AuthoredPlacementEntry.NameHash))));
+        return classTag;
+    }
+
+    private static T SquadPlacementField<T>(ReadOnlySpan<byte> bytes, int entry, string member) where T : unmanaged =>
+        TagView.Member<AuthoredPlacementEntry, T>(bytes, entry, member);
+
+    /** An inline point set and its placement peer name each other, as the component pair does. */
+    private static bool InlinePeersAgree(ReadOnlySpan<byte> bytes, uint tag, int pointSet, int placementPeer)
+    {
+        var points = TagOffsetPointer.Read(bytes, pointSet);
+        var placement = TagOffsetPointer.Read(bytes, placementPeer);
+        return points.Tag == tag && placement.Tag == tag
+            && points.Word == SquadInlinePlacement.Class && placement.Word == SquadInlinePointSet.Class
+            && unchecked((ulong)points.Offset) == (ulong)placementPeer && unchecked((ulong)placement.Offset) == (ulong)pointSet;
+    }
+
+    /** The placement identity of every rule point. */
+    private static ulong[] RuleIdentities(ReadOnlySpan<byte> bytes, ref readonly TagArray<SquadRulePoint> points)
+    {
+        var rows = TagView.Rows(bytes, in points, SquadRulePoint.Class);
+        var identities = new ulong[rows.Length];
+        for (var i = 0; i < identities.Length; ++i) identities[i] = rows[i].PlacementIdentity;
+        return identities;
+    }
+
     /** All six authored candidate arrays remain distinct from runtime variant selection. */
-    private void ReadSquadCandidates(uint tag, TagData data, uint bubble, int[] members)
+    private void ReadSquadCandidates(uint tag, ReadOnlySpan<byte> bytes, uint bubble, int[] members)
     {
         var memberClasses = new List<uint[]>();
         foreach (var member in members)
         {
             var classes = new List<uint>();
             for (var variant = 0; variant < 6; ++variant)
-                foreach (var candidate in data.Rows(member + 8 + variant * 16, 0x80808358, 0x18))
+            {
+                ref readonly var candidates = ref TagView.At<SquadMember>(bytes, member).CharacterChoices.CandidateVariants[variant].Candidates;
+                foreach (ref readonly var candidate in TagView.Rows(bytes, in candidates, SquadCandidate.Class))
                 {
-                    if (data.I64(candidate) == 0) continue;
-                    var placement = data.Relative(candidate);
-                    if (!data.Has(placement - 4, 0x94) || data.U32(placement - 4) != 0x808099D8)
+                    if (TagView.TargetOffset(bytes, in candidate.Blueprint) is not { } placement) continue;
+                    if (!TagView.Fits<AuthoredPlacementEntry>(bytes, placement)
+                        || TagView.TargetClass(bytes, in candidate.Blueprint) != AuthoredPlacementEntry.Class)
                         throw new InvalidDataException("Squad candidate has an invalid placement target.");
-                    var position = data.V3(placement + 0x20);
-                    var rotation = data.Q4(placement + 0x10);
-                    if (!Finite(position) || !float.IsFinite(rotation.LengthSquared())
-                        || !float.IsFinite(data.F32(placement + 0x2C)))
-                        throw new InvalidDataException("Squad candidate transform is not finite.");
-                    authoredPlacements.Add(new PlacementFact(data.U64(placement + 0x70), tag, placement,
-                        data.U32(placement), bubble, activeEntryIndex, position, rotation,
-                        data.U32(placement + 0x64)));
-                    classes.Add(data.U32(placement));
+                    classes.Add(AddSquadPlacement(bytes, tag, bubble, placement, "Squad candidate transform is not finite."));
                 }
+            }
             memberClasses.Add(classes.Distinct().ToArray());
         }
         squadMembers[tag] = memberClasses;

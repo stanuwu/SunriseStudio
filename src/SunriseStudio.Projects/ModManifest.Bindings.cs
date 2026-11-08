@@ -1,4 +1,8 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Projects;
 
@@ -11,9 +15,10 @@ public static partial class ModManifest
             throw new InvalidDataException("A mod can bind at most 256 config sites.");
         foreach (var binding in bindings)
         {
-            if (binding is null || binding.Class != 0x80804825 || binding.Tag < 0x80800000
-                || (binding.Tag - 0x80800000U) >> 13 > ConfigBindingLimits.MaximumPackageId
-                || binding.Size is < 344 or > ConfigBindingLimits.MaximumEntryBytes || binding.Offset < 0
+            if (binding is null || binding.Class != CuiResource.Class || !TagHashes.IsTag(binding.Tag)
+                || TagHashes.Package(binding.Tag) > ConfigBindingLimits.MaximumPackageId
+                || binding.Size < Unsafe.SizeOf<CuiResource>() || binding.Size > ConfigBindingLimits.MaximumEntryBytes
+                || binding.Offset < 0
                 || !Enum.IsDefined(binding.Type)) throw new InvalidDataException("Invalid compiled config binding.");
             StudioProject.ValidateHash(binding.SourceSha256);
             var setting = metadata.Config?.SingleOrDefault(value => value.Key == binding.Key);
@@ -23,14 +28,15 @@ public static partial class ModManifest
             if (binding.Offset > binding.Size - width) throw new InvalidDataException("A config site leaves its entry.");
             if (binding.Profile == ConfigBindingLimits.PropertyProfile)
             {
-                if (binding.PropertyOffset is not >= 0 || binding.PropertyOffset > binding.Size - 24
+                if (binding.PropertyOffset is not >= 0 || binding.PropertyOffset > binding.Size - Unsafe.SizeOf<CuiPropertyRow>()
                     || binding.BindingOffset is not null || binding.Type == ModConfigType.Int
-                    || (binding.Type == ModConfigType.Bool ? binding.PoolOffset != 136 : binding.PoolOffset is not (184 or 200)))
+                    || (binding.Type == ModConfigType.Bool ? binding.PoolOffset != BoolPool
+                        : binding.PoolOffset != FloatPoolA && binding.PoolOffset != FloatPoolB))
                     throw new InvalidDataException("Invalid property config binding.");
             }
             else if (binding.Profile == ConfigBindingLimits.ComparisonProfile)
             {
-                if (binding.BindingOffset is not >= 0 || binding.BindingOffset > binding.Size - 56
+                if (binding.BindingOffset is not >= 0 || binding.BindingOffset > binding.Size - Unsafe.SizeOf<CuiBindingRow>()
                     || binding.PropertyOffset is not null || binding.PoolOffset is not null || binding.Type == ModConfigType.Bool)
                     throw new InvalidDataException("Invalid comparison config binding.");
             }
@@ -47,6 +53,11 @@ public static partial class ModManifest
             }
         }
     }
+
+    // Value pools a property config site may use.
+    private static readonly int BoolPool = TagView.FieldOffset<CuiResource>("ValuePool.BoolValues");
+    private static readonly int FloatPoolA = TagView.FieldOffset<CuiResource>("ValuePool.PoolFloatsA");
+    private static readonly int FloatPoolB = TagView.FieldOffset<CuiResource>("ValuePool.PoolFloatsBNormalized");
 
     /** Writes the configBindings array sorted by tag and offset; nothing when empty. */
     private static void WriteBindings(Utf8JsonWriter json, IReadOnlyList<ModConfigSite> bindings)

@@ -187,8 +187,7 @@ static void Installed(string game, string output)
     MaterialPreviewChecks.CountStageBlends(staticBundle.Manifest);
     var clone = AssetBundle.PrepareImport(project, catalog, staticBundle.ManifestPath, new(AssetBundleImportMode.NewAsset));
     var result = AssetBundle.ApplyImport(project, catalog, clone);
-    var cloneTags = result.AddedAssets.Select(value => 0x80800000u + ((uint)value.Native!.PackageId << 13)
-        + (uint)value.Native.EntryIndex!.Value).ToHashSet();
+    var cloneTags = result.AddedAssets.Select(value => TagHashes.Make(value.Native!.PackageId, value.Native.EntryIndex!.Value)).ToHashSet();
     Check(result.AddedAssets.Where(value => value.Native is not null && catalog.TryGetEntry(value.BaseTagHash!.Value, out var source)
         && source.Type is 40 or 41 or 42 or 48).All(value => cloneTags.Contains(value.Native!.Reference)),
         "Cloned payload metadata still references installed headers.");
@@ -196,11 +195,11 @@ static void Installed(string game, string output)
     {
         var source = catalog.Entries.First(entry => entry.TagHash == value.BaseTagHash);
         var native = value.Native!;
-        uint tag = 0x80800000u + ((uint)native.PackageId << 13) + (uint)native.EntryIndex!.Value;
+        uint tag = TagHashes.Make(native.PackageId, native.EntryIndex!.Value);
         return new PackageOverlayEntry(source with { TagHash = tag, Reference = native.Reference, TypeInfo = native.TypeInfo,
             PackageId = native.PackageId, EntryIndex = native.EntryIndex.Value, Size = checked((int)value.Size) }, value.Name);
     }).ToArray();
-    var byTag = result.AddedAssets.ToDictionary(value => 0x80800000u + ((uint)value.Native!.PackageId << 13) + (uint)value.Native.EntryIndex!.Value);
+    var byTag = result.AddedAssets.ToDictionary(value => TagHashes.Make(value.Native!.PackageId, value.Native.EntryIndex!.Value));
     catalog.SetOverlayEntries(entries); catalog.ReadOverride = tag => byTag.TryGetValue(tag, out var value) ? project.ReadAddedAsset(value.Id, catalog) : null;
     var scene = new AssetSceneLoader(catalog) { IncludeLowerLods = true }.Load(result.RootTag);
     Check(scene.Instances.Count > 0

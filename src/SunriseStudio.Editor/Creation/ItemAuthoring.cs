@@ -19,7 +19,7 @@ public static class ItemAuthoring
         sources ??= new();
         if (!PackageWriter.IsNewPackageId(packageId) || packages.ContainsInstalledPackage(packageId))
             throw new InvalidDataException("Choose an unused package ID for the new item.");
-        if (firstEntry < 0 || firstEntry >= 8191)
+        if (firstEntry < 0 || firstEntry >= TagHashes.EntriesPerPackage - 1)
             throw new InvalidDataException("The package has no room for an item and its display.");
         if (string.IsNullOrWhiteSpace(projectName) || string.IsNullOrWhiteSpace(itemName))
             throw new InvalidDataException("The project and item need names.");
@@ -28,13 +28,13 @@ public static class ItemAuthoring
             || !packages.TryGetEntry(source.DisplayTag, out var displayEntry)
             || displayEntry.Reference != InvestmentCatalog.DisplayClass)
             throw new InvalidDataException("The item's definition or display record is missing.");
-        uint definitionTag = ProjectTags.Tag(packageId, firstEntry), displayTag = ProjectTags.Tag(packageId, firstEntry + 1);
+        uint definitionTag = TagHashes.Make(packageId, firstEntry), displayTag = TagHashes.Make(packageId, firstEntry + 1);
         if (packages.ContainsTag(definitionTag) || packages.ContainsTag(displayTag))
             throw new InvalidDataException("The planned item entries are already in use.");
         byte[] items = packages.Read(sources.Items), displays = packages.Read(sources.Displays);
         var used = InvestmentItemClone.ReadIndexRows(items).Select(row => row.Hash)
             .Concat(InvestmentItemClone.ReadIndexRows(displays).Select(row => row.Hash)).ToHashSet();
-        uint hash = InvestmentItemClone.NewDefinitionHash(
+        uint hash = StringHash.NewDefinitionHash(
             $"sunrise:{projectName}:{packageId:X4}:{firstEntry}:{itemName}", used);
         var edits = new Dictionary<uint, byte[]>();
         ushort iconIndex = InvestmentItemClone.ReadDisplayIcon(display);
@@ -65,7 +65,7 @@ public static class ItemAuthoring
             int baseCollectible = InvestmentCollections.FindCollectible(collectibles, source.Index);
             if (baseCollectible < 0)
                 throw new InvalidDataException("The base item has no collectible to copy.");
-            uint collectibleHash = InvestmentItemClone.NewDefinitionHash(
+            uint collectibleHash = StringHash.NewDefinitionHash(
                 $"sunrise:collectible:{projectName}:{packageId:X4}:{firstEntry}:{itemName}",
                 InvestmentCollections.CollectibleHashes(collectibles));
             var (nameBank, nameHash) = InvestmentItemClone.ReadDisplayString(display, InvestmentItemClone.DisplayName);

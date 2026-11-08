@@ -16,7 +16,7 @@ using var catalog = PackageCatalog.Open(args[rootAt + 1], cacheOptions: new() { 
 const ushort package = 0xB1C;
 const string fixture = "w64_particle_fixture_0b1c_0.pkg";
 const uint point = 0x12345678, muzzlePoint = 0x60FECDD4, ejectPoint = 0x9216EEA9;
-uint Tag(int entry) => 0x80800000u + ((uint)package << 13) + (uint)entry;
+uint Tag(int entry) => TagHashes.Make(package, entry);
 var bytes = new Dictionary<uint, byte[]>();
 var overlays = new List<PackageOverlayEntry>();
 void Add(ProjectAssetAddition asset)
@@ -101,7 +101,7 @@ var (moved, movedNames) = WeaponAttachmentAuthoring.SetPoints(stockPoints, [muzz
 string stable = WeaponAttachmentAuthoring.AfterTemplateRows("Fixture.muzzle");
 Check(PointNames(moved).Take(6).SequenceEqual(PointNames(stockPoints)) && PointNames(moved).Length == 7
     && PointNames(moved)[6] == movedNames["Fixture.muzzle"]
-    && movedNames["Fixture.muzzle"] == SunriseStudio.Formats.InvestmentItemClone.Fnv1(stable),
+    && movedNames["Fixture.muzzle"] == SunriseStudio.Packages.StringBankWriter.Hash(stable),
     "An authored point moved a stock row.");
 var (retired, _) = WeaponAttachmentAuthoring.SetPoints(moved, [], new HashSet<uint> { movedNames["Fixture.muzzle"] });
 Check(retired.AsSpan().SequenceEqual(stockPoints), "Retiring the authored point left the provider changed.");

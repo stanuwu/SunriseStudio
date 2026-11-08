@@ -1,6 +1,9 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 /** A new collectible joins the installed tables without moving any other row's data. */
 internal static class CollectionChecks
@@ -17,15 +20,16 @@ internal static class CollectionChecks
         Check(baseRow >= 0 && page.Name == "Hand Cannons", $"Austringer is not in Hand Cannons: row {baseRow}, page {page.Name}.");
 
         const int item = 32000;
-        uint hash = InvestmentItemClone.NewDefinitionHash("collection-check", InvestmentCollections.CollectibleHashes(collectibles));
+        uint hash = StringHash.NewDefinitionHash("collection-check", InvestmentCollections.CollectibleHashes(collectibles));
         var (nextCollectibles, nextDisplays, row) = InvestmentCollections.AddCollectible(collectibles, displays, baseRow, item, hash, 7, 0x12345678, page.Index,
             packages.ReadOriginal(Collectibles).Length);
         Check(InvestmentCollections.FindCollectible(nextCollectibles, item) == row, "The new collectible does not name its item.");
-        Same(collectibles, nextCollectibles, InvestmentCollections.CollectibleStride, InvestmentCollections.CollectibleArrays, baseRow, row,
-            InvestmentCollections.CollectibleParents);
-        Same(displays, nextDisplays, InvestmentCollections.DisplayStride, InvestmentCollections.DisplayArrays, baseRow, row, -1);
-        var (rows, displayRows) = (Rows(nextCollectibles, InvestmentCollections.CollectibleStride), Rows(nextDisplays, InvestmentCollections.DisplayStride));
-        int parents = rows.Data + row * InvestmentCollections.CollectibleStride + InvestmentCollections.CollectibleParents;
+        int collectibleStride = Unsafe.SizeOf<CollectibleRow>(), displayStride = Unsafe.SizeOf<CollectibleDisplayRow>();
+        int parentsField = TagView.FieldOffset<CollectibleRow>(nameof(CollectibleRow.ParentNodes));
+        Same(collectibles, nextCollectibles, collectibleStride, InvestmentCollections.CollectibleArrays, baseRow, row, parentsField);
+        Same(displays, nextDisplays, displayStride, InvestmentCollections.DisplayArrays, baseRow, row, -1);
+        var (rows, displayRows) = (Rows(nextCollectibles, collectibleStride), Rows(nextDisplays, displayStride));
+        int parents = rows.Data + row * collectibleStride + parentsField;
         int parentHeader = parents + 8 + (int)BinaryPrimitives.ReadInt64LittleEndian(nextCollectibles.AsSpan(parents + 8));
         Check(BinaryPrimitives.ReadInt64LittleEndian(nextCollectibles.AsSpan(parents)) == 1
             && BinaryPrimitives.ReadInt64LittleEndian(nextCollectibles.AsSpan(parentHeader)) == 1
@@ -33,9 +37,9 @@ internal static class CollectionChecks
             && BinaryPrimitives.ReadUInt32LittleEndian(nextCollectibles.AsSpan(parentHeader + 8)) == 0x80803962
             && BinaryPrimitives.ReadUInt16LittleEndian(nextCollectibles.AsSpan(parentHeader + 16)) == page.Index,
             "The new collectible's parent list does not name only its page.");
-        Check(BinaryPrimitives.ReadUInt32LittleEndian(nextDisplays.AsSpan(displayRows.Data + row * InvestmentCollections.DisplayStride)) == hash
-            && BinaryPrimitives.ReadUInt32LittleEndian(nextDisplays.AsSpan(displayRows.Data + row * InvestmentCollections.DisplayStride + 12)) == 0x12345678
-            && BinaryPrimitives.ReadUInt32LittleEndian(nextCollectibles.AsSpan(rows.Data + row * InvestmentCollections.CollectibleStride + 40)) == hash,
+        ref readonly var addedDisplay = ref TagView.At<CollectibleDisplayRow>(nextDisplays, displayRows.Data + row * displayStride);
+        Check(addedDisplay.CollectibleHash == hash && addedDisplay.NameHash == 0x12345678
+            && TagView.At<CollectibleRow>(nextCollectibles, rows.Data + row * collectibleStride).CollectibleHash == hash,
             "The new collectible or its display row lost its hash or name.");
 
         byte[] nextNodes = InvestmentCollections.AddToNode(nodes, page.Index, row);

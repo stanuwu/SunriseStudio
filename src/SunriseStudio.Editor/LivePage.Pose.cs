@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Live;
@@ -172,8 +171,9 @@ public sealed partial class LivePage
         };
         if (kind == NativeEntityPalette.None) { reason = "No shader for 4-row palettes"; return null; }
         if (!native.CanApplyLivePalette(mesh, kind)) { reason = "No matching skinning shader"; return null; }
-        if (mesh.Mesh.Native is not { Kind: NativeMeshKind.Entity } source || source.SourceHeader.Length < 0x80
-            || Header(source.SourceHeader, 0x60) != draw.FixedRows[0] || Header(source.SourceHeader, 0x70) != draw.FixedRows[1])
+        if (mesh.Mesh.Native is not { Kind: NativeMeshKind.Entity } source
+            || LivePoseModelBinding.ModelRows(source.SourceHeader) is not { } model
+            || model.Position != draw.FixedRows[0] || model.Uv != draw.FixedRows[1])
         { reason = "Model constants differ from loaded geometry"; return null; }
         var rows = new Vector4[8 + draw.Palette.Count];
         for (int i = 0; i < 3; i++) rows[5 + i] = draw.FixedRows[i];
@@ -303,8 +303,4 @@ public sealed partial class LivePage
             ImGui.TreePop();
         }
     }
-
-    private static Vector4 Header(byte[] bytes, int offset) => new(
-        BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset)), BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset + 4)),
-        BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset + 8)), BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset + 12)));
 }

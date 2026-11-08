@@ -1,4 +1,10 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Formats;
 
@@ -8,34 +14,27 @@ public sealed record InvestmentCollectionNode(int Index, uint Hash, string Name,
 /** Collectibles and the presentation nodes that list them; a collectible names its item by index. */
 public static class InvestmentCollections
 {
-    // Collectible rows: parent node rows at +24 (u16 elements), hash at +40, u16 item index at +44,
-    // and the arrays each row owns.
-    public const int CollectibleStride = 184, CollectibleParents = 24, CollectibleHash = 40, CollectibleItem = 44;
-    private const uint ParentListClass = 0x80803962;
-    public static readonly IReadOnlyList<int> CollectibleArrays = [24, 48, 64, 80, 96, 112, 136, 168];
-    // Collectible display rows pair row for row: hash at +0, u32 icon row at +4, name {u32 bank, u32 hash} at +8.
-    public const int DisplayStride = 96, DisplayHash = 0, DisplayIcon = 4, DisplayName = 8;
-    // Flavor and source lines are {u32 bank, u32 hash} pairs too.
-    public const int DisplayFlavor = 16, DisplaySource = 24;
-    public static readonly IReadOnlyList<int> DisplayArrays = [72];
-    // Node rows: hash at +40; child nodes at +104 (24-byte rows, u16 node at +0);
-    // child collectibles at +120 (4-byte rows, u16 collectible then a u16 the game sets to 0x7FFF).
-    public const int NodeStride = 168, NodeHash = 40, NodeChildren = 104, NodeCollectibles = 120;
-    private const int ChildStride = 24, CollectibleChildStride = 4, TableArray = 8;
+    // The arrays each collectible row owns.
+    public static readonly IReadOnlyList<int> CollectibleArrays = [.. new[] { "Traits", "ParentNodes", "HE5440b42.ExpressionSteps",
+        "H38d50966.ExpressionSteps", "H824262f2.ExpressionSteps", "HD0921683.ExpressionSteps", "HC5bb1f46.ExpressionSteps",
+        "UnknownArray136", "SocketOverrides" }.Select(TagView.FieldOffset<CollectibleRow>)];
+    // Collectible display rows pair row for row; SetDisplayText picks a text line by its bank offset.
+    public static readonly int DisplayName = TagView.FieldOffset<CollectibleDisplayRow>(nameof(CollectibleDisplayRow.NameBank)),
+        DisplayFlavor = TagView.FieldOffset<CollectibleDisplayRow>(nameof(CollectibleDisplayRow.FlavorBank)),
+        DisplaySource = TagView.FieldOffset<CollectibleDisplayRow>(nameof(CollectibleDisplayRow.SourceBank));
+    public static readonly IReadOnlyList<int> DisplayArrays = [TagView.FieldOffset<CollectibleDisplayRow>("HBe049c85.H913dc0f2.ExpressionSteps")];
+    // The game sets the second word of a node's collectible row to this.
     private const ushort CollectibleChildTail = 0x7FFF;
-    // Node display rows pair row for row: name {u32 bank, u32 hash} at +8.
-    public const int NodeDisplayStride = 44, NodeDisplayName = 8;
     /** The Collections root node; badge and triumph nodes sit under other roots. */
     public const uint CollectionsRoot = 0xE1EA9713;
 
     /** @return The collectible row that names item `itemIndex`, or -1. */
     public static int FindCollectible(ReadOnlyMemory<byte> collectibles, int itemIndex)
     {
-        var reader = new TagReader(collectibles);
-        var rows = reader.Array(TableArray, stride: CollectibleStride);
-        for (int row = 0; row < rows.Count; row++)
-            if (BinaryPrimitives.ReadUInt16LittleEndian(collectibles.Span[(rows.Data + row * CollectibleStride + CollectibleItem)..]) == itemIndex)
-                return row;
+        var tag = collectibles.Span;
+        var rows = TableRows.Of<CollectibleTable, CollectibleRow>(tag);
+        for (int row = 0; row < rows.Length; row++)
+            if (rows[row].ItemIndex == itemIndex) return row;
         return -1;
     }
 
@@ -46,32 +45,34 @@ public static class InvestmentCollections
     public static IReadOnlyList<InvestmentCollectionNode> ReadNodes(ReadOnlyMemory<byte> nodes, ReadOnlyMemory<byte> nodeDisplays,
         Func<uint, uint, string> name)
     {
-        var reader = new TagReader(nodes);
-        var rows = reader.Array(TableArray, stride: NodeStride);
-        var displays = new TagReader(nodeDisplays).Array(TableArray, stride: NodeDisplayStride);
-        if (displays.Count != rows.Count) throw new InvalidDataException("The node and node display tables differ in length.");
+        var tag = nodes.Span;
+        var rows = TableRows.Of<C80803041, PresentationNodeRow>(tag);
+        var displays = TableRows.Of<PresentationNodeDisplayTable, PresentationNodeDisplayRow>(nodeDisplays.Span);
+        if (displays.Length != rows.Length) throw new InvalidDataException("The node and node display tables differ in length.");
         var parents = new Dictionary<int, int>();
-        for (int row = 0; row < rows.Count; row++)
-            foreach (int child in Children(reader, rows.Data + row * NodeStride + NodeChildren, ChildStride))
-                parents.TryAdd(child, row);
+        for (int row = 0; row < rows.Length; row++)
+            foreach (ref readonly var child in TagView.CheckedRows(tag, in rows[row].Children.H8cc46c76, 0))
+                parents.TryAdd(child.NodeIndex, row);
+        var hashes = new uint[rows.Length];
+        for (int row = 0; row < rows.Length; row++) hashes[row] = rows[row].NodeHash;
         bool UnderRoot(int row)
         {
-            for (int depth = 0; depth < rows.Count; depth++)
+            for (int depth = 0; depth < hashes.Length; depth++)
             {
-                if (reader.U32(rows.Data + row * NodeStride + NodeHash) == CollectionsRoot) return true;
+                if (hashes[row] == CollectionsRoot) return true;
                 if (!parents.TryGetValue(row, out row)) return false;
             }
             return false;
         }
         var result = new List<InvestmentCollectionNode>();
-        for (int row = 0; row < rows.Count; row++)
+        for (int row = 0; row < rows.Length; row++)
         {
-            var collectibles = Children(reader, rows.Data + row * NodeStride + NodeCollectibles, CollectibleChildStride);
+            var children = TagView.CheckedRows(tag, in rows[row].Children.Collectibles, 0);
+            var collectibles = new List<int>(children.Length);
+            foreach (ref readonly var child in children) collectibles.Add(child.CollectibleIndex);
             if (collectibles.Count == 0 || !UnderRoot(row)) continue;
-            int display = displays.Data + row * NodeDisplayStride + NodeDisplayName;
-            string label = name(BinaryPrimitives.ReadUInt32LittleEndian(nodeDisplays.Span[display..]),
-                BinaryPrimitives.ReadUInt32LittleEndian(nodeDisplays.Span[(display + 4)..]));
-            result.Add(new(row, reader.U32(rows.Data + row * NodeStride + NodeHash), label, collectibles));
+            string label = name(displays[row].NameBank, displays[row].NameHash);
+            result.Add(new(row, rows[row].NodeHash, label, collectibles));
         }
         return result;
     }
@@ -88,58 +89,64 @@ public static class InvestmentCollections
         int stockLength, ushort? icon = null, (uint Bank, uint Hash)? flavor = null)
     {
         if (parentNode is < 0 or > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(parentNode));
-        var rows = new TagReader(collectibles).Array(TableArray, stride: CollectibleStride);
-        var displayRows = new TagReader(displays).Array(TableArray, stride: DisplayStride);
-        if (rows.Count != displayRows.Count) throw new InvalidDataException("The collectible and display tables differ in length.");
-        if (baseRow < 0 || baseRow >= rows.Count) throw new ArgumentOutOfRangeException(nameof(baseRow));
+        var tag = collectibles.Span;
+        var rows = TableRows.Of<CollectibleTable, CollectibleRow>(tag);
+        var displayTag = displays.Span;
+        var displayRows = TableRows.Of<C80802e5b, CollectibleDisplayRow>(displayTag);
+        if (rows.Length != displayRows.Length) throw new InvalidDataException("The collectible and display tables differ in length.");
+        if (baseRow < 0 || baseRow >= rows.Length) throw new ArgumentOutOfRangeException(nameof(baseRow));
         if (itemIndex is < 0 or > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(itemIndex));
-        if (rows.Count + 1 > InvestmentItemClone.MaximumIndexRows) throw new InvalidDataException("The collectible table has no row left.");
-        int source = rows.Data + baseRow * CollectibleStride, displaySource = displayRows.Data + baseRow * DisplayStride;
-        byte[] row = collectibles.Span.Slice(source, CollectibleStride).ToArray();
-        BinaryPrimitives.WriteUInt32LittleEndian(row.AsSpan(CollectibleHash), hash);
-        BinaryPrimitives.WriteUInt16LittleEndian(row.AsSpan(CollectibleItem), (ushort)itemIndex);
-        byte[] display = displays.Span.Slice(displaySource, DisplayStride).ToArray();
-        BinaryPrimitives.WriteUInt32LittleEndian(display.AsSpan(DisplayHash), hash);
-        BinaryPrimitives.WriteUInt32LittleEndian(display.AsSpan(DisplayName), nameBank);
-        BinaryPrimitives.WriteUInt32LittleEndian(display.AsSpan(DisplayName + 4), nameHash);
-        if (icon is { } iconRow) BinaryPrimitives.WriteUInt32LittleEndian(display.AsSpan(DisplayIcon), iconRow);
-        if (flavor is { } text)
+        if (rows.Length + 1 > InvestmentItemClone.MaximumIndexRows) throw new InvalidDataException("The collectible table has no row left.");
+        int source = TagView.OffsetOf(tag, in rows[baseRow]), displaySource = TagView.OffsetOf(displayTag, in displayRows[baseRow]);
+        byte[] row = tag.Slice(source, Unsafe.SizeOf<CollectibleRow>()).ToArray();
+        ref var collectible = ref TagView.Edit<CollectibleRow>(row);
+        collectible.CollectibleHash = hash;
+        collectible.ItemIndex = (ushort)itemIndex;
+        byte[] display = displayTag.Slice(displaySource, Unsafe.SizeOf<CollectibleDisplayRow>()).ToArray();
+        ref var text = ref TagView.Edit<CollectibleDisplayRow>(display);
+        text.CollectibleHash = hash;
+        text.NameBank = nameBank;
+        text.NameHash = nameHash;
+        if (icon is { } iconRow) text.IconIndex = iconRow;
+        if (flavor is { } line)
         {
-            BinaryPrimitives.WriteUInt32LittleEndian(display.AsSpan(DisplayFlavor), text.Bank);
-            BinaryPrimitives.WriteUInt32LittleEndian(display.AsSpan(DisplayFlavor + 4), text.Hash);
+            text.FlavorBank = line.Bank;
+            text.FlavorHash = line.Hash;
         }
-        BinaryPrimitives.WriteUInt32LittleEndian(display.AsSpan(DisplaySource + 4), InvestmentItemClone.EmptyStringHash);
-        byte[] parentClass = new byte[8], parents = new byte[sizeof(ushort)];
-        BinaryPrimitives.WriteUInt32LittleEndian(parentClass, ParentListClass);
-        BinaryPrimitives.WriteUInt16LittleEndian(parents, (ushort)parentNode);
+        text.SourceHash = StringHash.Empty;
+        byte[] parentClass = new byte[TagArray.HeaderSize - TagArray.ElementClassOffset], parents = new byte[Unsafe.SizeOf<PresentationNodeRef>()];
+        BinaryPrimitives.WriteUInt32LittleEndian(parentClass, PresentationNodeRef.Class);
+        TagView.Edit<PresentationNodeRef>(parents).PresentationNode = (ushort)parentNode;
         // Block before rows: the rows stay last, so the next append reuses their bytes and leaves no dead copy.
         var (grown, blocks) = InvestmentItemClone.AppendRows(collectibles,
-            [new(TableArray, CollectibleStride, [row]) { RowArrays = CollectibleArrays, RowSources = [source] }],
-            [InvestmentItemClone.TypedBlock(1, parentClass, parents)], stockLength);
-        int field = new TagReader(grown).Array(TableArray, stride: CollectibleStride).Data
-            + rows.Count * CollectibleStride + CollectibleParents;
-        BinaryPrimitives.WriteInt64LittleEndian(grown.AsSpan(field), 1);
-        BinaryPrimitives.WriteInt64LittleEndian(grown.AsSpan(field + 8), blocks[0] + InvestmentItemClone.TypedBlockHeader - field - 8);
-        return (grown,
-            InvestmentItemClone.AppendRow(displays, TableArray, DisplayStride, display, DisplayArrays, displaySource), rows.Count);
+            [new(TagView.FieldOffset<CollectibleTable>("Table"), Unsafe.SizeOf<CollectibleRow>(), [row])
+                { RowArrays = CollectibleArrays, RowSources = [source] }],
+            [TagRelocator.TypedBlock(1, parentClass, parents)], stockLength);
+        var grownRows = TableRows.Of<CollectibleTable, CollectibleRow>(grown);
+        int field = TagView.OffsetOf(grown, in grownRows[rows.Length].ParentNodes);
+        TagArray.WriteField(grown, field, 1, blocks[0] + TagRelocator.TypedBlockHeader);
+        return (grown, InvestmentItemClone.AppendRow(displays, TagView.FieldOffset<C80802e5b>("Table"),
+            Unsafe.SizeOf<CollectibleDisplayRow>(), display, DisplayArrays, displaySource), rows.Length);
     }
 
     /** Sets one {bank, hash} text line of every collectible display that names `itemIndex`. */
     public static byte[] SetDisplayText(ReadOnlyMemory<byte> collectibles, ReadOnlyMemory<byte> displays, int itemIndex,
         int field, uint bank, uint hash)
     {
-        if (field is not (DisplayName or DisplayFlavor or DisplaySource)) throw new ArgumentOutOfRangeException(nameof(field));
-        var source = new TagReader(collectibles);
-        var sourceRows = source.Array(TableArray, stride: CollectibleStride);
-        var targetRows = new TagReader(displays).Array(TableArray, stride: DisplayStride);
-        if (sourceRows.Count != targetRows.Count) throw new InvalidDataException("Collectible and display rows do not pair.");
+        if (field != DisplayName && field != DisplayFlavor && field != DisplaySource) throw new ArgumentOutOfRangeException(nameof(field));
+        var tag = collectibles.Span;
+        var sourceRows = TableRows.Of<CollectibleTable, CollectibleRow>(tag);
+        var displayTag = displays.Span;
+        var targetRows = TableRows.Of<C80802e5b, CollectibleDisplayRow>(displayTag);
+        if (sourceRows.Length != targetRows.Length) throw new InvalidDataException("Collectible and display rows do not pair.");
         byte[] result = displays.ToArray();
-        for (int index = 0; index < sourceRows.Count; index++)
+        for (int index = 0; index < sourceRows.Length; index++)
         {
-            if (source.U16(sourceRows.Data + index * CollectibleStride + CollectibleItem) != itemIndex) continue;
-            int at = targetRows.Data + index * DisplayStride + field;
-            BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(at), bank);
-            BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(at + 4), hash);
+            if (sourceRows[index].ItemIndex != itemIndex) continue;
+            ref var row = ref TagView.Edit<CollectibleDisplayRow>(result, TagView.OffsetOf(displayTag, in targetRows[index]));
+            if (field == DisplayName) { row.NameBank = bank; row.NameHash = hash; }
+            else if (field == DisplayFlavor) { row.FlavorBank = bank; row.FlavorHash = hash; }
+            else { row.SourceBank = bank; row.SourceHash = hash; }
         }
         return result;
     }
@@ -147,26 +154,36 @@ public static class InvestmentCollections
     /** @return Every collectible hash in the table, for picking an unused one. */
     public static IReadOnlySet<uint> CollectibleHashes(ReadOnlyMemory<byte> collectibles)
     {
-        var reader = new TagReader(collectibles);
-        var rows = reader.Array(TableArray, stride: CollectibleStride);
-        return Enumerable.Range(0, rows.Count).Select(row => reader.U32(rows.Data + row * CollectibleStride + CollectibleHash)).ToHashSet();
+        var tag = collectibles.Span;
+        var rows = TableRows.Of<CollectibleTable, CollectibleRow>(tag);
+        var hashes = new HashSet<uint>();
+        foreach (ref readonly var row in rows) hashes.Add(row.CollectibleHash);
+        return hashes;
     }
 
     /** Adds collectible `collectible` to the end of node `node`'s collectible list. */
     public static byte[] AddToNode(ReadOnlyMemory<byte> nodes, int node, int collectible)
     {
-        var rows = new TagReader(nodes).Array(TableArray, stride: NodeStride);
-        if (node < 0 || node >= rows.Count) throw new ArgumentOutOfRangeException(nameof(node));
+        var tag = nodes.Span;
+        var rows = TableRows.Of<C80803041, PresentationNodeRow>(tag);
+        if (node < 0 || node >= rows.Length) throw new ArgumentOutOfRangeException(nameof(node));
         if (collectible is < 0 or > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(collectible));
-        byte[] child = new byte[CollectibleChildStride];
-        BinaryPrimitives.WriteUInt16LittleEndian(child, (ushort)collectible);
-        BinaryPrimitives.WriteUInt16LittleEndian(child.AsSpan(2), CollectibleChildTail);
-        return InvestmentItemClone.AppendRow(nodes, rows.Data + node * NodeStride + NodeCollectibles, CollectibleChildStride, child);
+        byte[] child = new byte[Unsafe.SizeOf<PresentationNodeCollectibleRow>()];
+        ref var entry = ref TagView.Edit<PresentationNodeCollectibleRow>(child);
+        entry.CollectibleIndex = (ushort)collectible;
+        entry.SortOrder = CollectibleChildTail;
+        return InvestmentItemClone.AppendRow(nodes, TagView.OffsetOf(tag, in rows[node].Children.Collectibles),
+            Unsafe.SizeOf<PresentationNodeCollectibleRow>(), child);
     }
+}
 
-    private static List<int> Children(TagReader reader, int field, int stride)
+/** Rows of an index table's Table array, with TagArray.Checked's checks and messages. */
+file static class TableRows
+{
+    public static ReadOnlySpan<TRow> Of<TTable, TRow>(ReadOnlySpan<byte> tag) where TTable : unmanaged where TRow : unmanaged
     {
-        var children = reader.Array(field, stride: stride);
-        return Enumerable.Range(0, children.Count).Select(index => (int)reader.U16(children.Data + index * stride)).ToList();
+        int stride = Unsafe.SizeOf<TRow>();
+        var (count, data, _) = TagArray.Checked(tag, TagView.FieldOffset<TTable>("Table"), stride: stride);
+        return MemoryMarshal.Cast<byte, TRow>(tag.Slice(data, count * stride));
     }
 }

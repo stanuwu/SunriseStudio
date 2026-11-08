@@ -1,11 +1,15 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using SunriseStudio.Animation;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -29,7 +33,6 @@ public static partial class CompatibleSkinnedMesh
 {
     private const string MatrixShaderHash = "880AC672C57AC1947343E344CBAD49EEB3B6A7759C68FE28EC1504D1A52997EF";
     private const string ShadowShaderHash = "A8558442B245BD8CDF3E40E4115D7248A903B44D0E864BBD9C1FF1B3986E15F8";
-    private const uint ModelClass = 0x808073A5, MeshClass = 0x80807378, PartClass = 0x8080737E;
     private const int EntryCount = 6;
     private const float BindTolerance = .0002f;
 
@@ -66,12 +69,12 @@ public static partial class CompatibleSkinnedMesh
         long sourceRevision = catalog.OverlayRevision;
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Name);
         if (!PackageWriter.IsNewPackageId(options.PackageId) || catalog.ContainsInstalledPackage(options.PackageId)
-            || options.FirstEntryIndex < 0 || options.FirstEntryIndex > 8192 - EntryCount)
+            || options.FirstEntryIndex < 0 || options.FirstEntryIndex > TagHashes.EntriesPerPackage - EntryCount)
             throw new InvalidDataException("Skin buffers need six unused entries in a new package.");
         using var originals = PackageCatalog.Open(catalog.GameRoot);
         originals.ReadOverride = catalog.ReadOriginal;
         var modelEntry = Require(originals, options.ModelTag);
-        if (modelEntry.Reference != ModelClass || !catalog.ContainsInstalledPackage(modelEntry.PackageId))
+        if (modelEntry.Reference != SEntityModel.Class || !catalog.ContainsInstalledPackage(modelEntry.PackageId))
             throw new NotSupportedException("Choose an installed entity model to replace.");
         var rig = new SkeletonReader(originals).Read(options.EntityTag);
         if (!rig.ModelTags.Contains(options.ModelTag))
@@ -105,10 +108,11 @@ public static partial class CompatibleSkinnedMesh
         { Active(tag); return originals.Read(tag); }
         Read(options.EntityTag); Read(rig.ResourceTag); Read(selected.MaterialTag); Read(native.VertexShaderDataTag);
         byte[] model = Read(options.ModelTag);
-        if (model.Length < 0xA0 || I64(model, 0) != model.Length)
+        if (!TagView.Fits<SEntityModel>(model, 0) || (long)TagView.At<SEntityModel>(model).TagByteLength != model.Length)
             throw new InvalidDataException("Entity model header is invalid.");
         byte[] activeEntity = Active(options.EntityTag);
-        if (!NativeRows.Rows(activeEntity, 0x10, 0x80809C04, 12).Any(row => U32(activeEntity, row) == selectedInstance.ModelSourceConfigTag))
+        if (!Rows<SPatternComponent>(activeEntity, TagView.FieldOffset<SEntity>(nameof(SEntity.Components)), SPatternComponent.Class)
+            .Any(row => TagView.At<SPatternComponent>(activeEntity, row).Config == selectedInstance.ModelSourceConfigTag))
             throw new NotSupportedException("The entity no longer uses the installed template's model component.");
         byte[] activeConfig = Active(selectedInstance.ModelSourceConfigTag);
         int consumedBones = ConsumedBoneCount(activeConfig, model, options.ModelTag);
@@ -116,46 +120,44 @@ public static partial class CompatibleSkinnedMesh
             throw new InvalidDataException("The model consumes more bones than its entity skeleton supplies.");
         var weights = EncodeInfluences(input.Influences, consumedBones);
         var geometry = MeshAssetImporter.EncodeGeometry(input.Geometry, token);
-        var positions = new byte[checked(input.Geometry.Positions.Length * 16)];
-        for (int vertex = 0; vertex < input.Geometry.Positions.Length; vertex++)
-        {
-            geometry.Positions.AsSpan(vertex * 8, 6).CopyTo(positions.AsSpan(vertex * 16));
-            weights.AsSpan(vertex * 8, 8).CopyTo(positions.AsSpan(vertex * 16 + 8));
-        }
+        var positions = VertexStreamCodec.SkinPositions(geometry.Positions, weights, input.Geometry.Positions.Length);
         var sourcePositions = scene.Instances.Where(instance => instance.Mesh.TagHash == options.ModelTag)
             .SelectMany(instance => instance.Mesh.Vertices.Select(vertex => vertex.Position)).ToArray();
         var minimum = sourcePositions.Aggregate(Vector3.Min); var maximum = sourcePositions.Aggregate(Vector3.Max);
         if (input.Geometry.Positions.Any(position => position.X < minimum.X || position.Y < minimum.Y || position.Z < minimum.Z
             || position.X > maximum.X || position.Y > maximum.Y || position.Z > maximum.Z))
             throw new NotSupportedException("Replacement vertices must stay within the source model's bind bounds.");
-        int[] meshRows = NativeRows.Rows(model, 0x10, MeshClass, 0x88);
-        int originalPartCount = meshRows.Sum(row => NativeRows.Rows(model, row + 0x18, PartClass, 0x20).Length);
-        int sourceMesh = meshRows.Single(row => NativeRows.Rows(model, row + 0x18, PartClass, 0x20).Contains(options.SourcePartOffset));
-        int[] sourceParts = NativeRows.Rows(model, sourceMesh + 0x18, PartClass, 0x20);
+        int[] meshRows = Rows(model, in TagView.At<SEntityModel>(model).Meshes, SEntityModelMesh.Class);
+        int[] PartRows(int mesh) => Rows(model, in TagView.At<SEntityModelMesh>(model, mesh).Parts, SEntityModelPart.Class);
+        SEntityModelPart PartAt(int at) => TagView.At<SEntityModelPart>(model, at);
+        int originalPartCount = meshRows.Sum(row => PartRows(row).Length);
+        int sourceMesh = meshRows.Single(row => PartRows(row).Contains(options.SourcePartOffset));
+        int[] sourceParts = PartRows(sourceMesh);
         int sourcePart = options.SourcePartOffset;
         int Stage(int ordinal)
         {
-            for (int stage = 0; stage < 23; stage++)
-                if (ordinal >= U16(model, sourceMesh + 0x28 + stage * 2) && ordinal < U16(model, sourceMesh + 0x2A + stage * 2)) return stage;
+            ReadOnlySpan<ushort> bounds = TagView.At<SEntityModelMesh>(model, sourceMesh).StageIndexBoundaries;
+            for (int stage = 0; stage < bounds.Length - 1; stage++)
+                if (ordinal >= bounds[stage] && ordinal < bounds[stage + 1]) return stage;
             throw new InvalidDataException("A model part has no render-stage range.");
         }
         var retained = sourceParts.Select((part, ordinal) => (Part: part, Stage: Stage(ordinal)))
-            .Where(value => U32(model, value.Part + 8) == U32(model, sourcePart + 8)
-                && U32(model, value.Part + 12) == U32(model, sourcePart + 12)
-                && U16(model, value.Part + 6) == U16(model, sourcePart + 6)
-                && model[value.Part + 0x1B] == model[sourcePart + 0x1B]).OrderBy(value => value.Stage).ToArray();
-        uint visibilityCount = U32(model, 0x30);
+            .Where(value => PartAt(value.Part).IndexStart == PartAt(sourcePart).IndexStart
+                && PartAt(value.Part).IndexCount == PartAt(sourcePart).IndexCount
+                && PartAt(value.Part).PrimitiveType3Written == PartAt(sourcePart).PrimitiveType3Written
+                && PartAt(value.Part).LodCategory == PartAt(sourcePart).LodCategory).OrderBy(value => value.Stage).ToArray();
+        uint visibilityCount = TagView.At<SEntityModel>(model).PartVisibilityMaskBitsMultipleOf32;
         if (retained.Length == 0 || visibilityCount == 0 || (visibilityCount & 31) != 0
-            || retained.Any(value => U16(model, value.Part + 0x16) >= visibilityCount))
+            || retained.Any(value => PartAt(value.Part).VisibilityIndex >= visibilityCount))
             throw new InvalidDataException("The template part visibility indices leave their original mask.");
         uint[] selectedMaterials = [];
-        if (retained.Any(value => BinaryPrimitives.ReadInt16LittleEndian(model.AsSpan(value.Part + 4)) != -1))
+        if (retained.Any(value => PartAt(value.Part).ExternalMaterialGroup1Direct != -1))
         {
             var stateReads = new HashSet<uint>();
             var initial = new EntityInitialStateReader(catalog) { Reads = stateReads }
                 .Read(options.EntityTag, selectedInstance.ModelSourceConfigTag);
             foreach (uint tag in stateReads) Active(tag);
-            int resource = checked((int)(0x18 + I64(activeConfig, 0x18)));
+            int resource = PointerTarget(activeConfig, TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition)));
             var selection = EntityMaterialSelector.Read(activeConfig, resource, initial.EnabledParts, initial.Unresolved);
             if (selection.Unresolved is not null)
                 throw new NotSupportedException("The template's initial material state is unresolved: " + selection.Unresolved);
@@ -165,13 +167,14 @@ public static partial class CompatibleSkinnedMesh
         uint materialTag = 0;
         foreach (var part in retained)
         {
-            if (BinaryPrimitives.ReadInt16LittleEndian(model.AsSpan(sourceMesh + 0x58 + part.Stage * 2)) != native.NativeDeclarationId)
+            if (TagView.At<SEntityModelMesh>(model, sourceMesh).StageVertexDeclaration[part.Stage] != native.NativeDeclarationId)
                 throw new NotSupportedException("A retained render pass uses a different vertex declaration.");
             uint[] materials = PartMaterials(model, part.Part, activeConfig);
             if (part.Part == sourcePart)
             {
-                int group = BinaryPrimitives.ReadInt16LittleEndian(model.AsSpan(part.Part + 4));
-                materialTag = group == -1 ? U32(model, part.Part) : selectedMaterials[group];
+                var row = PartAt(part.Part);
+                int group = row.ExternalMaterialGroup1Direct;
+                materialTag = group == -1 ? row.Material : selectedMaterials[group];
                 if (materialTag == uint.MaxValue)
                     throw new NotSupportedException("The selected part has no material in its initial state.");
             }
@@ -183,24 +186,33 @@ public static partial class CompatibleSkinnedMesh
                 ValidateMaterial(catalog, tag, expected, Active);
             }
         }
-        uint Tag(int offset) => checked(0x80800000u + ((uint)options.PackageId << 13) + (uint)(options.FirstEntryIndex + offset));
-        var partBytes = new byte[checked(retained.Length * 0x20)];
+        uint Tag(int offset) => TagHashes.Make(options.PackageId, options.FirstEntryIndex + offset);
+        int partSize = Unsafe.SizeOf<SEntityModelPart>(), meshSize = Unsafe.SizeOf<SEntityModelMesh>();
+        var partBytes = new byte[checked(retained.Length * partSize)];
         for (int index = 0; index < retained.Length; index++)
         {
-            model.AsSpan(retained[index].Part, 0x20).CopyTo(partBytes.AsSpan(index * 0x20));
-            Put16(partBytes, index * 0x20 + 6, 3); Put32(partBytes, index * 0x20 + 8, 0);
-            Put32(partBytes, index * 0x20 + 12, checked((uint)input.Geometry.Indices.Length));
+            model.AsSpan(retained[index].Part, partSize).CopyTo(partBytes.AsSpan(index * partSize));
+            ref var copy = ref TagView.Edit<SEntityModelPart>(partBytes, index * partSize);
+            copy.PrimitiveType3Written = 3; copy.IndexStart = 0;
+            copy.IndexCount = checked((uint)input.Geometry.Indices.Length);
         }
-        byte[] mesh = model.AsSpan(sourceMesh, 0x88).ToArray();
-        Put32(mesh, 0, Tag(0)); Put32(mesh, 4, Tag(2)); Put32(mesh, 8, uint.MaxValue); Put32(mesh, 0x10, Tag(4));
-        for (int stage = 0; stage <= 23; stage++) Put16(mesh, 0x28 + stage * 2, checked((ushort)retained.Count(value => value.Stage < stage)));
-        model = NativeRows.Append(model, 0x10, MeshClass, 0x88, mesh, out int newMesh);
-        model = NativeRows.Append(model, newMesh + 0x18, PartClass, 0x20, partBytes, out _);
-        for (int axis = 0; axis < 3; axis++) PutFloat(model, 0x50 + axis * 4, geometry.PositionScale);
-        PutFloat(model, 0x60, geometry.PositionOffset.X); PutFloat(model, 0x64, geometry.PositionOffset.Y);
-        PutFloat(model, 0x68, geometry.PositionOffset.Z); PutFloat(model, 0x6C, geometry.PositionScale);
-        PutFloat(model, 0x70, geometry.UvScale); PutFloat(model, 0x74, geometry.UvScale);
-        PutFloat(model, 0x78, geometry.UvOffset.X); PutFloat(model, 0x7C, geometry.UvOffset.Y);
+        byte[] mesh = model.AsSpan(sourceMesh, meshSize).ToArray();
+        ref var meshRow = ref TagView.Edit<SEntityModelMesh>(mesh);
+        meshRow.VertexBuffer0[0].Unk0 = Tag(0); meshRow.VertexBuffer0[1].Unk0 = Tag(2);
+        meshRow.VertexBuffer0[2].Unk0 = uint.MaxValue; meshRow.IndexBuffer = Tag(4);
+        Span<ushort> boundaries = meshRow.StageIndexBoundaries;
+        for (int stage = 0; stage < boundaries.Length; stage++)
+            boundaries[stage] = checked((ushort)retained.Count(value => value.Stage < stage));
+        model = TagRelocator.ReplaceArray(model, TagView.OffsetOf(model, in TagView.At<SEntityModel>(model).Meshes),
+            SEntityModelMesh.Class, meshSize, mesh, out int newMesh);
+        model = TagRelocator.ReplaceArray(model, TagView.OffsetOf(model, in TagView.At<SEntityModelMesh>(model, newMesh).Parts),
+            SEntityModelPart.Class, partSize, partBytes, out _);
+        ref var modelHeader = ref TagView.Edit<SEntityModel>(model);
+        modelHeader.PositionScale = new Vector3(geometry.PositionScale);
+        modelHeader.PositionOffset = new Vector3(geometry.PositionOffset.X, geometry.PositionOffset.Y, geometry.PositionOffset.Z);
+        modelHeader.PositionScaleW = geometry.PositionScale;
+        modelHeader.UvScaleU = geometry.UvScale; modelHeader.UvScaleV = geometry.UvScale;
+        modelHeader.UvOffsetU = geometry.UvOffset.X; modelHeader.UvOffsetV = geometry.UvOffset.Y;
         var additions = new List<ProjectAssetAddition>();
         BufferPair(native.VertexStreams[0].HeaderTag, positions, 0, "positions", false);
         BufferPair(native.VertexStreams[1].HeaderTag, geometry.Attributes, 2, "attributes", false);
@@ -221,8 +233,13 @@ public static partial class CompatibleSkinnedMesh
                 || payloadEntry.Type != 40 || payloadEntry.SubType != headerEntry.SubType)
                 throw new NotSupportedException("The template must still reference installed vertex/index buffer pairs.");
             byte[] header = Read(headerTag).ToArray(); Read(payloadEntry.TagHash);
-            if (indices) { if (header.Length < 16) throw new InvalidDataException("Truncated index header."); header[1] = 1; Put64(header, 8, data.Length); }
-            else Put32(header, 0, checked((uint)data.Length));
+            if (indices)
+            {
+                if (!TagView.FitsThrough<IndexBufferHeader>(header, 0, nameof(IndexBufferHeader.ByteCount))) throw new InvalidDataException("Truncated index header.");
+                Put<IndexBufferHeader, byte>(header, 0, nameof(IndexBufferHeader.Wide), 1);
+                Put<IndexBufferHeader, long>(header, 0, nameof(IndexBufferHeader.ByteCount), data.Length);
+            }
+            else Put<VertexBufferHeader, uint>(header, 0, nameof(VertexBufferHeader.ByteCount), checked((uint)data.Length));
             additions.Add(new(options.Name + "." + suffix, header,
                 new(options.PackageId, Tag(index + 1), headerEntry.TypeInfo, null, options.FirstEntryIndex + index), headerEntry.TagHash));
             additions.Add(new(options.Name + "." + suffix + ".bin", data,
@@ -233,16 +250,18 @@ public static partial class CompatibleSkinnedMesh
     /** Each material variant and retained shadow pass must consume the same encoded skin layout. */
     private static void ValidateMaterial(PackageCatalog catalog, uint tag, string shaderHash, Func<uint, byte[]> read)
     {
-        if (Require(catalog, tag).Reference != 0x808071E8)
+        if (Require(catalog, tag).Reference != STechnique.Class)
             throw new InvalidDataException("A retained assignment is not a material.");
         byte[] material = read(tag);
-        if (material.Length < 0x400 || I64(material, 0) != material.Length)
+        if (!TagView.Fits<STechnique>(material, 0) || TagView.Member<STechnique, long>(material, 0, nameof(STechnique.TagSize)) != material.Length)
             throw new InvalidDataException("A retained material has an invalid header.");
-        var headerEntry = Require(catalog, U32(material, 0x48));
+        var headerEntry = Require(catalog, TagView.Member<STechnique, uint>(material, 0, "VertexShader.Shader"));
         var payloadEntry = Require(catalog, headerEntry.Reference);
         byte[] header = read(headerEntry.TagHash), payload = read(payloadEntry.TagHash);
         if (headerEntry.Type != 33 || headerEntry.SubType != 1 || payloadEntry.Type != 41 || payloadEntry.SubType != 1
-            || header.Length < 12 || I64(header, 0) != header.Length || U32(header, 8) != payload.Length
+            || !TagView.FitsThrough<ShaderHeader>(header, 0, nameof(ShaderHeader.BytecodeSize))
+            || TagView.Member<ShaderHeader, long>(header, 0, nameof(ShaderHeader.HeaderSize)) != header.Length
+            || TagView.Member<ShaderHeader, uint>(header, 0, nameof(ShaderHeader.BytecodeSize)) != payload.Length
             || Hash(payload) != shaderHash)
             throw new NotSupportedException("A retained material variant no longer uses the checked skinning shader.");
     }
@@ -250,32 +269,40 @@ public static partial class CompatibleSkinnedMesh
     /** Validate every listed alternative even when initial state selects only one. */
     private static uint[] PartMaterials(byte[] model, int part, byte[] config)
     {
-        uint direct = U32(model, part);
-        int variant = BinaryPrimitives.ReadInt16LittleEndian(model.AsSpan(part + 4));
+        var row = TagView.At<SEntityModelPart>(model, part);
+        uint direct = row.Material;
+        int variant = row.ExternalMaterialGroup1Direct;
         if (variant == -1) return [direct];
-        int resource = checked((int)(0x18 + I64(config, 0x18)));
-        int[] groups = NativeRows.Rows(config, resource + 0x2D0, 0x808072C4, 12);
-        int[] materials = NativeRows.Rows(config, resource + 0x310, 0x80800014, 4);
+        int resource = PointerTarget(config, TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition)));
+        int[] groups = Rows<SExternalMaterialGroup>(config,
+            resource + TagView.FieldOffset<SModelComponent>("HF5b4dbc0.MaterialGroups"), SExternalMaterialGroup.Class);
+        int[] materials = Rows<TagReferenceElement>(config,
+            resource + TagView.FieldOffset<SModelComponent>("HF5b4dbc0.Materials"), TagReferenceElement.Class);
         if ((uint)variant >= groups.Length) throw new InvalidDataException("The part's external material group is missing.");
-        int count = BinaryPrimitives.ReadInt16LittleEndian(config.AsSpan(groups[variant]));
-        int first = BinaryPrimitives.ReadInt32LittleEndian(config.AsSpan(groups[variant] + 4));
+        var group = TagView.At<SExternalMaterialGroup>(config, groups[variant]);
+        int count = group.Count;
+        int first = group.First;
         if (count <= 0 || first < 0 || first > materials.Length - count)
             throw new InvalidDataException("The part's external material variants leave their table.");
-        return materials.AsSpan(first, count).ToArray().Select(offset => U32(config, offset)).ToArray();
+        return materials.AsSpan(first, count).ToArray().Select(offset => TagView.At<TagReferenceElement>(config, offset).Tag).ToArray();
     }
 
     /** The model constructor uploads a prefix of the skeleton, independently of its physics partitions. */
     private static int ConsumedBoneCount(byte[] config, byte[] model, uint modelTag)
     {
-        if (config.Length < 32) throw new InvalidDataException("The model component is truncated.");
-        int primary = checked((int)(0x10 + I64(config, 0x10)));
-        int resource = checked((int)(0x18 + I64(config, 0x18)));
-        if (primary < 4 || primary > config.Length - 0xF8 || resource < 4 || resource > config.Length - 0x1E4
-            || U32(config, primary - 4) != 0x808072B8 || U32(config, resource - 4) != 0x808072BD
-            || U32(config, resource + 0x1DC) != modelTag || U32(config, resource + 0x1E0) != 2)
+        if (!TagView.FitsThrough<SEntityConfig>(config, 0, nameof(SEntityConfig.Definition))) throw new InvalidDataException("The model component is truncated.");
+        int primary = PointerTarget(config, TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.DefaultInstance)));
+        int resource = PointerTarget(config, TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition)));
+        // Only the fields read must fit; the class words sit just before each object.
+        if (primary < TagView.ClassWordSize || !TagView.FitsThrough<SModelComponentPrimary>(config, primary, nameof(SModelComponentPrimary.ConsumedBoneCount))
+            || resource < TagView.ClassWordSize || !TagView.FitsThrough<SModelComponent>(config, resource, nameof(SModelComponent.ConstructorKind2MatrixPalette))
+            || TagView.ClassAt(config, primary) != SModelComponentPrimary.Class
+            || TagView.ClassAt(config, resource) != SModelComponent.Class
+            || TagView.Member<SModelComponent, uint>(config, resource, nameof(SModelComponent.Model)) != modelTag
+            || TagView.Member<SModelComponent, uint>(config, resource, nameof(SModelComponent.ConstructorKind2MatrixPalette)) != 2)
             throw new NotSupportedException("The model component does not use the checked matrix-palette constructor.");
-        uint count = U32(config, primary + 0xF4);
-        int authored = BinaryPrimitives.ReadInt32LittleEndian(model.AsSpan(0x40));
+        uint count = TagView.Member<SModelComponentPrimary, uint>(config, primary, nameof(SModelComponentPrimary.ConsumedBoneCount));
+        int authored = TagView.At<SEntityModel>(model).AuthoredBoneCount;
         if (authored >= 0) count = Math.Max(count, (uint)authored);
         if (count is 0 or > 256) throw new NotSupportedException("The consumed matrix palette does not fit byte joint indices.");
         return (int)count;
@@ -333,7 +360,8 @@ public static partial class CompatibleSkinnedMesh
 
     private static bool Profile(NativeMeshData native) => native.InputLayoutVerified && native.NativeDeclarationId == 16
         && native.SkinWeightStream is null && native.VertexStreams.Length == 2
-        && native.VertexStreams[0].Stride == 16 && native.VertexStreams[1].Stride == 20
+        && native.VertexStreams[0].Stride == VertexStreamCodec.SkinPositionStride
+        && native.VertexStreams[1].Stride == VertexStreamCodec.AttributeStride
         && native.VertexStreams.All(stream => stream.Type == 0)
         && native.InputElements.SequenceEqual(new NativeInputElement[]
         {
@@ -352,11 +380,31 @@ public static partial class CompatibleSkinnedMesh
     }
     private static PackageEntry Require(PackageCatalog catalog, uint tag) => catalog.TryGetEntry(tag, out var entry) ? entry : throw new InvalidDataException("Skin template entry is missing.");
     private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
-    private static uint U32(byte[] bytes, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset));
-    private static ushort U16(byte[] bytes, int offset) => BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset));
-    private static long I64(byte[] bytes, int offset) => BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(offset));
-    private static void Put32(byte[] bytes, int offset, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset), value);
-    private static void Put16(byte[] bytes, int offset, ushort value) => BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(offset), value);
-    private static void Put64(byte[] bytes, int offset, long value) => BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(offset), value);
-    private static void PutFloat(byte[] bytes, int offset, float value) => BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(offset), value);
+
+    /** Row offsets of an array field inside a struct read through a view. */
+    private static int[] Rows<T>(ReadOnlySpan<byte> tag, ref readonly TagArray<T> field, uint elementClass) where T : unmanaged =>
+        Rows<T>(tag, TagView.OffsetOf(tag, in field), elementClass);
+
+    /**
+     * Row offsets of the array field at `field`, whose owner need not fit the tag. A zero count is
+     * empty and needs only the count word; anything else is refused as TagArray.Checked refuses.
+     */
+    private static int[] Rows<T>(ReadOnlySpan<byte> tag, int field, uint elementClass) where T : unmanaged
+    {
+        if (field < 0 || field > tag.Length - sizeof(long)) throw new InvalidDataException("A typed native array is truncated.");
+        if (TagRead.I64(tag, field) == 0) return [];
+        if (!TagView.Fits<TagArray<T>>(tag, field)) throw new InvalidDataException("A typed native array is truncated.");
+        int stride = Unsafe.SizeOf<T>();
+        if (!TagArray.TryChecked(tag, field, elementClass, stride, out var array, TagArray.MaximumReaderRows))
+            throw new InvalidDataException("A typed native array is invalid.");
+        return Enumerable.Range(0, array.Count).Select(index => array.Data + index * stride).ToArray();
+    }
+
+    /** @return The target of the pointer field at `field`; a null pointer names the field itself. */
+    private static int PointerTarget(ReadOnlySpan<byte> tag, int field) =>
+        TagView.TargetOrSelf(tag, in TagView.At<RelativePointer<Unknown>>(tag, field));
+
+    /** Writes one member of the T at `owner`, where the whole T need not fit. */
+    private static void Put<T, TField>(byte[] bytes, int owner, string member, TField value)
+        where T : unmanaged where TField : unmanaged => MemoryMarshal.Write(bytes.AsSpan(owner + TagView.FieldOffset<T>(member)), in value);
 }

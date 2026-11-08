@@ -4,6 +4,7 @@ using SunriseStudio.Animation;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -14,7 +15,7 @@ public sealed record PreparedWeaponFiringEffects(IReadOnlyList<ProjectAssetAddit
 /** Muzzle, Eject and Reload emitters from Blender fill the weapon's own firing row. */
 public static class WeaponFiringEffectAuthoring
 {
-    private const int MuzzleSlot = WeaponFiringRow.MuzzleSlot, ReloadSlot = WeaponFiringRow.ReloadSlot,
+    private static readonly int MuzzleSlot = WeaponFiringRow.MuzzleSlot, ReloadSlot = WeaponFiringRow.ReloadSlot,
         ProjectileSlot = WeaponFiringRow.ProjectileSlot;
     // The checked CPU point-burst system every burst copies.
     private const uint ParticleTemplate = WeaponAssetParticleCompiler.BurstTemplate;
@@ -25,7 +26,7 @@ public static class WeaponFiringEffectAuthoring
 
     /**
      * Puts the Muzzle and Eject bursts in the muzzle slot, played on every shot, and the Reload
-     * burst in slot +0x90. A slot that holds this weapon's earlier effect keeps the tags of matching records.
+     * burst in the reload slot. A slot that holds this weapon's earlier effect keeps the tags of matching records.
      * @param path The weapon's Blender export.
      */
     public static PreparedWeaponFiringEffects Prepare(StudioProject project, PackageCatalog catalog, uint weaponTag,
@@ -64,7 +65,7 @@ public static class WeaponFiringEffectAuthoring
         {
             // An earlier reload point goes when the export has none.
             var retire = new HashSet<uint>(LegacyPointHashes(name))
-                { InvestmentItemClone.Fnv1(WeaponAttachmentAuthoring.AfterTemplateRows($"{name}.{WeaponGltfEmitterReader.ReloadEvent}")) };
+                { StringBankWriter.Hash(WeaponAttachmentAuthoring.AfterTemplateRows($"{name}.{WeaponGltfEmitterReader.ReloadEvent}")) };
             var (points, hashes) = WeaponAttachmentAuthoring.SetPoints(Read(provider), added, retire);
             // A stock point whose emitter is gone goes back to its stock spot.
             byte[] stockPoints = catalog.ReadOriginal(WeaponAttachmentAuthoring.TemplateTag);
@@ -117,13 +118,13 @@ public static class WeaponFiringEffectAuthoring
         var dropped = new HashSet<uint>();
         int next = cursor;
         uint Tag(int entry) => entry is < 0 or > 8191 ? throw new InvalidDataException("The weapon package is full.")
-            : checked(0x80800000u + ((uint)packageId << 13) + (uint)entry);
-        uint Stock(int slot) => U32(baseBytes, firing.BaseRow + slot) is var tag && catalog.TryGetEntry(tag, out var entry)
+            : TagHashes.Make(packageId, entry);
+        uint Stock(int slot) => TagRead.U32(baseBytes, firing.BaseRow + slot) is var tag && catalog.TryGetEntry(tag, out var entry)
             && entry.Reference == WeaponFiringSlotEntity.EntityClass && !owned.ContainsKey(tag) ? tag
             : throw new InvalidDataException($"The base firing row has no stock entity at +0x{slot:X} to copy.");
 
         // An authored projectile stops the tracers, so the slot keeps the base weapon's entity or an owned copy of it.
-        uint projectile = Stock(ProjectileSlot), wasProjectile = U32(hudBytes, row + ProjectileSlot);
+        uint projectile = Stock(ProjectileSlot), wasProjectile = TagRead.U32(hudBytes, row + ProjectileSlot);
         // A tracer copy names a copy of the stock tracer sequence; an older effect entity does not.
         bool tracerCopy = owned.TryGetValue(wasProjectile, out var copy) && copy.BaseTagHash == projectile
             && Words(Read(wasProjectile)).Any(tag => owned.TryGetValue(tag, out var linked)
@@ -137,7 +138,7 @@ public static class WeaponFiringEffectAuthoring
         }
 
         // One muzzle slot entity plays every burst: the muzzle first, then the eject on the ejection port.
-        uint stock = Stock(MuzzleSlot), current = U32(hudBytes, row + MuzzleSlot);
+        uint stock = Stock(MuzzleSlot), current = TagRead.U32(hudBytes, row + MuzzleSlot);
         uint[] previous = Records(owned, catalog, current, stock, WeaponParticleBinding.EntityTemplateFor(1),
             WeaponParticleBinding.EntityTemplateFor(2)) ?? [];
         int local = cursor;
@@ -179,11 +180,11 @@ public static class WeaponFiringEffectAuthoring
             summary.Add($"muzzle: {current:X8} -> {placed:X8} with {string.Join(" and ", bursts.Select(e => e.Event))}");
         else if (placed != current) summary.Add($"muzzle: {current:X8} -> {placed:X8}, the base weapon's");
 
-        // Slot +0x90 is never paused, so its sequence plays whenever its gate is open.
-        uint baseReload = U32(baseBytes, firing.BaseRow + ReloadSlot), currentReload = U32(hudBytes, row + ReloadSlot);
+        // The reload slot is never paused, so its sequence plays whenever its gate is open.
+        uint baseReload = TagRead.U32(baseBytes, firing.BaseRow + ReloadSlot), currentReload = TagRead.U32(hudBytes, row + ReloadSlot);
         uint[] earlier = Records(owned, catalog, currentReload, WeaponReloadEffectAuthoring.EntityTemplate) ?? [];
         uint placedReload = baseReload;
-        // Stock +0x90 effects would be lost, so a Reload emitter needs an empty base slot.
+        // Stock reload slot effects would be lost, so a Reload emitter needs an empty base slot.
         if (reload is not null && catalog.TryGetEntry(baseReload, out var baseEntity)
             && baseEntity.Reference == WeaponFiringSlotEntity.EntityClass)
             throw new InvalidDataException("The base weapon already uses the reload slot.");
@@ -219,10 +220,10 @@ public static class WeaponFiringEffectAuthoring
             {
                 byte[] bytes = asset.Data.ToArray();
                 for (int at = 0; at + 4 <= bytes.Length; at += 4)
-                    if (map.TryGetValue(U32(bytes, at), out uint target)) Put32(bytes, at, target);
+                    if (map.TryGetValue(TagRead.U32(bytes, at), out uint target)) Put32(bytes, at, target);
                 uint final = map[WeaponFiringRow.NativeTag(asset.Native!)];
                 if (reused.Contains(final)) changes[final] = bytes;
-                else assets.Add(asset with { Data = bytes, Native = asset.Native! with { EntryIndex = (int)(final & 8191) } });
+                else assets.Add(asset with { Data = bytes, Native = asset.Native! with { EntryIndex = TagHashes.Entry(final) } });
             }
             dropped.UnionWith(earlierRecords.Where(tag => !reused.Contains(tag)));
             return map[WeaponFiringRow.NativeTag(built[^1].Native!)];
@@ -259,7 +260,7 @@ public static class WeaponFiringEffectAuthoring
     // TODO: delete once older projects are migrated.
     private static IReadOnlySet<uint> LegacyPointHashes(string prefix) => new[] { "muzzle", "eject" }
         .SelectMany(slot => new[] { prefix + "." + slot, WeaponAttachmentAuthoring.AfterTemplateRows(prefix + "." + slot) })
-        .Select(InvestmentItemClone.Fnv1).ToHashSet();
+        .Select(StringBankWriter.Hash).ToHashSet();
 
     /**
      * The owned records of an effect entity in a slot, or null when the slot holds anything else.
@@ -278,7 +279,7 @@ public static class WeaponFiringEffectAuthoring
         IEnumerable<uint> Refs(byte[] bytes) => Words(bytes).Where(owned.ContainsKey).Distinct();
     }
 
-    private static IEnumerable<uint> Words(byte[] bytes) => Enumerable.Range(0, bytes.Length / 4).Select(index => U32(bytes, index * 4));
+    private static IEnumerable<uint> Words(byte[] bytes) => Enumerable.Range(0, bytes.Length / 4).Select(index => TagRead.U32(bytes, index * 4));
 
     /** Dropped tags that a record outside the dropped set still names. Each holder is read once. */
     private static HashSet<uint> NamedElsewhere(StudioProject project, PackageCatalog catalog,
@@ -293,7 +294,7 @@ public static class WeaponFiringEffectAuthoring
             if (catalog.TryGetEntry(holder, out var entry) && HoldsNoTags(entry)) continue;
             byte[] bytes = changes.TryGetValue(holder, out var edited) ? edited : catalog.Read(holder);
             for (int at = 0; at + 4 <= bytes.Length; at += 4)
-                if (dropped.Contains(U32(bytes, at))) named.Add(U32(bytes, at));
+                if (dropped.Contains(TagRead.U32(bytes, at))) named.Add(TagRead.U32(bytes, at));
         }
         return named;
     }
@@ -302,6 +303,5 @@ public static class WeaponFiringEffectAuthoring
     private static bool HoldsNoTags(PackageEntry entry) =>
         entry.Type is 26 or 40 or 48 || entry.Type == 32 && entry.SubType is (>= 1 and <= 4) or 6;
 
-    private static uint U32(byte[] bytes, int at) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
     private static void Put32(byte[] bytes, int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), value);
 }

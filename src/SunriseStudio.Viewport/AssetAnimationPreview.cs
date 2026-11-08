@@ -4,6 +4,8 @@ using SunriseStudio.Animation;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Viewport;
 
@@ -45,8 +47,10 @@ public sealed partial class AssetAnimationSource
         ClipNames = labels;
         BaseClipTags = clips.Select(value => value.ClipTag).Distinct().Where(tag =>
         {
+            if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != SAnimationClip.Class) return false;
             byte[] data = catalog.Read(tag);
-            return data.Length > 0x181 && data[0x181] == 0;
+            return TagView.FitsThrough<SAnimationClip>(data, 0, nameof(SAnimationClip.PoseMode))
+                && TagView.At<byte>(data, TagView.FieldOffset<SAnimationClip>(nameof(SAnimationClip.PoseMode))) == 0;
         }).ToArray();
     }
 

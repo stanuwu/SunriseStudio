@@ -1,5 +1,6 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using Vortice.Direct3D;
 
 namespace SunriseStudio.Rendering;
@@ -11,7 +12,7 @@ namespace SunriseStudio.Rendering;
  */
 public sealed class NativeWindSettings
 {
-    public const uint TagClass = 0x80806D33;
+    public const uint TagClass = UnknownWindSettings.Class;
     /** Name hash 0x7FF742DCDB50 looks up in the root tables of class 0x80809780. */
     public const uint NameHash = 0xC6B22D98;
     // 0x7FF742ED8B80 falls back to these when an expression is absent.
@@ -32,11 +33,18 @@ public sealed class NativeWindSettings
 
     public static NativeWindSettings Parse(ReadOnlySpan<byte> tag)
     {
-        if (tag.Length < 0xA4) throw new InvalidDataException("Wind settings tag is truncated.");
-        return new(NativeExpression.Read(tag, 0x08), NativeExpression.Read(tag, 0x38),
-            BinaryPrimitives.ReadSingleLittleEndian(tag[0x68..]), NativeExpression.Read(tag, 0x70),
-            BinaryPrimitives.ReadSingleLittleEndian(tag[0xA0..]), BinaryPrimitives.ReadUInt32LittleEndian(tag[0x6C..]));
+        // The tag may end after NoiseScale, short of the whole struct, so each member is read alone.
+        if (!TagView.FitsThrough<UnknownWindSettings>(tag, 0, nameof(UnknownWindSettings.NoiseScale)))
+            throw new InvalidDataException("Wind settings tag is truncated.");
+        return new(NativeExpression.Read(tag, TagView.FieldOffset<UnknownWindSettings>("H7fb603f9.H45dee76f")),
+            NativeExpression.Read(tag, TagView.FieldOffset<UnknownWindSettings>("H8abb2c63.H45dee76f")),
+            Member<float>(tag, nameof(UnknownWindSettings.CycleSeconds)),
+            NativeExpression.Read(tag, TagView.FieldOffset<UnknownWindSettings>("H99e7b9f6.H45dee76f")),
+            Member<float>(tag, nameof(UnknownWindSettings.NoiseScale)), Member<uint>(tag, nameof(UnknownWindSettings.NoiseResource)));
     }
+
+    private static T Member<T>(ReadOnlySpan<byte> tag, string member) where T : unmanaged =>
+        TagView.Member<UnknownWindSettings, T>(tag, 0, member);
 
     /**
      * The block 0x7FF742ED5580 writes after time seconds of wind.

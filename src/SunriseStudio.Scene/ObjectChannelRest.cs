@@ -1,5 +1,8 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -20,28 +23,21 @@ public readonly record struct ObjectChannelRestValue(Vector4 Value, string? Unse
  */
 internal sealed class ObjectChannelRest
 {
-    private const uint ProviderPrimary = 0x8080979F, ProviderResource = 0x80809790, ProviderRow = 0x808097A1,
-        ProviderSource = 0x808097A0, StoredValue = 0x80800090;
-    private const int RowStride = 112, SourceStride = 12;
-    private const int Rows = 0xD8, Sources = 0x108, TimeOutput = 0xC0, Stored = 0x50;
-    // Row fields: name, expression code and constants, input outputs, bound input slot.
-    private const int RowName = 0, RowCode = 0x08, RowConstants = 0x18, RowInputs = 0x38, RowSlot = 0x48;
+    private const uint ProviderPrimary = UnknownValueProviderPrimary.Class, ProviderResource = SVariableStore.Class;
     private const ushort NoSlot = 0xFFFF;
     // FNV-1 of the empty name: a source in the provider's own object.
-    private const uint OwnObject = 0x811C9DC5;
+    private const uint OwnObject = StringHash.Empty;
     // FNV-1 of "time": a parameter the game rewrites each frame.
     private const uint TimeName = 0x9E3669DA;
 
-    // Constant publisher rows (getter 0x7FF7427F1470): name +0x28, authored float4 +0x30.
-    private const uint ConstantResource = 0x80808BE6, ConstantScalar = 0x80808BEC, ConstantVector = 0x80808BEA;
-    private static readonly (int Field, uint Class)[] ConstantLists = [(0x90, ConstantScalar), (0xA0, ConstantScalar), (0xB0, ConstantVector)];
-    private const int ConstantStride = 64, ConstantName = 0x28, ConstantValue = 0x30;
-    // Damage value rows (getter 0x7FF742996CE0): name +0x28, kind +0x34, flags +0x35.
-    private const uint DamageResource = 0x80804B8A, DamageValue = 0x80804B92;
-    private const int DamageList = 0x398, DamageStride = 56, DamageName = 0x28, DamageKind = 0x34, DamageFlags = 0x35;
+    // Constant publisher rows (getter 0x7FF7427F1470): a name and an authored float4.
+    private const uint ConstantResource = UnknownConstantPublisherResource.Class;
+    // Damage value rows (getter 0x7FF742996CE0): a name, a kind and flags.
+    private const uint DamageResource = SCombatantDamagePayload.Class;
     private const byte AliveKind = 3, DividedByMaximum = 1, MaximumMinusValue = 2;
     // Model components hold the channel requests; their names are readers, not writers.
-    private const uint ModelResource = 0x808072BD, ClothModelResource = 0x80807286, VariantResource = 0x808038A1;
+    private const uint ModelResource = SModelComponent.Class, ClothModelResource = SClothModelComponent.Class,
+        VariantResource = UnknownVariantResource.Class;
 
     private sealed record Row(uint Name, byte[] Code, Vector4[] Constants, int[] Inputs, ushort Slot);
 
@@ -57,24 +53,36 @@ internal sealed class ObjectChannelRest
     private readonly int timeOutput = -1;
 
     /** Reads the provider and the value publishers among the entity's component configs; the first provider is used. */
-    public ObjectChannelRest(IEnumerable<(uint Tag, TagData Data)> configs)
+    public ObjectChannelRest(IEnumerable<(uint Tag, byte[] Data)> configs)
     {
-        foreach (var (tag, config) in configs)
+        foreach (var (tag, bytes) in configs)
         {
-            int primary = config.Relative(0x10), resource = config.Relative(0x18);
-            if (primary < 4 || resource < 4 || !config.Has(resource, 4)) continue;
-            uint primaryClass = config.U32(primary - 4), resourceClass = config.U32(resource - 4);
-            if (resourceClass == ConstantResource) ReadConstants(config, resource);
-            else if (resourceClass == DamageResource) ReadDamage(config, resource);
+            // A null pointer has no target and no class.
+            int? primaryTarget = TagView.TargetOffset(bytes, in ConfigPointer(bytes, nameof(SEntityConfig.DefaultInstance)));
+            int? resourceTarget = TagView.TargetOffset(bytes, in ConfigPointer(bytes, nameof(SEntityConfig.Definition)));
+            if (primaryTarget < TagView.ClassWordSize || resourceTarget < TagView.ClassWordSize
+                || resourceTarget is { } end && !TagView.Fits<uint>(bytes, end)) continue;
+            int primary = primaryTarget ?? 0, resource = resourceTarget ?? 0;
+            uint primaryClass = primaryTarget is null ? 0 : ClassBefore(bytes, primary);
+            uint resourceClass = resourceTarget is null ? 0 : ClassBefore(bytes, resource);
+            if (resourceClass == ConstantResource) ReadConstants(bytes, resource);
+            else if (resourceClass == DamageResource) ReadDamage(bytes, resource);
             else if (primaryClass == ProviderPrimary && resourceClass == ProviderResource && rows.Length == 0)
             {
-                rows = config.Rows(resource + Rows, ProviderRow, RowStride).Select(row => ReadRow(config, row)).ToArray();
-                stored = config.Rows(primary + Stored, StoredValue, 16).Select(at => V4(config, at)).ToArray();
-                foreach (int source in config.Rows(resource + Sources, ProviderSource, SourceStride))
-                    sources[config.I32(source + 8)] = (config.U32(source), config.U32(source + 4));
-                timeOutput = config.I32(resource + TimeOutput);
+                var providerRows = TagView.Rows(bytes, in ArrayAt<SVariableStore, UnknownValueProviderRow>(bytes, resource,
+                    nameof(SVariableStore.ProviderRows)), UnknownValueProviderRow.Class);
+                rows = new Row[providerRows.Length];
+                for (int i = 0; i < rows.Length; i++) rows[i] = ReadRow(bytes, in providerRows[i]);
+                var storedValues = TagView.Rows(bytes, in ArrayAt<UnknownValueProviderPrimary, ExpressionConstant>(bytes, primary,
+                    nameof(UnknownValueProviderPrimary.StoredValues)), ExpressionConstant.Class);
+                stored = new Vector4[storedValues.Length];
+                for (int i = 0; i < stored.Length; i++) stored[i] = storedValues[i].Value;
+                foreach (ref readonly var source in TagView.Rows(bytes, in ArrayAt<SVariableStore, UnknownValueProviderSource>(bytes,
+                             resource, nameof(SVariableStore.BoundSources)), UnknownValueProviderSource.Class))
+                    sources[source.RowIndex] = (source.SourceScope, source.SourceName);
+                timeOutput = TagRead.I32(bytes, resource + TagView.FieldOffset<SVariableStore>(nameof(SVariableStore.TimeOutputRow)));
             }
-            else if (resourceClass == SequenceResource.ResourceClass && SequenceRest.Read(tag, config, resource) is { } sequence)
+            else if (resourceClass == SequenceResource.ResourceClass && SequenceRest.Read(tag, bytes, resource) is { } sequence)
             {
                 // A sequence's input channels are readers; only its outputs and named writes can change a row.
                 sequences.Add(sequence);
@@ -82,7 +90,7 @@ internal sealed class ObjectChannelRest
             }
             // Variant values are part filter labels; no variant method calls a provider writer.
             else if (resourceClass is not (ModelResource or ClothModelResource or VariantResource))
-                for (int at = 0; at + 4 <= config.Length; at += 4) namedBy.TryAdd(config.U32(at), tag);
+                for (int at = 0; at + 4 <= bytes.Length; at += 4) namedBy.TryAdd(TagRead.U32(bytes, at), tag);
         }
         for (int i = 0; i < rows.Length; i++) byName.TryAdd(rows[i].Name, i);
     }
@@ -114,18 +122,21 @@ internal sealed class ObjectChannelRest
 
     public bool HasProvider => rows.Length != 0;
 
-    // Model resource +0x2A8: one 40-byte request per TFX object channel, named at request +0x20.
-    private const int ChannelRequests = 0x2A8, ChannelRequestStride = 40, ChannelName = 0x20;
-    private const uint ChannelRequestClass = 0x80809789;
-
-    /** Channel names of a model resource in TFX channel order; empty when it has none. */
-    public static uint[] RequestNames(TagData config, int resource) =>
-        !config.Has(resource + ChannelRequests, 16) || config.I64(resource + ChannelRequests) == 0 ? []
-            : config.Rows(resource + ChannelRequests, ChannelRequestClass, ChannelRequestStride)
-                .Select(row => config.U32(row + ChannelName)).ToArray();
+    /** Channel names of a model resource in TFX channel order, one request per channel; empty when it has none. */
+    public static uint[] RequestNames(byte[] bytes, int resource)
+    {
+        const string channels = "HCa95f655.Channels";
+        if (!TagView.FitsThrough<SModelComponent>(bytes, resource, channels)) return [];
+        ref readonly var requests = ref ArrayAt<SModelComponent, SModelValueBankResource>(bytes, resource, channels);
+        if (requests.Count == 0) return [];
+        var rows = TagView.Rows(bytes, in requests, SModelValueBankResource.Class);
+        var names = new uint[rows.Length];
+        for (int i = 0; i < names.Length; i++) names[i] = rows[i].ChannelHashReloading0xecde609e;
+        return names;
+    }
 
     /** Each named channel's rest value, read from the entity's component configs. */
-    public static ObjectChannelRestValue[] RestValues(IEnumerable<(uint Tag, TagData Data)> configs, uint[] names)
+    public static ObjectChannelRestValue[] RestValues(IEnumerable<(uint Tag, byte[] Data)> configs, uint[] names)
     {
         var provider = new ObjectChannelRest(configs);
         return provider.HasProvider ? names.Select(provider.Channel).ToArray()
@@ -179,37 +190,79 @@ internal sealed class ObjectChannelRest
         return memo[index] = value;
     }
 
-    private static Row ReadRow(TagData data, int row) => new(data.U32(row + RowName),
-        data.RowsOfAnyClass(row + RowCode, 1).Select(data.U8).ToArray(),
-        data.RowsOfAnyClass(row + RowConstants, 16).Select(at => V4(data, at)).ToArray(),
-        data.RowsOfAnyClass(row + RowInputs, 4).Select(data.I32).ToArray(), data.U16(row + RowSlot));
-
-    private void ReadConstants(TagData data, int resource)
+    // The expression arrays are read without a class check.
+    private static Row ReadRow(byte[] data, ref readonly UnknownValueProviderRow row)
     {
-        foreach (var (field, rowClass) in ConstantLists)
-        {
-            if (!data.Has(field + resource, 16) || data.ArrayClass(resource + field) != rowClass) continue;
-            foreach (int row in data.Rows(resource + field, rowClass, ConstantStride))
-                published.TryAdd(data.U32(row + ConstantName), new(V4(data, row + ConstantValue), null));
-        }
+        var code = TagView.Rows(data, in row.Expression.Bytecode);
+        var constants = TagView.Rows(data, in row.Expression.ConstantBuffer);
+        var inputs = TagView.Rows(data, in row.ExpressionInputs);
+        var codeBytes = new byte[code.Length];
+        for (int i = 0; i < codeBytes.Length; i++) codeBytes[i] = code[i].Value;
+        var constantValues = new Vector4[constants.Length];
+        for (int i = 0; i < constantValues.Length; i++) constantValues[i] = constants[i].Value;
+        var inputRows = new int[inputs.Length];
+        for (int i = 0; i < inputRows.Length; i++) inputRows[i] = inputs[i].Value;
+        return new(row.RowName, codeBytes, constantValues, inputRows, row.BoundInputSlot);
+    }
+
+    private void ReadConstants(byte[] data, int resource)
+    {
+        foreach (ref readonly var row in ConstantRows<UnknownConstantScalarRow>(data, resource,
+                     nameof(UnknownConstantPublisherResource.ScalarConstantsA), UnknownConstantScalarRow.Class))
+            published.TryAdd(row.Name, new(row.Value, null));
+        foreach (ref readonly var row in ConstantRows<UnknownConstantScalarRow>(data, resource,
+                     nameof(UnknownConstantPublisherResource.ScalarConstantsB), UnknownConstantScalarRow.Class))
+            published.TryAdd(row.Name, new(row.Value, null));
+        foreach (ref readonly var row in ConstantRows<UnknownConstantVectorRow>(data, resource,
+                     nameof(UnknownConstantPublisherResource.VectorConstants), UnknownConstantVectorRow.Class))
+            published.TryAdd(row.Name, new(row.Value, null));
+    }
+
+    /** Rows of one publisher list; empty when the list leaves the config or holds another class. */
+    private static ReadOnlySpan<T> ConstantRows<T>(byte[] data, int resource, string list, uint rowClass) where T : unmanaged
+    {
+        if (!TagView.FitsThrough<UnknownConstantPublisherResource>(data, resource, list)) return [];
+        ref readonly var array = ref ArrayAt<UnknownConstantPublisherResource, T>(data, resource, list);
+        return ArrayClass(data, in array) == rowClass ? TagView.Rows(data, in array, rowClass) : [];
     }
 
     /** A spawned actor is alive at full health: a fraction or the alive kind reads 1, and maximum minus value reads 0. */
-    private void ReadDamage(TagData data, int resource)
+    private void ReadDamage(byte[] data, int resource)
     {
-        if (!data.Has(resource + DamageList, 16) || data.ArrayClass(resource + DamageList) != DamageValue) return;
-        foreach (int row in data.Rows(resource + DamageList, DamageValue, DamageStride))
+        const string list = nameof(SCombatantDamagePayload.DamageValues);
+        if (!TagView.FitsThrough<SCombatantDamagePayload>(data, resource, list)) return;
+        ref readonly var values = ref ArrayAt<SCombatantDamagePayload, UnknownDamageValueRow>(data, resource, list);
+        if (ArrayClass(data, in values) != UnknownDamageValueRow.Class) return;
+        foreach (ref readonly var row in TagView.Rows(data, in values, UnknownDamageValueRow.Class))
         {
-            byte kind = data.U8(row + DamageKind), flags = data.U8(row + DamageFlags);
+            byte kind = row.Kind, flags = row.Flags;
             bool inverted = (flags & MaximumMinusValue) != 0;
             var value = inverted || (flags & DividedByMaximum) != 0 || kind == AliveKind
                 ? new ObjectChannelRestValue(new Vector4(inverted ? 0 : 1), null)
                 : ObjectChannelRestValue.Open("damage amount without its maximum");
-            published.TryAdd(data.U32(row + DamageName), value);
+            published.TryAdd(row.Name, value);
         }
     }
 
-    private static Vector4 V4(TagData data, int at) => new(data.F32(at), data.F32(at + 4), data.F32(at + 8), data.F32(at + 12));
+    /** The element class word of an array; zero when it has no rows. With rows and a null header link, the word after the field. */
+    private static uint ArrayClass<T>(byte[] data, ref readonly TagArray<T> array) where T : unmanaged
+    {
+        var view = new TagArray(data, TagView.OffsetOf(data, in array));
+        return view.Count == 0 ? 0 : TagRead.U32(data, view.HeaderOffset + TagArray.ElementClassOffset);
+    }
+
+    /** The array field `member` of a TOwner at `owner`; only the field itself must fit. */
+    internal static ref readonly TagArray<T> ArrayAt<TOwner, T>(byte[] data, int owner, string member)
+        where TOwner : unmanaged where T : unmanaged =>
+        ref TagView.Member<TOwner, TagArray<T>>(data, owner, member);
+
+    /** A config's pointer field `member`; only the field itself must fit. */
+    internal static ref readonly RelativePointer<Unknown> ConfigPointer(byte[] config, string member) =>
+        ref TagView.Member<SEntityConfig, RelativePointer<Unknown>>(config, 0, member);
+
+    /** The class word before the object at `at`; past the tag end it throws ArgumentOutOfRangeException. */
+    private static uint ClassBefore(byte[] data, int at) =>
+        TagView.ClassAt(data, at) ?? throw new ArgumentOutOfRangeException(nameof(at), "The class word is outside the tag.");
 }
 
 /**
@@ -218,16 +271,16 @@ internal sealed class ObjectChannelRest
  */
 internal sealed class SequenceRest
 {
-    // Output rows: 48 bytes each, named at +0x28.
-    private const int Outputs = 0x178, OutputStride = 48, OutputName = 0x28;
     private const byte WriteOutput = 2, WriteByName = 3, SerialFlow = 0, RandomFlow = 2, GateFlow = 6, ChannelCondition = 0;
-    // A type-3 work node names the provider row it writes at body +0x68.
-    private const int WrittenName = 0x68;
     private const int FlowKind = SequenceResource.FlowKind, WorkKind = SequenceResource.WorkKind;
     // Expression opcode that pushes an input; the node's progress is input 0.
     private const byte PushInput = 0x3C;
 
-    /** Type-2 work node fields: reset to zero on stop +0x28, output +0x2C, expression code +0x30 and constants +0x40. */
+    // A node's body follows its 16-byte owner pointer.
+    private static readonly int BodyOffset = Unsafe.SizeOf<TagOffsetPointer>();
+    private const string WriterCode = "Expression.Expression.Bytecode", WriterConstants = "Expression.Expression.ConstantBuffer";
+
+    /** A type-2 work node: reset to zero on stop, the output it writes, and its expression. */
     private sealed record WriterNode(bool Reset, int Output, byte[] Code, Vector4[] Constants);
 
     private readonly uint config;
@@ -238,27 +291,50 @@ internal sealed class SequenceRest
     private readonly uint[] inputs, outputs;
     private readonly Dictionary<(int Kind, int Index), (int Flow, int Position)[]> paths;
 
-    private SequenceRest(uint config, TagData data, int resource)
+    private SequenceRest(uint config, byte[] data, int resource)
     {
         this.config = config;
         var sequence = new SequenceResource(data, resource);
         (autoStart, flows, works, inputs, paths) = (sequence.AutoStart, sequence.Flows, sequence.Works, sequence.Inputs, sequence.Paths);
         writerNodes = works.Select(work => work.Type == WriteOutput ? ReadWriter(data, work.Body) : null).ToArray();
-        outputs = data.I64(resource + Outputs) == 0 ? []
-            : data.RowsOfAnyClass(resource + Outputs, OutputStride).Select(row => data.U32(row + OutputName)).ToArray();
+        outputs = OutputNames(data, resource);
         var written = new List<uint>(outputs);
+        const string name = nameof(SequenceWriteByNameNode.WrittenName);
         foreach (var work in works)
-            if (work.Type == WriteByName && data.Has(work.Body + WrittenName, 4)) written.Add(data.U32(work.Body + WrittenName));
+        {
+            int wrapper = work.Body - BodyOffset;
+            if (work.Type != WriteByName) continue;
+            CheckClass(data, wrapper, SequenceWriteByNameNode.Class);
+            // A type-3 work node names the provider row it writes.
+            if (TagView.FitsThrough<SequenceWriteByNameNode>(data, wrapper, name))
+                written.Add(TagRead.U32(data, wrapper + TagView.FieldOffset<SequenceWriteByNameNode>(name)));
+        }
         Writes = written;
+    }
+
+    // The output rows are read without a class check.
+    private static uint[] OutputNames(byte[] data, int resource)
+    {
+        ref readonly var list = ref ObjectChannelRest.ArrayAt<SParticleSequenceResource, C808084df>(data, resource,
+            nameof(SParticleSequenceResource.Outputs));
+        if (list.Count == 0) return [];
+        var rows = TagView.Rows(data, in list);
+        var names = new uint[rows.Length];
+        for (int i = 0; i < names.Length; i++) names[i] = rows[i].Unk28;
+        return names;
     }
 
     /** Names this sequence can write: its outputs and the provider rows its type-3 nodes name. */
     public IReadOnlyList<uint> Writes { get; }
 
     /** @return Null when the config holds no readable sequence. */
-    public static SequenceRest? Read(uint config, TagData data, int resource)
+    public static SequenceRest? Read(uint config, byte[] data, int resource)
     {
-        try { return data.Has(resource, SequenceResource.Flags + 1) ? new SequenceRest(config, data, resource) : null; }
+        const string flags = nameof(SParticleSequenceResource.LifecycleBit0StartOnSpawnBit1Retire);
+        try
+        {
+            return TagView.FitsThrough<SParticleSequenceResource>(data, resource, flags) ? new SequenceRest(config, data, resource) : null;
+        }
         catch (Exception error) when (error is InvalidDataException or ArgumentException or OverflowException
             or IndexOutOfRangeException) { return null; }
     }
@@ -333,13 +409,34 @@ internal sealed class SequenceRest
         return false;
     }
 
-    private static WriterNode ReadWriter(TagData data, int body)
+    /** The expression arrays are read without a class check. */
+    private static WriterNode ReadWriter(byte[] data, int body)
     {
-        if (!data.Has(body, 0x50)) throw new InvalidDataException($"Sequence writer at 0x{body:X} leaves its config.");
-        return new(data.U8(body + 0x28) != 0, data.I32(body + 0x2C),
-            data.I64(body + 0x30) != 0 ? data.RowsOfAnyClass(body + 0x30, 1).Select(data.U8).ToArray() : [],
-            data.I64(body + 0x40) != 0 ? data.RowsOfAnyClass(body + 0x40, 16).Select(at => new Vector4(
-                data.F32(at), data.F32(at + 4), data.F32(at + 8), data.F32(at + 12))).ToArray() : []);
+        int wrapper = body - BodyOffset;
+        CheckClass(data, wrapper, SequenceWriteOutputNode.Class);
+        if (!TagView.FitsThrough<SequenceWriteOutputNode>(data, wrapper, WriterConstants))
+            throw new InvalidDataException($"Sequence writer at 0x{body:X} leaves its config.");
+        bool reset = TagRead.U8(data, wrapper + TagView.FieldOffset<SequenceWriteOutputNode>(
+            nameof(SequenceWriteOutputNode.ResetOnStop))) != 0;
+        int output = TagRead.I32(data, wrapper + TagView.FieldOffset<SequenceWriteOutputNode>(
+            nameof(SequenceWriteOutputNode.OutputIndex)));
+        ref readonly var codeArray = ref ObjectChannelRest.ArrayAt<SequenceWriteOutputNode, ExpressionCode>(data, wrapper, WriterCode);
+        var code = codeArray.Count != 0 ? TagView.Rows(data, in codeArray) : [];
+        var codeBytes = new byte[code.Length];
+        for (int i = 0; i < codeBytes.Length; i++) codeBytes[i] = code[i].Value;
+        ref readonly var constantArray = ref ObjectChannelRest.ArrayAt<SequenceWriteOutputNode, ExpressionConstant>(data, wrapper,
+            WriterConstants);
+        var constants = constantArray.Count != 0 ? TagView.Rows(data, in constantArray) : [];
+        var constantValues = new Vector4[constants.Length];
+        for (int i = 0; i < constantValues.Length; i++) constantValues[i] = constants[i].Value;
+        return new(reset, output, codeBytes, constantValues);
+    }
+
+    /** A work node's kind byte picks its layout; its class word must agree. */
+    private static void CheckClass(byte[] data, int wrapper, uint expected)
+    {
+        if (TagView.ClassAt(data, wrapper) != expected)
+            throw new InvalidDataException($"Sequence node at 0x{wrapper:X} is not class 0x{expected:X8}.");
     }
 
     /** Delays and durations that are not finite read as zero. */
@@ -352,10 +449,10 @@ internal sealed class SequenceRest
  */
 public sealed class ObjectChannelTables(PackageCatalog catalog)
 {
-    private const uint ConfigClass = 0x80809C36, ComponentRow = 0x80809C04, ModelResource = 0x808072BD;
+    private const uint ConfigClass = SEntityConfig.Class, ModelResource = SModelComponent.Class;
     private readonly Dictionary<(uint Entity, uint Config), (uint[] Names, Vector4[]? Table)> models = [];
     private readonly Dictionary<Vector4[], Vector4[]> shared = new(TableComparer.Instance);
-    private readonly Dictionary<uint, TagData> tags = [];
+    private readonly Dictionary<uint, byte[]> tags = [];
 
     /** Distinct tables handed out; a model whose channels all rest at one is not counted. */
     public int DistinctTables => shared.Count;
@@ -375,12 +472,19 @@ public sealed class ObjectChannelTables(PackageCatalog catalog)
         try
         {
             var data = Get(config);
-            int resource = data.Relative(0x18);
-            if (resource >= 4 && data.Has(resource, 4) && data.U32(resource - 4) == ModelResource
+            // A config with a null Definition has no model resource.
+            if (TagView.TargetOffset(data, in ObjectChannelRest.ConfigPointer(data,
+                    nameof(SEntityConfig.Definition))) is { } resource
+                && resource >= TagView.ClassWordSize && TagView.Fits<uint>(data, resource)
+                && TagView.ClassAt(data, resource) == ModelResource
                 && ObjectChannelRest.RequestNames(data, resource) is { Length: > 0 } names)
             {
                 var definition = Get(entity);
-                var configs = definition.Rows(0x10, ComponentRow, 12).Select(row => definition.U32(row))
+                var componentRows = TagView.Rows(definition, in ObjectChannelRest.ArrayAt<SEntity, SPatternComponent>(definition, 0,
+                    nameof(SEntity.Components)), SPatternComponent.Class);
+                var componentTags = new uint[componentRows.Length];
+                for (int i = 0; i < componentTags.Length; i++) componentTags[i] = componentRows[i].Config;
+                var configs = componentTags
                     .Where(tag => catalog.TryGetEntry(tag, out var entry) && entry.Reference == ConfigClass)
                     .Select(tag => (tag, Get(tag)));
                 var values = ObjectChannelRest.RestValues(configs, names).Select(rest => rest.Value).ToArray();
@@ -396,9 +500,9 @@ public sealed class ObjectChannelTables(PackageCatalog catalog)
         return models[(entity, config)] = result;
     }
 
-    private TagData Get(uint tag)
+    private byte[] Get(uint tag)
     {
-        if (!tags.TryGetValue(tag, out var data)) tags.Add(tag, data = new(catalog.Read(tag)));
+        if (!tags.TryGetValue(tag, out var data)) tags.Add(tag, data = catalog.Read(tag));
         return data;
     }
 

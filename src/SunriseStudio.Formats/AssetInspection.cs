@@ -16,7 +16,11 @@ public sealed record AssetProperty(string Name, string Value, int Offset = -1,
 public sealed record CuiPropertyOwner(int ObjectIndex, int ComponentIndex, int PropertyOffset);
 
 public sealed record AssetNode(string Name, IReadOnlyList<AssetProperty> Properties,
-    IReadOnlyList<AssetNode>? Children = null);
+    IReadOnlyList<AssetNode>? Children = null)
+{
+    /** Children listed until the user asks for all of them; the rest stay unbuilt. */
+    public int FoldedRows { get; init; } = int.MaxValue;
+}
 
 public sealed record AssetReference(int Offset, uint TagHash, string Name, bool IsCandidate = false);
 public sealed record AssetGraphNode(string Id, string Label, int Offset);
@@ -47,22 +51,10 @@ public sealed class AssetInspectionService
     private readonly List<IAssetInspector> inspectors = [];
     public IReadOnlyList<IAssetInspector> Inspectors => inspectors.AsReadOnly();
 
-    public static string Classify(PackageEntry entry) => entry.Type is 8 or 16
-        ? entry.Reference switch
-        {
-            0x80804825 or 0x8080496A => "CUI",
-            0x8080941E => "Behavior",
-            0x80807BEA => "Investment / Item",
-            0x80805CE1 => "Investment / Item display",
-            0x8080306D or 0x80807D84 => "Investment / Table",
-            _ => AssetCategories.CategoryOf(entry)
-        } : AssetCategories.CategoryOf(entry);
-
     public AssetInspectionService(bool includeDefaults = true)
     {
         if (!includeDefaults) return;
         Register(new CuiInspector());
-        Register(new InvestmentInspector());
         Register(new BehaviorInspector());
         Register(new MaterialInspector());
     }

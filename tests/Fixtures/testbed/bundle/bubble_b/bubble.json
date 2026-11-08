@@ -1,0 +1,32 @@
+{
+  "schema_version": 0,
+  "name": "bubble_b",
+  "kind": "outdoor",
+  "bounds": {
+    "min": [
+      16,
+      -16,
+      -8
+    ],
+    "max": [
+      48,
+      16,
+      24
+    ]
+  },
+  "neighbours": [
+    "bubble_a"
+  ],
+  "statics": [],
+  "spawn_points": [
+    {
+      "name": "east_field",
+      "position": [
+        32,
+        0,
+        0
+      ],
+      "facing": 180
+    }
+  ]
+}

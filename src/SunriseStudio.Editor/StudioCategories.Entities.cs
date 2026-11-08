@@ -1,5 +1,6 @@
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
@@ -7,7 +8,6 @@ namespace SunriseStudio.Editor;
 public static partial class StudioCategories
 {
     public const string EnemiesCategory = "Enemies and NPCs", EntityCategory = "Entity";
-    private const uint EntityDefinitionClass = 0x80809C0F;
     private static readonly string[] EntityViewSections =
         ["sunrise.components", "sunrise.scene", "sunrise.materials", "sunrise.shaders", "sunrise.related", "sunrise.graph"];
 
@@ -23,7 +23,7 @@ public static partial class StudioCategories
     /** Entities with an ActorGroup config are enemies and NPCs; every other entity keeps its entity kind. */
     static partial void ClassifyEntity(PackageEntry entry, StudioNameIndex names, ref StudioCategoryMatch? match)
     {
-        if (entry.Reference != EntityDefinitionClass || !AssetCategories.IsStructured(entry)) return;
+        if (entry.Reference != SEntity.Class || !AssetCategories.IsStructured(entry)) return;
         var game = names.GameNames;
         var (kind, tags) = AssetCategories.Classify(entry, game);
         string search = SearchTags(tags);

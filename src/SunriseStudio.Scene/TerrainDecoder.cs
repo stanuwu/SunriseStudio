@@ -1,4 +1,7 @@
 using System.Numerics;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -8,29 +11,31 @@ public sealed partial class AssetSceneLoader
     private MeshData[] TerrainMesh(uint tag)
     {
         if (meshes.TryGetValue(tag, out var cached)) return cached;
-        var data = Read(tag);
-        var parts = data.Rows(0x80, 0x80807152, 12);
-        var groups = data.Rows(0x58, 0x80807154, 0x60);
-        var raw = Buffer(data.U32(0x68), 4, out var header);
-        if (header.U16(4) != 8 || header.U32(0) != raw.Length)
+        var data = ReadBytes(tag);
+        ref readonly var terrain = ref TagView.Checked<STerrain>(data, 0);
+        var parts = TagView.Rows(data, in terrain.Parts, UnknownTerrainPart.Class);
+        var groups = TagView.Rows(data, in terrain.Groups, UnknownTerrainGroup.Class);
+        uint positionBuffer = terrain.PositionBuffer[0].Unk0, secondBuffer = terrain.PositionBuffer[1].Unk0;
+        byte[] raw = ReadBuffer(positionBuffer, 4, out var header);
+        if (TagView.At<ushort>(header, TagView.FieldOffset<VertexBufferHeader>(nameof(VertexBufferHeader.Stride))) != 8
+            || TagView.At<uint>(header, TagView.FieldOffset<VertexBufferHeader>(nameof(VertexBufferHeader.ByteCount))) != raw.Length)
             throw new InvalidDataException("Terrain position buffer is not signed short4.");
-        var offset = data.Q4(0x30);
+        var offset = terrain.PositionOffset;
         var allVertices = new SceneVertex[raw.Length / 8];
         for (var i = 0; i < allVertices.Length; ++i)
         {
-            var position = new Vector3((raw.I16(i * 8) + offset.X) / 64,
-                (raw.I16(i * 8 + 2) + offset.Y) / 64,
-                (raw.I16(i * 8 + 4) + offset.Z + 65536 * (raw.I16(i * 8 + 6) + offset.W)) / 8192);
+            var (x, y, z, w) = GpuBufferData.Short4(raw, i * 8);
+            var position = new Vector3((x + offset.X) / 64, (y + offset.Y) / 64, (z + offset.Z + 65536 * (w + offset.W)) / 8192);
             allVertices[i] = new SceneVertex(position, Vector3.UnitZ, Vector2.Zero, Vector4.One);
         }
         var result = new List<MeshData>();
-        foreach (var part in parts)
+        foreach (ref readonly var part in parts)
         {
             cancellation.ThrowIfCancellationRequested();
-            if (data.U8(part + 11) != 0) continue;
-            if (data.U8(part + 10) >= groups.Length) throw new InvalidDataException("Terrain part group is out of range.");
-            var group = groups[data.U8(part + 10)];
-            var indices = IndexData(data.U32(0x70), data.U32(part + 4), data.U16(part + 8), 5, allVertices.Length);
+            if (part.LodLevel != 0) continue;
+            if (part.GroupIndex >= groups.Length) throw new InvalidDataException("Terrain part group is out of range.");
+            ref readonly var group = ref groups[part.GroupIndex];
+            var indices = IndexData(terrain.IndexBuffer, part.IndexStart, part.IndexCount, 5, allVertices.Length);
             var vertices = allVertices;
             var sourceIndices = Compact(ref vertices, indices);
             GenerateNormals(vertices, indices);
@@ -39,13 +44,13 @@ public sealed partial class AssetSceneLoader
                 TagHash = tag,
                 Vertices = vertices,
                 Indices = indices,
-                MaterialTag = data.U32(part),
-                PartIndex = part,
+                MaterialTag = part.Material,
+                PartIndex = TagView.OffsetOf(data, in part),
                 SourceVertexIndices = sourceIndices,
                 // The generate_gbuffer terrain draw binds declaration 60 and draws parts as strips.
-                Native = NativeMesh(NativeMeshKind.Terrain, data, data.U32(part), data.U32(0x68), data.U32(0x6C),
-                    data.U32(0x70), data.U32(part + 4), data.U16(part + 8), 5, declarationId: 60, renderStage: 0,
-                    terrainGroup: (Vector(data, group + 0x20), data.U32(group + 0x50)))
+                Native = NativeMesh(NativeMeshKind.Terrain, data, part.Material, positionBuffer, secondBuffer,
+                    terrain.IndexBuffer, part.IndexStart, part.IndexCount, 5, declarationId: 60, renderStage: 0,
+                    terrainGroup: (group.UvTransform, group.DyeTexture))
             };
             ApplyNativeTexcoords(decoded);
             result.Add(decoded);

@@ -3,6 +3,8 @@ using SunriseStudio.Editor.Creation;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 internal static class InvestmentSocketChecks
 {
@@ -13,7 +15,7 @@ internal static class InvestmentSocketChecks
         string install = Path.Combine(parent, "socket-install");
         Directory.CreateDirectory(Path.Combine(install, "packages"));
         byte[] original = Weapon(conditions: true), plug = new byte[200], display = new byte[160];
-        Q(plug, 0, plug.Length); plug[184] = 15;
+        Q(plug, 0, plug.Length); plug[Inventory("InventoryBucket")] = 15;
         Q(display, 0, display.Length); S(display, InvestmentItemClone.DisplayIcon, ushort.MaxValue);
         PackageWriter.WriteNew(Path.Combine(install, "packages", "w64_socket_fixture_0100_0.pkg"), 0x100,
         [
@@ -149,7 +151,7 @@ internal static class InvestmentSocketChecks
     private static byte[] Weapon(bool conditions)
     {
         byte[] bytes = new byte[conditions ? 640 : 528];
-        Q(bytes, 0, bytes.Length); bytes[184] = 0; bytes[186] = 5;
+        Q(bytes, 0, bytes.Length); bytes[Inventory("InventoryBucket")] = 0; bytes[Inventory("Tier")] = 5;
         Q(bytes, 104, 200 - 104); U(bytes, 196, 0x808077C1);
         Array(bytes, 200, 240, 2, 0x808077C4);
         foreach (int row in new[] { 256, 336 })
@@ -216,6 +218,7 @@ internal static class InvestmentSocketChecks
     private static int Target(byte[] bytes, int pointer) => checked(pointer + (int)Q(bytes, pointer));
     private static long Q(byte[] bytes, int offset) => BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(offset));
     private static uint U(byte[] bytes, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset));
+    private static int Inventory(string field) => TagView.FieldOffset<ItemDefinition>("InventoryItemBlock." + field);
     private static void Q(byte[] bytes, int offset, long value) => BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(offset), value);
     private static void U(byte[] bytes, int offset, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset), value);
     private static void S(byte[] bytes, int offset, ushort value) => BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(offset), value);

@@ -2,6 +2,8 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Rendering;
 
@@ -41,23 +43,26 @@ public sealed record TfxParameterDefaults(uint RenderGlobalsTag, uint TableTag, 
 
 public sealed partial class GameMaterialReader
 {
-    /** The native render-global loader selects this table through field 0x34. */
+    /** The native render-global loader selects this table through the root's TfxParameterTable. */
     public TfxParameterDefaults ReadTfxParameterDefaults(uint renderGlobalsTag)
     {
-        if (!catalog.TryGetEntry(renderGlobalsTag, out var root) || root.Reference != 0x80806CB1)
+        if (!catalog.TryGetEntry(renderGlobalsTag, out var root) || root.Reference != SRendererRoot.Class)
             throw new InvalidDataException("TFX parameter root is not the native render-global class.");
         byte[] globals = catalog.Read(renderGlobalsTag);
-        if (globals.Length < 0x38 || U64(globals, 0) != (ulong)globals.Length)
+        if (!TagView.FitsThrough<SRendererRoot>(globals, 0, nameof(SRendererRoot.TfxParameterTable))
+            || TagView.Member<SRendererRoot, ulong>(globals, 0, nameof(SRendererRoot.TagSize)) != (ulong)globals.Length)
             throw new InvalidDataException("Render-global header size is invalid.");
-        uint tag = U32(globals, 0x34);
-        if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != 0x8080858D)
+        uint tag = TagView.Member<SRendererRoot, uint>(globals, 0, nameof(SRendererRoot.TfxParameterTable));
+        if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != STfxParameters.Class)
             throw new InvalidDataException("Render-global parameter table has the wrong class.");
         byte[] bytes = catalog.Read(tag);
-        if (bytes.Length < 0x38 || U64(bytes, 0) != (ulong)bytes.Length)
+        if (!TagView.Fits<STfxParameters>(bytes, 0) || TagView.At<STfxParameters>(bytes).TagSize != (ulong)bytes.Length)
             throw new InvalidDataException("TFX parameter table size is invalid.");
-        uint[] keys = MemoryMarshal.Cast<byte, uint>(ReadTypedArray(bytes, 8, 0x80800070, 4)).ToArray();
-        var values = ReadVectors(bytes, 0x18);
-        uint[] flags = MemoryMarshal.Cast<byte, uint>(ReadTypedArray(bytes, 0x28, 0x8080000B, 4)).ToArray();
+        ref readonly var table = ref TagView.At<STfxParameters>(bytes);
+        uint[] keys = MemoryMarshal.Cast<byte, uint>(ReadTypedArray(bytes, in table.ChannelNames, SU32HashElement.Class)).ToArray();
+        var values = ReadVectors(bytes, in table.DefaultValues);
+        uint[] flags = MemoryMarshal.Cast<byte, uint>(
+            ReadTypedArray(bytes, in table.H5a1532b4.NormalizeFlags, U32ArrayRow.Class)).ToArray();
         if (keys.Length != values.Length || flags.Length < (keys.Length + 31) / 32)
             throw new InvalidDataException("TFX parameter key, vector, and flag counts do not agree.");
         return new(renderGlobalsTag, tag, Array.AsReadOnly(Enumerable.Range(0, keys.Length)

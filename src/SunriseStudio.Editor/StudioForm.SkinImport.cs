@@ -32,8 +32,7 @@ public sealed partial class StudioForm
         {
             skinImportPath = path; skinImportName = Path.GetFileNameWithoutExtension(path);
             skinImportEntity = entity; ClearSkinReview(); skinTemplateIndex = 0; skinCreateAsset = false;
-            skinImportPackage = workspace.Project?.AddedAssets.LastOrDefault(asset => asset.Native is not null)
-                ?.Native!.PackageId.ToString("X4") ?? "0AA0";
+            skinImportPackage = workspace.DefaultPackageText;
             workspace.ReadCompatibleSkinTemplates(entity, templates =>
             { skinTemplates = templates; skinImportDialog = true; });
         }));

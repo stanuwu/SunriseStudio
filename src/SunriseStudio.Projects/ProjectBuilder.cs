@@ -2,6 +2,11 @@ using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using SunriseStudio.Packages;
+using SunriseStudio.Packages.Registry;
+using SunriseStudio.Tags;
+using SunriseStudio.Tags.Tft;
+using SunriseStudio.World;
+using SunriseStudio.World.Sdk;
 
 namespace SunriseStudio.Projects;
 
@@ -13,23 +18,25 @@ public static partial class ProjectBuilder
      * Pass invalidate false only when the caller cleared the read cache itself just before.
      */
     public static ProjectBuildResult Build(StudioProject project, PackageCatalog catalog, string? outputDirectory = null,
-        bool invalidate = true)
+        bool invalidate = true, RegistryIndex? tagSchema = null)
     {
         if (invalidate) catalog.InvalidateReadCache();
         project.ValidateWideHashAliases(catalog);
         // Derived values are rebuilt here from the installed originals, never read from an older build.
         var objects = project.CompileObjectEdits(catalog, build: true);
         var config = project.CompileConfigBindings(catalog);
+        var tags = CompileContent(project, catalog, tagSchema, project.AddedAssets.Where(x => x.Native is not null)
+            .Select(x => x.Native!.PackageId).Concat(objects.GeneratedAssets.Select(x => x.Native.PackageId)));
         if (project.Changes.Count == 0 && objects.Assets.Count == 0 && config.Assets.Count == 0
-            && project.AddedAssets.Count == 0 && objects.GeneratedAssets.Count == 0)
+            && project.AddedAssets.Count == 0 && objects.GeneratedAssets.Count == 0 && tags.Count == 0)
             throw new InvalidOperationException("The project has no changes to build.");
         var unencoded = project.AddedAssets.Where(x => x.Native is null).ToArray();
         if (project.Changes.Count == 0 && objects.Assets.Count == 0 && config.Assets.Count == 0
-            && objects.GeneratedAssets.Count == 0 && project.AddedAssets.All(x => x.Native is null))
+            && objects.GeneratedAssets.Count == 0 && project.AddedAssets.All(x => x.Native is null) && tags.Count == 0)
             throw new InvalidOperationException("The project has no native changes to build.");
         var edited = new Dictionary<uint, byte[]>();
         var addedTags = project.AddedAssets.Where(asset => asset.Native is not null)
-            .Select(asset => StudioProject.NativeTag(asset.Native!)).ToHashSet();
+            .Select(asset => TagHashes.Make(asset.Native!.PackageId, asset.Native!.EntryIndex!.Value)).ToHashSet();
         foreach (uint tag in project.Changes.Select(change => change.TagHash).Union(objects.Assets.Keys)
             .Union(config.Assets.Keys).Where(tag => !addedTags.Contains(tag)).Order())
         {
@@ -41,7 +48,7 @@ public static partial class ProjectBuilder
             if (!data.AsSpan().SequenceEqual(catalog.ReadOriginal(tag))) edited[tag] = data;
         }
         var added = project.AddedAssets.Where(x => x.Native is not null)
-            .Select(x => (Asset: x, Data: config.Assets.TryGetValue(StudioProject.NativeTag(x.Native!), out var configured)
+            .Select(x => (Asset: x, Data: config.Assets.TryGetValue(TagHashes.Make(x.Native!.PackageId, x.Native!.EntryIndex!.Value), out var configured)
                 ? configured : project.ReadAddedAsset(x.Id, catalog))).ToArray();
         var reserved = added.Select(item => item.Asset.Native!.PackageId).ToHashSet();
         if (objects.GeneratedAssets.Any(asset => reserved.Contains(asset.Native.PackageId)))
@@ -60,11 +67,14 @@ public static partial class ProjectBuilder
         if (Directory.Exists(buildRoot) && Directory.EnumerateFileSystemEntries(buildRoot).Any())
             throw new IOException("Build output must be an empty folder.");
         var generated = objects.GeneratedAssets;
-        var addedEntries = added.Select(item => new AddedEntry(item.Asset.Id, StudioProject.NativeTag(item.Asset.Native!),
+        var addedEntries = added.Select(item => new AddedEntry(item.Asset.Id, TagHashes.Make(item.Asset.Native!.PackageId, item.Asset.Native!.EntryIndex!.Value),
             item.Asset.Native!.Reference, item.Data, item.Asset.Native!.WideHashes ?? WideHashAliases.Empty,
             item.Asset.Native!.TypeInfo)).ToArray();
-        var rootManifests = PlanRootManifests(catalog, added.Select(item =>
-            new RootManifestInput(item.Asset, item.Data)).ToArray(), addedEntries, edited);
+        // Tags compiled from .tft files join manifests and dependency records like added assets.
+        addedEntries = [.. addedEntries, .. tags.Select(tag => new AddedEntry(TagFileId(tag.Name), tag.TagHash, tag.ClassId, tag.Data,
+            tag.WideHash == 0 ? WideHashAliases.Empty : new([tag.WideHash]), tag.TypeInfo))];
+        var rootManifests = PlanRootManifests(catalog, [.. added.Select(item => RootManifestInput.Of(item.Asset, item.Data)),
+            .. tags.Select(RootManifestInput.Of)], addedEntries, edited);
         var manifests = PlanManifests(catalog, edited, addedEntries);
         foreach (var (tag, data) in manifests.Data) edited.Add(tag, data);
         var replacements = new Dictionary<string, Dictionary<int, byte[]>>(StringComparer.OrdinalIgnoreCase);
@@ -79,7 +89,7 @@ public static partial class ProjectBuilder
         var changedMisc = dependencies.Misc.Where(pair => !pair.Value.AsSpan().SequenceEqual(PackageWriter.ReadMisc(pair.Key)))
             .ToDictionary(StringComparer.OrdinalIgnoreCase);
         // Checked before any folder is made, so a no-op build leaves nothing behind.
-        if (replacements.Count == 0 && changedMisc.Count == 0 && added.Length == 0 && generated.Count == 0)
+        if (replacements.Count == 0 && changedMisc.Count == 0 && added.Length == 0 && generated.Count == 0 && tags.Count == 0)
             throw new InvalidOperationException("Every edited entry equals its installed original; nothing was built.");
         string packageRoot = Path.Combine(buildRoot, "packages");
         Directory.CreateDirectory(packageRoot);
@@ -110,12 +120,8 @@ public static partial class ProjectBuilder
             inheritedPackages.AddRange(PackageWriter.GetRequiredPredecessors(source));
         }
         string? profile = null;
-        if (added.Length > 0 || generated.Count > 0)
-            profile = Directory.EnumerateFiles(catalog.PackageDirectory, "*.pkg")
-                .Select(path => (Path: path, Header: ReadProfile(path)))
-                .Where(x => x.Header[0x1A] == 1 && x.Header[0x16C] == 0)
-                .OrderByDescending(x => BinaryPrimitives.ReadUInt32LittleEndian(x.Header.AsSpan(0x18)))
-                .Select(x => x.Path).FirstOrDefault()
+        if (added.Length > 0 || generated.Count > 0 || tags.Count > 0)
+            profile = PackageProfile.Newest(catalog.PackageDirectory)
                 ?? throw new NotSupportedException("No pre-BL package header profile is installed.");
         foreach (var group in added.GroupBy(x => x.Asset.Native!.PackageId).OrderBy(x => x.Key))
         {
@@ -130,7 +136,7 @@ public static partial class ProjectBuilder
                 int index = native.EntryIndex!.Value;
                 entries[index] = new(native.Reference, native.TypeInfo, item.Data, native.Name)
                 { WideHashes = native.WideHashes ?? WideHashAliases.Empty };
-                uint tag = checked(0x80800000U + ((uint)native.PackageId << 13) + (uint)index);
+                uint tag = TagHashes.Make(native.PackageId, index);
                 builtAssets.Add(new(item.Asset.Id, tag, output));
             }
             foreach (var asset in rootAssets) entries[asset.EntryIndex] = asset.Entry;
@@ -150,10 +156,28 @@ public static partial class ProjectBuilder
             }
             artifacts.Add(PackageWriter.WriteNew(output, group.Key, entries, profile, catalog.GameRoot));
         }
+        var builtTags = new List<BuiltProjectAsset>();
+        foreach (var group in tags.GroupBy(tag => TagHashes.Split(tag.TagHash).PackageId).OrderBy(group => group.Key))
+        {
+            var rootAssets = rootManifests.Where(asset => asset.PackageId == group.Key).ToArray();
+            var entries = Enumerable.Range(0, Math.Max(group.Max(tag => TagHashes.Split(tag.TagHash).EntryIndex) + 1,
+                    rootAssets.Select(asset => asset.EntryIndex + 1).DefaultIfEmpty(0).Max()))
+                .Select(_ => new AuthoredPackageEntry(0, 0, [])).ToArray();
+            string output = Path.Combine(packageRoot, $"w64_sunrise_{group.Key:x4}_0.pkg");
+            foreach (var tag in group)
+            {
+                entries[TagHashes.Split(tag.TagHash).EntryIndex] = new(tag.ClassId, tag.TypeInfo, tag.Data, tag.GameName ?? tag.Name)
+                { WideHashes = tag.WideHash == 0 ? WideHashAliases.Empty : new([tag.WideHash]) };
+                builtTags.Add(new(tag.Name, tag.TagHash, output));
+            }
+            foreach (var asset in rootAssets) entries[asset.EntryIndex] = asset.Entry;
+            artifacts.Add(PackageWriter.WriteNew(output, group.Key, entries, profile, catalog.GameRoot));
+        }
         var addedData = new Dictionary<uint, byte[]>();
-        foreach (var item in added) addedData[StudioProject.NativeTag(item.Asset.Native!)] = item.Data;
+        foreach (var tag in tags) addedData[tag.TagHash] = tag.Data;
+        foreach (var item in added) addedData[TagHashes.Make(item.Asset.Native!.PackageId, item.Asset.Native!.EntryIndex!.Value)] = item.Data;
         foreach (var asset in rootManifests)
-            addedData[checked(0x80800000U + ((uint)asset.PackageId << 13) + (uint)asset.EntryIndex)] = asset.Entry.Data;
+            addedData[TagHashes.Make(asset.PackageId, asset.EntryIndex)] = asset.Entry.Data;
         foreach (var asset in generated) addedData[asset.TagHash] = asset.Data;
         var sidecars = new MergeSidecarRequest(catalog, buildRoot, artifacts, edited, addedData,
             manifests.Data.Keys.ToHashSet());
@@ -166,6 +190,7 @@ public static partial class ProjectBuilder
             packages = artifacts,
             addedAssets = builtAssets,
             generatedAssets,
+            tagFiles = builtTags,
             configBindings = config.Sites,
             objectEdits = objects.Edits.Select(x => new
             {
@@ -190,8 +215,84 @@ public static partial class ProjectBuilder
             mergeSidecars = sidecars.Written,
             trust = "Sunrise custom-package trust is required. Stock signatures cannot be regenerated."
         }, ProjectJson.Options));
+        var newEntries = added.Select(item => new BuiltEntry(item.Asset.Native!.PackageId, item.Asset.Native.EntryIndex!.Value,
+                item.Asset.Native.Reference, item.Asset.Native.TypeInfo, item.Data))
+            .Concat(rootManifests.Select(asset => new BuiltEntry(asset.PackageId, asset.EntryIndex, asset.Entry.Reference, asset.Entry.TypeInfo,
+                asset.Entry.Data)))
+            .Concat(generated.Select(asset => new BuiltEntry(asset.Native.PackageId, asset.Native.EntryIndex!.Value, asset.Native.Reference,
+                asset.Native.TypeInfo, asset.Data)))
+            .Concat(tags.Select(tag => new BuiltEntry(TagHashes.Split(tag.TagHash).PackageId, TagHashes.Split(tag.TagHash).EntryIndex,
+                tag.ClassId, tag.TypeInfo, tag.Data)))
+            .ToArray();
+        var contents = new ProjectBuildContents(edited, newEntries, changedMisc.ToDictionary(pair => Path.GetFileName(pair.Key), pair => pair.Value,
+            StringComparer.OrdinalIgnoreCase));
+        var own = newEntries.Select(entry => entry.PackageId).Where(id => !catalog.ContainsInstalledPackage(id)).ToHashSet();
+        var referenceMap = ReferenceMapBuilder.Build(project.Mod?.Id ?? project.Name, own, contents, artifacts.Select(x => (x.Path, x.PackageId)).ToArray(),
+            catalog, tagSchema ?? StudioRegistry.Index);
+        File.WriteAllBytes(Path.Combine(buildRoot, ReferenceMap.FileName), referenceMap.Write());
+        string? sdkPack = WriteActivitySdk(project, catalog, tagSchema ?? StudioRegistry.Index, tags, buildRoot);
         return new(buildRoot, artifacts.Select(x => x.Path).ToArray(), builtAssets, receipt, objects.Edits)
-        { ConfigBindings = config.Sites, Notes = objects.Notes };
+        {
+            ConfigBindings = config.Sites, Notes = objects.Notes, TagFiles = builtTags, Contents = contents, ReferenceMap = referenceMap,
+            ActivitySdkPack = sdkPack,
+        };
+    }
+
+    /**
+     * Writes the activity SDK rows of the project's destinations; the server builds their roster from them.
+     * @return The pack path, or null when the project has no destination.
+     */
+    private static string? WriteActivitySdk(StudioProject project, PackageCatalog catalog, RegistryIndex schema,
+        IReadOnlyList<TftCompiledTag> tags, string buildRoot)
+    {
+        if (!Directory.Exists(project.ContentDirectory)
+            || WorldTemplate.ProjectDestinations(project.ContentDirectory, schema).Count == 0) return null;
+        string installed = Path.Combine(catalog.GameRoot, "bin", "x64", "Sunrise", ModActivitySdk.FileName);
+        if (!File.Exists(installed))
+            throw new InvalidOperationException("Sunrise has not generated its activity SDK yet. Start the game once, then build again.");
+        byte[]? pack = ModActivitySdk.Build(project.ContentDirectory, schema,
+            tags.ToDictionary(tag => tag.Name, tag => tag.TagHash, StringComparer.Ordinal), installed);
+        if (pack is null) return null;
+        string path = Path.Combine(buildRoot, ModActivitySdk.FileName);
+        File.WriteAllBytes(path, pack);
+        return path;
+    }
+
+    private static string TagFileId(string name) => "tft:" + name;
+
+    /**
+     * Compiles the project's `content/` tree, for a build and for the editor. The allocation table is
+     * saved as soon as hashes are handed out, so a failed build still keeps them stable.
+     * @param reserved Package ids the project's other new entries use.
+     */
+    public static IReadOnlyList<TftCompiledTag> CompileContent(StudioProject project, PackageCatalog catalog, RegistryIndex? schema,
+        IEnumerable<ushort> reserved)
+    {
+        if (!Directory.Exists(project.ContentDirectory)) return [];
+        ProjectPaths.RejectLinks(project.ContentDirectory);
+        var taken = reserved.ToHashSet();
+        bool Taken(ushort id) => taken.Contains(id) || catalog.ContainsInstalledPackage(id);
+        var allocator = project.OpenTagAllocator(Taken);
+        allocator.Grow = () => allocator.NextPackage(project.Mod?.Id ?? project.Name, Taken);
+        foreach (ushort id in allocator.Packages.Where(Taken))
+            throw new InvalidOperationException($"Package id {id:X4} in {StudioProject.AllocationFileName} is installed or used by another project entry.");
+        schema ??= StudioRegistry.Index;
+        // Every compiled tag gets a wide hash, so another tag can name it the way the game names bubbles.
+        string modId = project.Mod?.Id ?? project.Name;
+        var claimed = project.AddedAssets.SelectMany(x => x.Native?.WideHashes ?? WideHashAliases.Empty).ToHashSet();
+        var minted = new Dictionary<string, ulong>(StringComparer.Ordinal);
+        ulong WideHash(string name)
+        {
+            if (minted.TryGetValue(name, out ulong known)) return known;
+            ulong value = TagAllocator.WideHash(modId, name, x => catalog.HasInstalledWideHashClaim(x) || claimed.Contains(x));
+            claimed.Add(value);
+            return minted[name] = value;
+        }
+        var compiler = new TftCompiler(project.ContentDirectory, allocator, schema, schema.Registry.BuildId, WideHash);
+        if (compiler.Files().Count == 0) return [];
+        var tags = compiler.CompileAll();
+        project.SaveTagAllocator(allocator);
+        return tags;
     }
 
     /** One new entry added to one installed dependency record; Source is the entry that brought it in. */
@@ -275,7 +376,7 @@ public static partial class ProjectBuilder
             {
                 if (listedClasses.TryGetValue(cls, out bool known)) return known;
                 return listedClasses[cls] = manifest.Groups.Any(group => group.Entries.Any(entry =>
-                    catalog.TryGetEntry(0x80800000U + ((uint)group.PackageId << 13) + (uint)entry, out var listed)
+                    catalog.TryGetEntry(TagHashes.Make(group.PackageId, entry), out var listed)
                     && listed.Reference == cls));
             }
             var joined = manifestTag == SocketDependencyManifest
@@ -296,8 +397,8 @@ public static partial class ProjectBuilder
                     }
             }
             if (joined.Count == 0) continue;
-            foreach (var package in joined.Keys.GroupBy(tag => (ushort)((tag - 0x80800000U) >> 13)).OrderBy(group => group.Key))
-                data = PackageManifest.AddEntries(data, package.Key, package.Select(tag => (int)(tag & PackageDependencyTable.MaximumEntry)));
+            foreach (var package in joined.Keys.GroupBy(tag => (ushort)TagHashes.Package(tag)).OrderBy(group => group.Key))
+                data = PackageManifest.AddEntries(data, package.Key, package.Select(TagHashes.Entry));
             plan.Data.Add(manifestTag, data);
             plan.Rows.AddRange(joined.OrderBy(pair => pair.Key).Select(pair => new ManifestEdit(manifestTag.ToString("X8"),
                 manifestEntry!.PackageName, pair.Value.ToString("X8"), pair.Key.ToString("X8"),
@@ -337,13 +438,10 @@ public static partial class ProjectBuilder
         var misc = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         var rows = new List<DependencyEdit>();
         if (generated.Count == 0 && added.Count == 0) return new(misc, rows, 0, []);
-        static uint Tag(ushort package, int entry) => 0x80800000U + ((uint)package << 13) + (uint)entry;
-        static (ushort Package, int Entry) Split(uint tag) =>
-            ((ushort)((tag - 0x80800000U) >> 13), (int)((tag - 0x80800000U) & PackageDependencyTable.MaximumEntry));
 
         // Only installed entries that can bring a new entry in need their records found.
         var wanted = generated.Select(asset => asset.SourceTag).Concat(edited.Keys).ToHashSet();
-        var wantedPackages = wanted.Select(tag => Split(tag).Package).ToHashSet();
+        var wantedPackages = wanted.Select(tag => TagHashes.Split(tag).PackageId).ToHashSet();
         var listing = new Dictionary<uint, List<(string Path, int Record)>>();
         var tables = new Dictionary<string, (PackageDependencyTable Table, byte[] Original)>(StringComparer.OrdinalIgnoreCase);
         int skipped = 0;
@@ -362,7 +460,7 @@ public static partial class ProjectBuilder
                 foreach (var group in record.Groups.Where(group => wantedPackages.Contains(group.PackageId)))
                     foreach (int entry in group.Entries())
                     {
-                        uint tag = Tag(group.PackageId, entry);
+                        uint tag = TagHashes.Make(group.PackageId, entry);
                         if (!wanted.Contains(tag)) continue;
                         if (!listing.TryGetValue(tag, out var list)) listing.Add(tag, list = []);
                         list.Add((path, record.Index)); kept = true;
@@ -389,10 +487,14 @@ public static partial class ProjectBuilder
             foreach (var record in records) Join(asset.TagHash, asset.SourceTag, record);
         }
 
-        // Chains of added entries spread until no record changes.
+        // Chains of added entries spread until no record changes. A record loads only what it lists, so
+        // the installed entries an added entry draws with join it too, unless it already lists them.
+        var native = NativeDependencyEdges(catalog, edited, added);
         var edges = PointerEdges(edited.Select(pair => (pair.Key, pair.Value))
             .Concat(generated.Select(asset => (asset.TagHash, asset.Data)))
-            .Concat(added.Select(asset => (asset.Tag, asset.Data))), added);
+            .Concat(added.Select(asset => (asset.Tag, asset.Data))), added).Concat(native).Distinct().ToArray();
+        bool Lists((string Path, int Record) record, uint tag) =>
+            tables[record.Path].Table.Records[record.Record].Lists(TagHashes.Split(tag).PackageId, TagHashes.Split(tag).EntryIndex);
         for (bool changed = true; changed;)
         {
             changed = false;
@@ -400,7 +502,8 @@ public static partial class ProjectBuilder
             {
                 IEnumerable<(string Path, int Record)> records = edited.ContainsKey(from)
                     ? listing.GetValueOrDefault(from) ?? [] : reach.GetValueOrDefault(from) ?? [];
-                foreach (var record in records.ToArray()) changed |= Join(to, from, record);
+                foreach (var record in records.ToArray())
+                    if (!native.Contains((from, to)) || !Lists(record, to)) changed |= Join(to, from, record);
             }
         }
 
@@ -409,8 +512,8 @@ public static partial class ProjectBuilder
             var (table, original) = tables[group.Key];
             foreach (var (record, set) in group.OrderBy(pair => pair.Key.Record))
             {
-                foreach (var package in set.Keys.GroupBy(tag => Split(tag).Package).OrderBy(package => package.Key))
-                    table.Add(record.Record, package.Key, package.Select(tag => Split(tag).Entry).Order());
+                foreach (var package in set.Keys.GroupBy(tag => TagHashes.Split(tag).PackageId).OrderBy(package => package.Key))
+                    table.Add(record.Record, package.Key, package.Select(tag => TagHashes.Split(tag).EntryIndex).Order());
                 rows.AddRange(set.OrderBy(pair => pair.Key).Select(pair => new DependencyEdit(Path.GetFileName(group.Key),
                     record.Record, pair.Value.ToString("X8"), pair.Key.ToString("X8"))));
             }
@@ -419,13 +522,5 @@ public static partial class ProjectBuilder
         object[] unlisted = added.Where(asset => !reach.ContainsKey(asset.Tag))
             .Select(asset => (object)new { id = asset.Id, tag = asset.Tag.ToString("X8") }).ToArray();
         return new(misc, rows, skipped, unlisted);
-    }
-
-    private static byte[] ReadProfile(string path)
-    {
-        using var stream = File.OpenRead(path);
-        byte[] header = new byte[0x180];
-        stream.ReadExactly(header);
-        return header;
     }
 }

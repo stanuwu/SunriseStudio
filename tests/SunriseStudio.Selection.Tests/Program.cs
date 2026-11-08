@@ -2,6 +2,8 @@ using System.Numerics;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using SunriseStudio.Viewport;
 
 internal static partial class Program
@@ -305,9 +307,10 @@ internal static partial class Program
         var scene = new AssetSceneLoader(catalog).Load(0x80EDC202);
         if (scene.Atmospheres.Count == 0)
         {
-            var settings = new byte[NativeAtmosphereSettings.Size];
-            settings.AsSpan(0x80, 12).Fill(byte.MaxValue);
-            scene.Atmospheres.Add(new(scene.TagHash, 0, 0, settings));
+            var bytes = new byte[NativeAtmosphereSettings.Size];
+            ref var payload = ref TagView.Edit<UnknownAtmospherePayload>(bytes);
+            payload.Lookup3dMode0 = payload.Lookup3dSecond = payload.Lookup2d = uint.MaxValue;
+            scene.Atmospheres.Add(new(scene.TagHash, 0, 0, bytes));
         }
         using var renderer = new Dx11Renderer(IntPtr.Zero, 320, 240, warp);
         using var viewport = new AssetViewport(renderer) { ShowGrid = false, ShowCursor = false };

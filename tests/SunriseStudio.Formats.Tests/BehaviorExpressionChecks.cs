@@ -95,7 +95,7 @@ internal static class BehaviorExpressionChecks
         byte[] bytes = new byte[640];
         Array(bytes, 8, 32, 1, 0x80809420);
         Q(bytes, 56, 100 - 56); U(bytes, 96, 0x80804E3D);
-        Array(bytes, 124, 224, 1, 0x80809311);
+        Array(bytes, 124, 224, 1, 0x80809316);
         Q(bytes, 248, 300 - 248); U(bytes, 296, 0x80804D7D);
         Expression(bytes, 308, 480, 512, [0x34, 0, 0x3E, 0], 1);
         Expression(bytes, 372, 560, 592, [0x34, 0, 0x3E, 0], 0);
@@ -147,7 +147,7 @@ internal static class BehaviorExpressionChecks
         for (int owner = 0; owner < 2; owner++)
         {
             int header = 1024 + owner * 65568;
-            Array(nested, (owner == 0 ? 128 : 256) + 24, header, 4096, 0x80809311);
+            Array(nested, (owner == 0 ? 128 : 256) + 24, header, 4096, 0x80809316);
             for (int index = 0; index < 4096; index++)
             {
                 int pointer = header + 24 + index * 16;
@@ -226,22 +226,16 @@ internal static class BehaviorExpressionChecks
             return data;
         }
         static AssetInspection Inspect(byte[] data) => new BehaviorInspector().Inspect(new(0x80A00000, 0x8080941E, data));
-        static IEnumerable<AssetNode> Nodes(AssetNode node) =>
-            new[] { node }.Concat((node.Children ?? []).SelectMany(Nodes));
-        static string[] Texts(AssetInspection graph) => graph.Sections.SelectMany(Nodes)
-            .SelectMany(node => node.Properties).Where(property => property.Name == "Source")
-            .Select(property => property.Value).ToArray();
         static void Reject(byte[] data)
         {
             try { _ = Inspect(data); }
             catch (InvalidDataException error) when (error.Message.Contains("source text exceeds", StringComparison.Ordinal)) { return; }
             throw new InvalidOperationException("Behavior source strings exceeded their aggregate view limit.");
         }
-        string[] shared = Texts(Inspect(Sources(3, 600_000, true)));
-        Check(shared.Length == 3 && shared[0].Length == 600_000
-            && ReferenceEquals(shared[0], shared[1]) && ReferenceEquals(shared[0], shared[2]),
-            "Shared behavior source offsets were decoded or budgeted more than once.");
-        Check(Texts(Inspect(Sources(1, 1_048_576, false))).Single().Length == 1_048_576,
+        // Three nodes share one 600,000 byte source; budgeting it per node would pass the limit.
+        Check(Inspect(Sources(3, 600_000, true)).Graph!.Nodes.Count(node => node.Label == "Counter") == 3,
+            "Shared behavior source offsets were budgeted more than once.");
+        Check(Inspect(Sources(1, 1_048_576, false)).Graph!.Nodes.Any(node => node.Label == "Counter"),
             "Behavior source text exactly at the byte limit was refused.");
         Reject(Sources(2, 600_000, false));
         Reject(Sources(1, 1_048_577, false));

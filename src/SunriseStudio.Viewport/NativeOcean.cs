@@ -1,7 +1,8 @@
-using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using Vortice.Direct3D;
 
 namespace SunriseStudio.Viewport;
@@ -14,23 +15,26 @@ namespace SunriseStudio.Viewport;
  */
 public sealed record NativeOceanSettings(uint Tag, uint WaveNoise, uint DetailNoise, IReadOnlyDictionary<byte, float> Floats)
 {
-    public const uint SettingsClass = 0x80806D49;
     // fnv1 name the map's name table files the settings under; 0x7FF742E1BE10.
     public const uint NameHash = 0x1C03307A;
-    private const uint MapRootClass = 0x808091DE, NameMapClass = 0x80809780, NamePairClass = 0x80809252;
-    private const int RenderGlobalsField = 0x38, MapNameTableField = 0x0C, SettingsBytes = 0x34;
+    private const uint MapRootClass = SMapRoot.Class, NameMapClass = SRuntimeNameMap.Class, NamePairClass = SRuntimeNameRow.Class;
+    // Extern 91 float elements 6 to 12 are the settings' seven listed floats, in order.
+    private const int FirstListedElement = 6;
 
     /** Reads a settings tag; null when either noise texture is unset, as 0x7FF742E1BE10 rejects it. */
     public static NativeOceanSettings? Read(PackageCatalog catalog, uint tag)
     {
-        if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != SettingsClass) return null;
+        if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != UnknownWaterSettings.Class) return null;
         var bytes = catalog.Read(tag);
-        if (bytes.Length < SettingsBytes) throw new InvalidDataException("Water settings are shorter than 0x34 bytes.");
-        uint wave = U32(bytes, 0x08), detail = U32(bytes, 0x0C);
+        if (!TagView.FitsThrough<UnknownWaterSettings>(bytes, 0, nameof(UnknownWaterSettings.Extern91Floats612)))
+            throw new InvalidDataException("Water settings are shorter than 0x34 bytes.");
+        uint wave = TagView.Member<UnknownWaterSettings, uint>(bytes, 0, nameof(UnknownWaterSettings.WaveNoise3d));
+        uint detail = TagView.Member<UnknownWaterSettings, uint>(bytes, 0, nameof(UnknownWaterSettings.DetailNoise3d));
         if (wave == uint.MaxValue || detail == uint.MaxValue) return null;
-        var floats = new Dictionary<byte, float> { [4] = F32(bytes, 0x14) };
+        var floats = new Dictionary<byte, float> { [4] = TagView.Member<UnknownWaterSettings, float>(bytes, 0, nameof(UnknownWaterSettings.Extern91Float4)) };
+        ref readonly var listed = ref TagView.Member<UnknownWaterSettings, Inline7<float>>(bytes, 0, nameof(UnknownWaterSettings.Extern91Floats612));
         // Element 5 is a frame value no ocean program reads; it is left unset.
-        for (byte element = 6; element <= 12; element++) floats[element] = F32(bytes, element * 4);
+        for (byte element = FirstListedElement; element <= 12; element++) floats[element] = listed[element - FirstListedElement];
         return new(tag, wave, detail, floats);
     }
 
@@ -42,13 +46,14 @@ public sealed record NativeOceanSettings(uint Tag, uint WaveNoise, uint DetailNo
     public static NativeOceanSettings? Resolve(PackageCatalog catalog, uint mapTag, uint renderGlobalsTag)
     {
         if (catalog.TryGetEntry(mapTag, out var map) && map.Reference == MapRootClass
-            && catalog.Read(mapTag) is { Length: >= MapNameTableField + 4 } root
-            && NamedSettings(catalog, U32(root, MapNameTableField)) is { } named
+            && catalog.Read(mapTag) is { } root && TagView.FitsThrough<SMapRoot>(root, 0, nameof(SMapRoot.RootNameTable))
+            && NamedSettings(catalog, TagView.Member<SMapRoot, uint>(root, 0, nameof(SMapRoot.RootNameTable))) is { } named
             && Read(catalog, named) is { } settings)
             return settings;
         if (!catalog.TryGetEntry(renderGlobalsTag, out _)) return null;
         var globals = catalog.Read(renderGlobalsTag);
-        return globals.Length >= RenderGlobalsField + 4 ? Read(catalog, U32(globals, RenderGlobalsField)) : null;
+        return TagView.FitsThrough<SRendererRoot>(globals, 0, nameof(SRendererRoot.DefaultWaterSettings))
+            ? Read(catalog, TagView.Member<SRendererRoot, uint>(globals, 0, nameof(SRendererRoot.DefaultWaterSettings))) : null;
     }
 
     /** The tag filed under NameHash in a name table, class 0x80809780; pairs are {fnv1 name, tag}. */
@@ -56,18 +61,16 @@ public sealed record NativeOceanSettings(uint Tag, uint WaveNoise, uint DetailNo
     {
         if (!catalog.TryGetEntry(table, out var entry) || entry.Reference != NameMapClass) return null;
         var bytes = catalog.Read(table);
-        long count = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(8));
-        long header = 16 + BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(16));
-        if (count <= 0 || header < 4 || header + 16 + count * 8 > bytes.Length
-            || U32(bytes, (int)header + 8) != NamePairClass)
-            return null;
-        for (int row = (int)header + 16, end = row + (int)count * 8; row < end; row += 8)
-            if (U32(bytes, row) == NameHash) return U32(bytes, row + 4);
+        ref readonly var entries = ref TagView.At<TagArray<SRuntimeNameRow>>(bytes,
+            TagView.FieldOffset<SRuntimeNameMap>(nameof(SRuntimeNameMap.TagEntries)));
+        ReadOnlySpan<SRuntimeNameRow> rows;
+        try { rows = TagView.CheckedRows(bytes, in entries, NamePairClass); }
+        catch (Exception error) when (error is InvalidDataException or OverflowException) { return null; }
+        foreach (ref readonly var pair in rows)
+            if (pair.NameHash == NameHash) return pair.ProgramTag;
         return null;
     }
 
-    private static uint U32(byte[] bytes, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset, 4));
-    private static float F32(byte[] bytes, int offset) => BitConverter.UInt32BitsToSingle(U32(bytes, offset));
 }
 
 /** Extern 91, the ocean wave block that 0x7FF742E1F940 pushes before each water draw. */

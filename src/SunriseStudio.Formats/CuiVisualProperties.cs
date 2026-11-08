@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Formats;
 
@@ -17,13 +19,17 @@ public static class CuiVisualProperties
         if (node.AuxiliaryTypeHash != 0) return [];
         CuiOverrideChoice[] choices = node.TypeHash switch
         {
-            (uint)CuiTypeRegistry.TextType => [new("Text", CuiVisualPropertyKind.Text, 0x405, 232, 0x811C9DC5),
-                new("Style", CuiVisualPropertyKind.Style, 0x40C, 232, CuiFonts.DefaultStyle),
-                new("Font size", CuiVisualPropertyKind.FontSize, 0x420, 152), new("Case", CuiVisualPropertyKind.TextCase, 0x40A, 152),
-                new("Alignment", CuiVisualPropertyKind.Alignment, 0x40E, 152), new("Auto width", CuiVisualPropertyKind.AutoWidth, 0x41A, 136),
-                new("Palette color", CuiVisualPropertyKind.Palette, 0x40D, 232, 0xBD77BB98), new("Text tint", CuiVisualPropertyKind.Tint, 0x414, 216)],
-            (uint)CuiTypeRegistry.BitmapType => [new("Bitmap", CuiVisualPropertyKind.Bitmap, 0x600, 264),
-                new("Group", CuiVisualPropertyKind.Group, 0x601, 152), new("Frame", CuiVisualPropertyKind.Frame, 0x602, 152)],
+            (uint)CuiTypeRegistry.TextType => [new("Text", CuiVisualPropertyKind.Text, 0x405, CuiDocument.StringHashes, StringHash.Empty),
+                new("Style", CuiVisualPropertyKind.Style, 0x40C, CuiDocument.StringHashes, CuiFonts.DefaultStyle),
+                new("Font size", CuiVisualPropertyKind.FontSize, 0x420, CuiDocument.Integers),
+                new("Case", CuiVisualPropertyKind.TextCase, 0x40A, CuiDocument.Integers),
+                new("Alignment", CuiVisualPropertyKind.Alignment, 0x40E, CuiDocument.Integers),
+                new("Auto width", CuiVisualPropertyKind.AutoWidth, 0x41A, CuiDocument.Bools),
+                new("Palette color", CuiVisualPropertyKind.Palette, 0x40D, CuiDocument.StringHashes, 0xBD77BB98),
+                new("Text tint", CuiVisualPropertyKind.Tint, 0x414, CuiDocument.Vectors)],
+            (uint)CuiTypeRegistry.BitmapType => [new("Bitmap", CuiVisualPropertyKind.Bitmap, 0x600, CuiDocument.Handles),
+                new("Group", CuiVisualPropertyKind.Group, 0x601, CuiDocument.Integers),
+                new("Frame", CuiVisualPropertyKind.Frame, 0x602, CuiDocument.Integers)],
             _ => []
         };
         return choices.Where(choice => !component.Properties.Any(property => property.Direct && property.Selector == choice.Selector)).ToArray();
@@ -43,7 +49,7 @@ public static class CuiVisualProperties
             || kind is CuiVisualPropertyKind.Group or CuiVisualPropertyKind.Frame && value > int.MaxValue)
             throw new InvalidDataException("The override exceeds its native range.");
         byte[] encoded = kind == CuiVisualPropertyKind.Tint ? MemoryMarshal.AsBytes(new[] { tint }.AsSpan()).ToArray()
-            : choice.PoolDescriptor == 136 ? [checked((byte)value)] : BitConverter.GetBytes(value);
+            : choice.PoolDescriptor == CuiDocument.Bools ? [checked((byte)value)] : BitConverter.GetBytes(value);
         return CuiPropertyEdits.Upsert(bytes, document, component, [new(choice.Selector, choice.PoolDescriptor, encoded)]);
     }
     /**
@@ -59,19 +65,19 @@ public static class CuiVisualProperties
         if (node.AuxiliaryTypeHash != 0) return result;
         if (node.TypeHash == CuiTypeRegistry.TextType)
         {
-            Add(0x405, "Text", CuiVisualPropertyKind.Text, 0x80804692);
-            Add(0x40C, "Style", CuiVisualPropertyKind.Style, 0x80804692);
-            Add(0x420, "Font size", CuiVisualPropertyKind.FontSize, 0x80804696, 0x8080468B);
-            Add(0x40A, "Case", CuiVisualPropertyKind.TextCase, 0x80804696);
-            Add(0x40E, "Alignment", CuiVisualPropertyKind.Alignment, 0x80804696);
-            Add(0x41A, "Auto width", CuiVisualPropertyKind.AutoWidth, 0x8080468D);
-            Add(0x40D, "Palette color", CuiVisualPropertyKind.Palette, 0x80804692);
+            Add(0x405, "Text", CuiVisualPropertyKind.Text, C80804692.Class);
+            Add(0x40C, "Style", CuiVisualPropertyKind.Style, C80804692.Class);
+            Add(0x420, "Font size", CuiVisualPropertyKind.FontSize, CuiIntegerValue.Class, CuiShortValue.Class);
+            Add(0x40A, "Case", CuiVisualPropertyKind.TextCase, CuiIntegerValue.Class);
+            Add(0x40E, "Alignment", CuiVisualPropertyKind.Alignment, CuiIntegerValue.Class);
+            Add(0x41A, "Auto width", CuiVisualPropertyKind.AutoWidth, SCuiBoolValue.Class);
+            Add(0x40D, "Palette color", CuiVisualPropertyKind.Palette, C80804692.Class);
         }
         else if (node.TypeHash == CuiTypeRegistry.BitmapType)
         {
-            Add(0x600, "Bitmap", CuiVisualPropertyKind.Bitmap, 0x80804690);
-            Add(0x601, "Group", CuiVisualPropertyKind.Group, 0x80804696);
-            Add(0x602, "Frame", CuiVisualPropertyKind.Frame, 0x80804696);
+            Add(0x600, "Bitmap", CuiVisualPropertyKind.Bitmap, C80804690.Class);
+            Add(0x601, "Group", CuiVisualPropertyKind.Group, CuiIntegerValue.Class);
+            Add(0x602, "Frame", CuiVisualPropertyKind.Frame, CuiIntegerValue.Class);
         }
         return result;
 
@@ -85,8 +91,8 @@ public static class CuiVisualProperties
 
     public static uint ReadUInt(CuiDocument document, CuiProperty property) => property.ValueClass switch
     {
-        0x8080468D => document.Data.Span[property.ValueOffset],
-        0x8080468B => BinaryPrimitives.ReadUInt16LittleEndian(document.Data.Span[property.ValueOffset..]),
+        SCuiBoolValue.Class => document.Data.Span[property.ValueOffset],
+        CuiShortValue.Class => BinaryPrimitives.ReadUInt16LittleEndian(document.Data.Span[property.ValueOffset..]),
         _ => BinaryPrimitives.ReadUInt32LittleEndian(document.Data.Span[property.ValueOffset..])
     };
 
@@ -94,7 +100,7 @@ public static class CuiVisualProperties
     {
         if (node.TypeHash != CuiTypeRegistry.TextType || node.AuxiliaryTypeHash != 0) return null;
         var property = component.Properties.LastOrDefault(property => property.Direct && property.Selector == 0x414
-            && property.ValueClass == 0x80804693);
+            && property.ValueClass == C80804693.Class);
         return property is null ? null : new(property, MemoryMarshal.Read<Vector4>(document.Data.Span[property.ValueOffset..]));
     }
 
@@ -123,7 +129,10 @@ public static class CuiVisualProperties
                 || kind == CuiVisualPropertyKind.AutoWidth && value > 1)
                 throw new InvalidDataException("The visual property exceeds its native range.");
             byte[] encoded = field.Property.ValueClass switch
-            { 0x8080468B => BitConverter.GetBytes(checked((ushort)value)), 0x8080468D => [checked((byte)value)], _ => BitConverter.GetBytes(value) };
+            {
+                CuiShortValue.Class => BitConverter.GetBytes(checked((ushort)value)), SCuiBoolValue.Class => [checked((byte)value)],
+                _ => BitConverter.GetBytes(value)
+            };
             changes.Add(field.Property, encoded);
         }
         if (tint is { } color)

@@ -143,7 +143,7 @@ void BundleRoundTrip(PackageCatalog catalog, string output, string? blender)
     var grown = StaticCompoundShape.Parse(HavokPackfile.Parse(compiled.Assets[edit.Target.SourceTag]));
     var installed = StaticCompoundShape.Parse(HavokPackfile.Parse(catalog.ReadOriginal(edit.Target.SourceTag)));
     var shape = result.AddedAssets.Single();
-    uint shapeTag = 0x80800000u + ((uint)shape.Native!.PackageId << 13) + (uint)shape.Native.EntryIndex!.Value;
+    uint shapeTag = TagHashes.Make(shape.Native!.PackageId, shape.Native.EntryIndex!.Value);
     Check(grown.Instances.Count == installed.Instances.Count + 1 && project.AddedAssets.Count == 1
         && grown.Instances[^1].ChildImport is ['i', ..] && prepared.Edits.Keys.Any(tag => catalog.TryGetEntry(tag, out var e) && e.Reference == 0x80808A15
             && StaticCollisionReader.ReadOwner(tag, prepared.Edits[tag]).ImportTag(grown.Instances[^1].ImportIndex) == shapeTag),

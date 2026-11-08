@@ -1,6 +1,8 @@
 using System.Numerics;
 using SunriseStudio.Animation;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene.Collision;
 
@@ -10,11 +12,11 @@ namespace SunriseStudio.Scene.Collision;
  */
 public sealed partial class CollisionSceneLoader(PackageCatalog catalog)
 {
-    /** Payload marker of a trigger volume row: a shape of a user-tag-2 array, or an inline shape. */
-    public const uint ShapeArrayMarker = 0x8080929B;
     public const string ShapeArrayClass = "s_hkpShape_array_data", PhysicsDataClass = "s_physics_component_havok_data";
-    private const uint StaticModelClass = 0x808071A7, InstanceTableClass = 0x8080966D, OwnerRecordClass = 0x80806EF4;
-    private const uint EntityClass = 0x80809C0F, PhysicsModelClass = 0x808092D8, PhysicsPayloadClass = 0x80808A0C;
+    private const uint StaticModelClass = SStaticMesh.Class, InstanceTableClass = SStaticMeshInstances.Class,
+        OwnerRecordClass = SMapResourceLink.Class;
+    private const uint EntityClass = SEntity.Class, PhysicsModelClass = UnknownPhysicsModelComponent.Class,
+        PhysicsPayloadClass = UnknownPhysicsModelPayload.Class;
     // The trigger volume filter's layer.
     private const int TriggerLayer = 9;
 
@@ -81,10 +83,10 @@ public sealed partial class CollisionSceneLoader(PackageCatalog catalog)
             var bytes = Read(list);
             var payloads = CollisionRows(bytes, list);
             scene.ListRows[list] = payloads;
-            foreach (var payload in payloads.Where(p => p.Marker == ShapeArrayMarker))
+            foreach (var payload in payloads.Where(p => p.Marker == TriggerShapeReference.Class))
             {
                 token.ThrowIfCancellationRequested();
-                LoadTriggerRow(payload, new TagData(bytes), rows.GetValueOrDefault((payload.ListTag, payload.Row)));
+                LoadTriggerRow(payload, bytes, rows.GetValueOrDefault((payload.ListTag, payload.Row)));
             }
         }
         return scene;
@@ -94,14 +96,15 @@ public sealed partial class CollisionSceneLoader(PackageCatalog catalog)
      * A trigger volume row draws one shape: shapes[payload +0x18] of its user-tag-2 array, or its
      * inline shape when the tag is -1. It sits at the row's rotation and translation; scale does not apply.
      */
-    private void LoadTriggerRow(PlacedPayload payload, TagData list, SceneMarker? marker)
+    private void LoadTriggerRow(PlacedPayload payload, byte[] list, SceneMarker? marker)
     {
         bool inline = payload.Tag == uint.MaxValue;
         var entity = AddEntity(CollisionSource.ShapeArray, inline ? payload.ListTag : payload.Tag, payload, marker, inlineTrigger: inline);
         var parent = RigidMatrix(entity.Placement);
         if (inline)
         {
-            foreach (var shape in InlineTriggers(list.U32(payload.Row))) PlaceInlineTrigger(entity, shape, parent);
+            foreach (var shape in InlineTriggers(TagView.At<AuthoredPlacementEntry>(list, payload.Row).ClassTag))
+                PlaceInlineTrigger(entity, shape, parent);
         }
         else if (Packfile(payload.Tag) is not { } file) scene.Count("trigger row without a packfile");
         else if (file.RootClass != ShapeArrayClass) scene.Count($"trigger row root {file.RootClass}");
@@ -132,7 +135,8 @@ public sealed partial class CollisionSceneLoader(PackageCatalog catalog)
         {
             // A compound names its children through its owner's import list.
             var owner = catalog.Entries.FirstOrDefault(entry => entry.PackageId == own.PackageId
-                && entry.Reference == StaticCollisionReader.OwnerClass && new TagData(Read(entry.TagHash)).U32(0x58) == tag);
+                && entry.Reference == StaticCollisionReader.OwnerClass
+                && TagView.Checked<SCollisionOwner>(Read(entry.TagHash), 0).CompoundPackfile == tag);
             if (owner is not null) { LoadOwner(owner.TagHash, file); return; }
             scene.Notes.Add("Imports: no owner names this compound; imported children not shown");
         }
@@ -298,36 +302,49 @@ public sealed partial class CollisionSceneLoader(PackageCatalog catalog)
     private EntityPhysics? ReadPhysics(uint classTag)
     {
         if (physics.TryGetValue(classTag, out var cached)) return cached;
-        var definition = new TagData(Read(classTag));
+        byte[] definition = Read(classTag);
+        ref readonly var entity = ref TagView.Checked<SEntity>(definition, 0);
         EntityPhysics? found = null;
-        foreach (int row in definition.Rows(0x10, 0x80809C04, 12))
+        foreach (ref readonly var row in TagView.Rows(definition, in entity.Components, SPatternComponent.Class))
         {
-            uint configTag = definition.U32(row);
-            if (!catalog.TryGetEntry(configTag, out var configEntry) || configEntry.Reference != 0x80809C36) continue;
+            uint configTag = row.Config;
+            if (!catalog.TryGetEntry(configTag, out var configEntry) || configEntry.Reference != SEntityConfig.Class) continue;
             // Every config is read, so a change to any of them reaches the layer.
-            var config = new TagData(Read(configTag));
-            if (found is not null || config.I64(0x10) == 0 || config.I64(0x18) == 0) continue;
-            int template = config.Relative(0x10), payload = config.Relative(0x18);
-            if (!config.Has(template - 4, 4) || config.U32(template - 4) != PhysicsModelClass
-                || !config.Has(payload - 4, 4) || config.U32(payload - 4) != PhysicsPayloadClass) continue;
-            uint packfile = config.U32(payload + 0x380);
+            byte[] config = Read(configTag);
+            if (found is not null) continue;
+            ref readonly var configView = ref TagView.Checked<SEntityConfig>(config, 0);
+            if (configView.DefaultInstance.IsNull || configView.Definition.IsNull) continue;
+            int payload = TagView.TargetOffset(config, in configView.Definition)!.Value;
+            if (TagView.TargetClass(config, in configView.DefaultInstance) != PhysicsModelClass
+                || TagView.TargetClass(config, in configView.Definition) != PhysicsPayloadClass) continue;
+            // The payload may end before its view does; only the members read must fit.
+            uint packfile = TagView.Member<UnknownPhysicsModelPayload, uint>(config, payload, nameof(UnknownPhysicsModelPayload.PhysicsPackfile));
             var file = Packfile(packfile) ?? throw new InvalidDataException($"Physics packfile 0x{packfile:X8} is missing.");
             if (file.RootClass != PhysicsDataClass) throw new InvalidDataException($"Physics packfile root is {file.RootClass}.");
             var bodies = new List<(int, int, CollisionRole, uint, int)>();
-            foreach (int body in config.Rows(payload + 0x388, 0x80808C07, 144))
+            ref readonly var bodyRows = ref TagView.Member<UnknownPhysicsModelPayload, TagArray<UnknownPhysicsBodyRow>>(config, payload,
+                nameof(UnknownPhysicsModelPayload.Bodies));
+            foreach (ref readonly var body in TagView.Rows(config, in bodyRows, UnknownPhysicsBodyRow.Class))
             {
                 // The mask is 3 for an unparented object; mode 0 builds nothing.
-                int mode = config.U8(body + 0x19) & 3;
+                int mode = body.BodyMode & 3;
                 if (mode == 0) continue;
-                ushort bone = config.U16(body + 0x08);
-                var role = (sbyte)config.U8(body + 0x18) == TriggerLayer ? CollisionRole.Trigger
+                ushort bone = body.Bone;
+                var role = body.CollisionLayer == TriggerLayer ? CollisionRole.Trigger
                     : mode == 2 ? CollisionRole.Hitbox : CollisionRole.World;
-                bodies.Add((bone == ushort.MaxValue ? -1 : bone, config.I32(body + 0x88), role,
-                    mode == 2 ? config.U32(body + 0x04) : 0, config.I32(body + 0x0C)));
+                bodies.Add((bone == ushort.MaxValue ? -1 : bone, body.ShapeIndex, role,
+                    mode == 2 ? body.DamageRegion : 0, body.LogicalPart));
             }
-            var phantoms = config.RowsOfAnyClass(payload + 0x398, 20).Select(p => (config.I32(p + 0x10),
-                (sbyte)config.U8(p + 0x0C) == TriggerLayer ? CollisionRole.Trigger : CollisionRole.Other,
-                config.I32(p + 0x08))).ToArray();
+            ref readonly var phantomArray = ref TagView.Member<UnknownPhysicsModelPayload, TagArray<C80808c05>>(config, payload,
+                nameof(UnknownPhysicsModelPayload.Phantoms));
+            var phantomRows = TagView.Rows(config, in phantomArray);
+            var phantoms = new (int Shape, CollisionRole Role, int Part)[phantomRows.Length];
+            for (int i = 0; i < phantomRows.Length; i++)
+            {
+                ref readonly var phantom = ref phantomRows[i];
+                phantoms[i] = (phantom.ShapeIndex, phantom.CollisionLayer == TriggerLayer ? CollisionRole.Trigger : CollisionRole.Other,
+                    phantom.LogicalPart);
+            }
             Matrix4x4[] bones = [];
             string? skeletonError = null;
             try { bones = new SkeletonReader(catalog).Read(classTag).Bones.Select(b => b.BindObject.Matrix).ToArray(); }
@@ -351,8 +368,12 @@ public sealed partial class CollisionSceneLoader(PackageCatalog catalog)
         foreach (var entry in catalog.Entries.Where(entry => entry.Reference == InstanceTableClass))
         {
             token.ThrowIfCancellationRequested();
-            var data = new TagData(Read(entry.TagHash));
-            if (!data.Rows(0x58, 0x8080967D, 4).Any(resource => data.U32(resource) == model)) continue;
+            byte[] data = Read(entry.TagHash);
+            ref readonly var instanceTable = ref TagView.Checked<SStaticMeshInstances>(data, 0);
+            bool places = false;
+            foreach (ref readonly var resource in TagView.Rows(data, in instanceTable.Instances.Resources, SStaticInstanceResource.Class))
+                if (resource.StaticMesh == model) { places = true; break; }
+            if (!places) continue;
             if (!tables.TryGetValue(entry.PackageId, out var set)) tables[entry.PackageId] = set = [];
             set.Add(entry.TagHash);
         }
@@ -371,10 +392,10 @@ public sealed partial class CollisionSceneLoader(PackageCatalog catalog)
             && entry.Reference == StaticCollisionReader.ObjectListClass).Select(entry => entry.TagHash).Order())
             foreach (var payload in StaticCollisionReader.PlacedPayloads(Read(list), list))
             {
-                if (payload.Marker == StaticCollisionReader.CollisionMarker) entityLists.Add(list);
-                if (payload.Marker != StaticCollisionReader.InstancesMarker || !catalog.TryGetEntry(payload.Tag, out var target)) continue;
+                if (payload.Marker == SStaticCollisionPayload.Class) entityLists.Add(list);
+                if (payload.Marker != SStaticInstancesPayload.Class || !catalog.TryGetEntry(payload.Tag, out var target)) continue;
                 uint table = target.Reference == InstanceTableClass ? payload.Tag
-                    : target.Reference == OwnerRecordClass ? new TagData(Read(payload.Tag)).U32(8) : 0;
+                    : target.Reference == OwnerRecordClass ? TagView.Checked<SMapResourceLink>(Read(payload.Tag), 0).InstanceTable : 0;
                 if (!tables.Contains(table)) continue;
                 if (!owners.TryGetValue(table, out var placed)) owners[table] = placed = [];
                 placed.Add(payload);
@@ -383,15 +404,18 @@ public sealed partial class CollisionSceneLoader(PackageCatalog catalog)
         foreach (var (table, placed) in owners)
         {
             token.ThrowIfCancellationRequested();
-            var data = new TagData(Read(table));
-            int[] transforms = data.Rows(0x40, 0x808071A3, 48), resources = data.Rows(0x58, 0x8080967D, 4);
-            foreach (int range in data.Rows(0x68, 0x80807190, 8))
+            byte[] bytes = Read(table);
+            ref readonly var groups = ref TagView.Checked<SStaticMeshInstances>(bytes, 0).Instances;
+            var transforms = TagView.Rows(bytes, in groups.Transforms, SStaticInstanceTransform.Class);
+            var resources = TagView.Rows(bytes, in groups.Resources, SStaticInstanceResource.Class);
+            foreach (ref readonly var range in TagView.Rows(bytes, in groups.Ranges, SStaticMeshInstanceGroup.Class))
             {
-                int count = data.U16(range), first = data.U16(range + 2), resource = data.U16(range + 4);
-                if (resource >= resources.Length || data.U32(resources[resource]) != model || first + count > transforms.Length) continue;
+                int count = range.Count, first = range.FirstInstance, resource = range.ResourceIndex;
+                if (resource >= resources.Length || resources[resource].StaticMesh != model || first + count > transforms.Length) continue;
                 foreach (var owner in placed)
                     for (int i = first; i < first + count; i++)
-                        rows.Add((table, i, AssetSceneLoader.InstanceTransform(data, transforms[i], owner.Placement.ToMatrix())));
+                        rows.Add((table, i, AssetSceneLoader.InstanceTransform(bytes, TagView.OffsetOf(bytes, in transforms[i]),
+                            owner.Placement.ToMatrix())));
             }
         }
         placedRows += rows.Count;
@@ -484,7 +508,7 @@ public sealed partial class CollisionSceneLoader(PackageCatalog catalog)
     /** Object list rows the layer reads: collision entities and shape arrays, in row order. */
     internal static PlacedPayload[] CollisionRows(byte[] objectList, uint listTag) =>
         StaticCollisionReader.PlacedPayloads(objectList, listTag)
-            .Where(p => p.Marker is StaticCollisionReader.CollisionMarker or ShapeArrayMarker).ToArray();
+            .Where(p => p.Marker is SStaticCollisionPayload.Class or TriggerShapeReference.Class).ToArray();
 
     private byte[] Read(uint tag)
     {

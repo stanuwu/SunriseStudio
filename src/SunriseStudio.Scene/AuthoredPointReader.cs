@@ -1,4 +1,6 @@
 using System.Numerics;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -8,36 +10,43 @@ public sealed partial class AssetSceneLoader
     private readonly List<(AuthoredSlotIdentity Target, AuthoredSlotIdentity Source, uint Tag, int Offset)> volumeNameLinks = [];
 
     /** Type-4 placement arrays and type-23 identities have distinct native descriptor contracts. */
-    private void ReadConfigPoints(uint tag, TagData data, uint bubble)
+    private void ReadConfigPoints(uint tag, byte[] data, uint bubble)
     {
         foreach (var descriptor in ConfigDescriptors(tag, data))
         {
-            if (descriptor.Slot.Type == 30 && descriptor.ClassId == 0x8080952F
-                && data.U32(descriptor.Offset + 68) == 0x80809531
-                && data.U32(descriptor.Offset + 72) == 0x80809532)
+            // The descriptor is the handle's peer component; its Handle.Word names the handle class.
+            if (descriptor.Slot.Type == 30 && descriptor.ClassId == MonitorSlotHandleType30.Class)
             {
-                var target = SlotReference(data.U64(descriptor.Offset + 0x58));
-                if (target.Type == 60) volumeNameLinks.Add((target, descriptor.Slot, tag, descriptor.Offset + 0x58));
+                ref readonly var monitor = ref TagView.At<Type30MonitorComponent>(data, descriptor.Offset);
+                if (monitor.SenseSchema == C80809531.Class && monitor.AuthSchema == C80809532.Class)
+                {
+                    var target = new AuthoredSlotIdentity(monitor.MeasuredTargetKey, monitor.MeasuredTargetSlotType,
+                        monitor.MeasuredTargetSlotIndex);
+                    if (target.Type == 60)
+                        volumeNameLinks.Add((target, descriptor.Slot, tag, TagView.OffsetOf(data, in monitor.MeasuredTargetKey)));
+                }
             }
-            if (descriptor.Slot.Type == 23 && descriptor.ClassId == 0x80804F45)
+            if (descriptor.Slot.Type == 23 && descriptor.ClassId == DeviceSlotHandleType23.Class)
             {
-                deviceLinks.Add((data.U64(descriptor.Offset + 0x58), descriptor.Slot));
+                deviceLinks.Add((TagView.At<DeviceResourceType23>(data, descriptor.Offset).PlacementIdentifier, descriptor.Slot));
                 continue;
             }
-            if (descriptor.Slot.Type != 4 || descriptor.ClassId != 0x80809927) continue;
-            foreach (var row in data.Rows(descriptor.Offset + 0x58, 0x808099D8, 0x90))
+            if (descriptor.Slot.Type != 4 || descriptor.ClassId != ObjectSlotHandleType4.Class) continue;
+            foreach (ref readonly var entry in SceneReads.Rows<ObjectSlotDefinitionType4, AuthoredPlacementEntry>(data,
+                         descriptor.Offset, nameof(ObjectSlotDefinitionType4.EmbeddedPlacements), AuthoredPlacementEntry.Class))
             {
+                var row = TagView.OffsetOf(data, in entry);
                 var (position, rotation) = SlotPose(data, row);
-                var identity = data.U64(row + 0x70);
-                var nameHash = data.U32(row + 0x64);
-                authoredPlacements.Add(new PlacementFact(identity, tag, row, data.U32(row), bubble,
+                var identity = entry.PlacementIdentity;
+                var nameHash = entry.NameHash;
+                authoredPlacements.Add(new PlacementFact(identity, tag, row, entry.ClassTag, bubble,
                     activeEntryIndex, position, rotation, nameHash));
                 var marker = new SceneMarker
                 {
                     Name = $"Object {descriptor.Slot.Index}",
                     NameHash = nameHash,
                     Slot = descriptor.Slot,
-                    TagHash = data.U32(row),
+                    TagHash = entry.ClassTag,
                     SourceTag = tag,
                     SourceOffset = row,
                     PlacementIdentity = identity,
@@ -50,34 +59,33 @@ public sealed partial class AssetSceneLoader
                     Color = new Vector4(0.9f, 0.8f, 0.25f, 1)
                 };
                 scene.Markers.Add(marker);
-                QueuePlacedClassModels(marker, Placement(data, row + 0x10));
+                QueuePlacedClassModels(marker, EntryPlacement(data, row));
             }
         }
         var triggers = ConfigSlots(tag, data, 31);
         if (triggers.Length == 1)
-            foreach (var offset in TriggerLinkOffsets(data))
+            foreach (var (_, start) in TagBlock.FindRecords<ClientRef>(data, ClientRef.Class))
             {
-                var target = SlotReference(data.U64(offset + 8));
-                if (target.Type == 60) volumeNameLinks.Add((target, triggers[0], tag, offset + 8));
+                ref readonly var link = ref TagView.At<ClientRef>(data, start);
+                var target = new AuthoredSlotIdentity(link.TargetKey, link.TargetSlotType, link.TargetSlotIndex);
+                if (target.Type == 60) volumeNameLinks.Add((target, triggers[0], tag, start));
             }
     }
 
-    /** Embedded object rows hold rotation at +0x10 and position at +0x20 in world coordinates. */
-    internal static (Vector3 Position, Quaternion Rotation) SlotPose(TagData data, int row)
+    /** Embedded object rows hold world coordinates. */
+    internal static (Vector3 Position, Quaternion Rotation) SlotPose(byte[] data, int row)
     {
-        var position = data.V3(row + 0x20);
-        var rotation = data.Q4(row + 0x10);
+        ref readonly var entry = ref TagView.At<AuthoredPlacementEntry>(data, row);
+        var position = entry.Position;
+        var rotation = entry.Rotation;
         if (!Finite(position) || !float.IsFinite(rotation.LengthSquared()))
             throw new InvalidDataException("Embedded object placement is not finite.");
         return (position, rotation);
     }
 
-    /** Offsets of 0x80809C42 link records, found by scanning every word of the config. */
-    internal static IEnumerable<int> TriggerLinkOffsets(TagData data)
-    {
-        for (var offset = 0; offset <= data.Length - 16; offset += 4)
-            if (data.U32(offset) == 0x80809C42 && data.U32(offset + 4) == 0) yield return offset;
-    }
+    /** Offsets of inline ClientRef records, found by scanning every word of the config. */
+    internal static IEnumerable<int> TriggerLinkOffsets(byte[] data) =>
+        TagBlock.FindRecords<ClientRef>(data, ClientRef.Class).Select(record => record.Offset);
 
     /** A device name is assigned only through an exact, unique placement-identity match. */
     private void ResolveDeviceNames()

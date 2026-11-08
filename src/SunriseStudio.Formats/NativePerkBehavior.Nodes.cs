@@ -1,5 +1,9 @@
 using System.Buffers.Binary;
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Text;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -9,10 +13,9 @@ public static partial class NativePerkBehavior
     private static PerkBehaviorNode ReadNode(ReadOnlyMemory<byte> bytes, int at, PerkBehaviorNodeKind kind,
         Role role, string id, List<string> diagnostics)
     {
-        var data = new TagReader(bytes);
-        if (at < 4 || !data.Has(at, kind == PerkBehaviorNodeKind.Condition ? 8 : 1))
+        if (at < TagView.ClassWordSize || at > bytes.Length - (kind == PerkBehaviorNodeKind.Condition ? ConditionHeaderSize : EffectOpcode + sizeof(byte)))
             throw new InvalidDataException("The perk node is truncated.");
-        uint type = data.U32(at - 4);
+        uint type = TagView.ClassAt(bytes.Span, at) ?? 0;
         var node = TryReadNode(bytes, at, type, kind, role, id, diagnostics);
         if (node is null)
         {
@@ -20,21 +23,26 @@ public static partial class NativePerkBehavior
                 Kind = kind, NativeClass = type, Editable = false,
                 Description = "This operation is preserved. Its implementation and undecoded inputs are read-only." };
             diagnostics.Add($"Native operation {type:X8} has inputs this editor preserves without editing.");
-            if (kind == PerkBehaviorNodeKind.Condition && data.U8(at + 4) == byte.MaxValue
-                && F32(bytes, at) is >= 0 and <= 1)
+            if (kind == PerkBehaviorNodeKind.Condition)
             {
-                node.Primitive = "native-condition";
-                node.Title = $"Native condition {data.U8(at + 5)}";
-                node.Editable = true;
-                node.Properties.Add(Property("probability", "Probability", F32(bytes, at), 0, 1));
-                node.Description = "Probability is editable. Native condition logic and its other inputs are preserved.";
+                ref readonly var header = ref ConditionHeader(bytes.Span, at);
+                if (header.ConditionMarkerFf == byte.MaxValue && header.Probability is >= 0 and <= 1)
+                {
+                    node.Primitive = "native-condition";
+                    node.Title = $"Native condition {header.Opcode}";
+                    node.Editable = true;
+                    node.Properties.Add(Property("probability", "Probability", header.Probability, 0, 1));
+                    node.Description = "Probability is editable. Native condition logic and its other inputs are preserved.";
+                }
             }
         }
         node.Id = id;
         node.OriginalOffset = at;
-        node.NativeBytes = bytes.Span.Slice(at, Math.Min(8, bytes.Length - at)).ToArray();
+        node.NativeBytes = bytes.Span.Slice(at, Math.Min(ConditionHeaderSize, bytes.Length - at)).ToArray();
         node.LabelFilters.Clear();
-        if (node.Primitive != "native" && data.Has(at, LabelSitesOf(type).Select(site => site.Kind + 16).DefaultIfEmpty(0).Max()))
+        if (node.Primitive != "native"
+            && LabelSitesOf(type).Select(site => site.Kind + Unsafe.SizeOf<C808094a8>()).DefaultIfEmpty(0).Max() is var labelEnd
+            && labelEnd >= 0 && at <= bytes.Length - labelEnd)
         {
             try { ReadLabelFilters(bytes, at, node); }
             catch (InvalidDataException) { node.LabelFilters.Clear(); }
@@ -46,27 +54,44 @@ public static partial class NativePerkBehavior
     private static PerkBehaviorNode? TryReadNode(ReadOnlyMemory<byte> bytes, int at, uint type,
         PerkBehaviorNodeKind kind, Role role, string id, List<string> diagnostics)
     {
-        var data = new TagReader(bytes);
-        string? key = kind == PerkBehaviorNodeKind.Condition ? ConditionKey(data, at, type, role) : EffectKey(data, at, type);
+        var tag = bytes.Span;
+        string? key = kind == PerkBehaviorNodeKind.Condition ? ConditionKey(tag, at, type, role) : EffectKey(tag, at, type);
         if (key is null) return null;
         var node = Blank(key, Primitives.First(row => row.Key == (key == "state" ? "state-kill" : key)));
         var properties = node.Properties;
         void Set(string property, double value) => properties.First(row => row.Key == property).Value = value;
-        if (kind == PerkBehaviorNodeKind.Condition) Set("probability", F32(bytes, at));
+        if (kind == PerkBehaviorNodeKind.Condition) Set("probability", ConditionHeader(tag, at).Probability);
         if (FieldsOf(key) is { } fields && !ReadFields(bytes, at, fields, node)) return null;
         switch (key)
         {
             case "timer":
-                Set("seconds", F32(bytes, at + 8));
+                Set("seconds", TagView.At<PerkTimer>(tag, at).Seconds);
                 break;
             case "property":
                 ReadProperty(bytes, at, node);
                 break;
             case "ammo-drop":
-                for (int i = 0; i < properties.Count; i++) properties[i].Value = F32(bytes, at + 12 + i * 4);
+            {
+                ref readonly var ammo = ref TagView.At<PerkAmmoDrop>(tag, at);
+                float[] drops = [ammo.PrimaryInterval, ammo.PrimaryChance, ammo.PrimaryRepeat,
+                    ammo.SpecialInterval, ammo.SpecialChance, ammo.SpecialRepeat,
+                    ammo.HeavyInterval, ammo.HeavyChance, ammo.HeavyRepeat];
+                for (int i = 0; i < properties.Count; i++) properties[i].Value = drops[i];
                 break;
+            }
             case "while-state" or "state":
-                byte selector = data.U8(at + 128), bits = data.U8(at + 129);
+            {
+                byte selector, bits;
+                if (key == "state")
+                {
+                    ref readonly var gated = ref TagView.At<PerkStateGated>(tag, at);
+                    (selector, bits) = (gated.SlotSelector, gated.SlotBits);
+                }
+                else
+                {
+                    ref readonly var state = ref TagView.At<PerkWhileState>(tag, at);
+                    (selector, bits) = (state.SlotSelector, state.SlotBits);
+                }
                 if (selector == bits && selector <= 1) Set("this_weapon_active", selector);
                 else
                 {
@@ -76,21 +101,25 @@ public static partial class NativePerkBehavior
                 }
                 if (OtherStateTests(bytes, at)) properties.Add(Info("other_tests", "Other native tests (kept as is)", 1));
                 break;
+            }
             case "kill" or "damage" or "unequip":
-                if (OtherFilters(data, at, key)) properties.Add(Info("other_filters", "Other native filters (kept as is)", 1));
+                if (OtherFilters(tag, at, key)) properties.Add(Info("other_filters", "Other native filters (kept as is)", 1));
                 break;
             case "ability-energy" or "driven-spawn":
-                if (!ReadExpression(bytes, at + (key == "ability-energy" ? 24 : 32), node)) return null;
-                if (key == "ability-energy" && data.U8(at + 4) != 0)
-                    properties.Add(Info("slot_table", "Slot table", data.U8(at + 4), PerkBehaviorValueKind.Integer));
+            {
+                if (!ReadExpression(bytes, at + ExpressionField(key), node)) return null;
+                byte slotTable = key == "ability-energy" ? TagView.At<PerkAbilityEnergy>(tag, at).SlotTable : (byte)0;
+                if (slotTable != 0)
+                    properties.Add(Info("slot_table", "Slot table", slotTable, PerkBehaviorValueKind.Integer));
                 break;
+            }
             case "damage-multiplier":
                 ReadDamageMultiplier(bytes, at, node);
                 break;
         }
         if (key == "state")
         {
-            int innerAt = Target(data, at + 256);
+            int innerAt = InnerTarget(tag, at);
             var inner = ReadNode(bytes, innerAt, PerkBehaviorNodeKind.Condition, Role.Inner, id + "/0", diagnostics);
             node.Children.Add(inner);
             if (PrimitiveOf(StatePrefix + inner.Primitive) is { } spec)
@@ -121,98 +150,143 @@ public static partial class NativePerkBehavior
     /** Event targets, restore mode 1, child masks and expressions other than a constant are kept as installed. */
     private static void ReadProperty(ReadOnlyMemory<byte> bytes, int at, PerkBehaviorNode node)
     {
-        var data = new TagReader(bytes);
+        var tag = bytes.Span;
+        ref readonly var view = ref TagView.At<PerkProperty>(tag, at);
         var properties = node.Properties;
         PerkBehaviorProperty Get(string key) => properties.First(row => row.Key == key);
         var target = Get("target");
-        target.Value = data.U8(at + 2);
+        target.Value = view.Target;
         target.Editable = target.Value <= 1;
-        Get("hash").Value = data.U32(at + 8);
-        Get("operation").Value = data.U8(at + 73);
-        byte restore = data.U8(at + 74);
+        Get("hash").Value = view.PropertyHash;
+        Get("operation").Value = view.Operation;
+        byte restore = view.RestoreMode;
         if (restore is 0 or 2) Get("restore").Value = restore == 2 ? 1 : 0;
         else
         {
             properties.Remove(Get("restore"));
             properties.Add(Info("restore_mode", "Restore mode (kept as is)", restore, PerkBehaviorValueKind.Integer));
         }
-        int constant = ConstantLocation(bytes, at + 24);
-        if (constant >= 0) Get("value").Value = F32(bytes, constant);
+        int constant = ConstantLocation(bytes, TagView.OffsetOf(tag, in view.HC6e92962.H45dee76f));
+        if (constant >= 0) Get("value").Value = TagView.At<ExpressionConstant>(tag, constant).Value.X;
         else
         {
             properties.Remove(Get("value"));
             properties.Add(Info("value_expression", "Value: input expression (kept as is)", 1));
         }
-        if (data.U8(at + 3) != 1 || data.U8(at + 4) != 0 || data.U8(at + 72) != 0)
+        if (view.Unknown3 != 1 || view.Unknown4 != 0 || view.Unknown72 != 0)
             properties.Add(Info("other", "Other native settings (kept as is)", 1));
     }
 
-    /** Header byte +6 must equal the state-record rule, or the node stays native. */
-    private static string? ConditionKey(TagReader data, int at, uint type, Role role)
+    /** OwnsStateRecord must equal the state-record rule, or the node stays native. */
+    private static string? ConditionKey(ReadOnlySpan<byte> tag, int at, uint type, Role role)
     {
-        if (data.U8(at + 4) != byte.MaxValue) return null;
-        byte opcode = data.U8(at + 5), owner = data.U8(at + 6);
+        ref readonly var header = ref ConditionHeader(tag, at);
+        if (header.ConditionMarkerFf != byte.MaxValue) return null;
+        byte opcode = header.Opcode, owner = header.OwnsStateRecord;
         string? key = type switch
         {
             AlwaysClass when opcode == 0 => "always",
-            TimerClass when opcode == 1 && data.Has(at, 12) => "timer",
-            EventClass when opcode == 30 && data.Has(at, 12) => "event",
-            UnequipClass when opcode == 17 && data.Has(at, 112) => "unequip",
-            KillClass when opcode == 2 && data.Has(at, 344) => "kill",
-            DamageClass when opcode == 4 && data.Has(at, 208) => "damage",
-            StateClass when opcode == 20 && data.Has(at, 256) => "while-state",
-            GatedClass when opcode == 35 && data.Has(at, 264) && data.U32(at + 224) == 0
-                && Target(data, at + 256) >= 4 => "state",
-            CounterClass when opcode == 26 && data.Has(at, 56)
-                && data.TryArray(at + 8, CounterRowClass, 32, out _) => "counter",
-            _ => SpecOf(PerkBehaviorNodeKind.Condition, type, opcode) is { } spec && data.Has(at, spec.Size) ? spec.Key : null
+            TimerClass when opcode == 1 && TagView.Fits<PerkTimer>(tag, at) => "timer",
+            EventClass when opcode == 30 && TagView.Fits<PerkEvent>(tag, at) => "event",
+            UnequipClass when opcode == 17 && TagView.Fits<PerkUnequip>(tag, at) => "unequip",
+            KillClass when opcode == 2 && TagView.Fits<PerkKill>(tag, at) => "kill",
+            DamageClass when opcode == 4 && TagView.Fits<PerkDamage>(tag, at) => "damage",
+            StateClass when opcode == 20 && TagView.Fits<PerkWhileState>(tag, at) => "while-state",
+            GatedClass when opcode == 35 && TagView.Fits<PerkStateGated>(tag, at)
+                && TagView.At<PerkStateGated>(tag, at).MustBeZero == 0 && InnerTarget(tag, at) >= 4 => "state",
+            CounterClass when opcode == 26 && TagView.Fits<PerkCounter>(tag, at)
+                && TagArray.TryChecked(tag, TagView.OffsetOf(tag, in TagView.At<PerkCounter>(tag, at).Rows), CounterRowClass,
+                    Unsafe.SizeOf<PerkCounterRow>(), out _) => "counter",
+            _ => SpecOf(PerkBehaviorNodeKind.Condition, type, opcode) is { } spec && spec.Size >= 0
+                && at <= tag.Length - spec.Size ? spec.Key : null
         };
         if (key is null) return null;
         bool owns = role is not (Role.Inner or Role.Op32) && key switch
         {
-            "while-state" or "state" => data.U32(at + 212) != EmptyHash,
-            "damage" => data.I64(at + 200) != 0,
+            "while-state" => TagView.At<PerkWhileState>(tag, at).Property != EmptyHash,
+            "state" => TagView.At<PerkStateGated>(tag, at).Property != EmptyHash,
+            "damage" => TagView.At<PerkDamage>(tag, at).StateRecord.Relative != 0,
             _ => false
         };
         return owner == (owns ? 1 : 0) ? key : null;
     }
 
-    private static string? EffectKey(TagReader data, int at, uint type) => type switch
+    /** A class whose own tests fail is looked up in the spec table. */
+    private static string? EffectKey(ReadOnlySpan<byte> tag, int at, uint type)
     {
-        PropertyClass when data.Has(at, 80) && data.U8(at) == 10 && data.U8(at + 1) == 1 && data.U8(at + 2) <= 3
-            && data.U8(at + 73) <= 3 => "property",
-        AmmoDropClass when data.Has(at, 48) && data.U8(at) == 11 && data.U8(at + 1) == 0
-            && data.U32(at + 4) == 0 && data.U32(at + 8) == 0 => "ammo-drop",
-        SpawnClass when data.Has(at, 64) && data.U8(at) == 1 && data.U8(at + 1) == 1 && data.U8(at + 2) <= 3 => "spawn",
-        DrivenSpawnClass when data.Has(at, 88) && data.U8(at) == 2 && data.U8(at + 1) == 1
-            && data.U8(at + 2) <= 3 => "driven-spawn",
-        EnergyClass when data.Has(at, 80) && data.U8(at) == 8 && data.U8(at + 1) == 0
-            && data.U8(at + 2) <= 7 && data.U8(at + 3) <= 2 => "ability-energy",
-        DamageScaleClass when data.Has(at, 336) && (data.U64(at) & ~0xFFUL) == 0 && data.U8(at) == 40 => "damage-multiplier",
-        CounterEffectClass when data.Has(at, 8) && data.U8(at) == 42 && data.U8(at + 1) == 0
-            && data.U8(at + 2) <= 1 && data.U8(at + 3) == 0 => "perk-counter",
-        TransmatClass when data.Has(at, 8) && data.U32(at) == 47 => "transmat",
-        _ => SpecOf(PerkBehaviorNodeKind.Effect, type, data.U8(at)) is { } spec && data.Has(at, spec.Size)
-            && (spec.Size < 2 || data.U8(at + 1) == StateFlag(spec.Opcode)) ? spec.Key : null
-    };
+        switch (type)
+        {
+            case PropertyClass when TagView.Fits<PerkProperty>(tag, at):
+            {
+                ref readonly var node = ref TagView.At<PerkProperty>(tag, at);
+                if (node.Opcode == 10 && node.StateFlag == 1 && node.Target <= 3 && node.Operation <= 3) return "property";
+                break;
+            }
+            case AmmoDropClass when TagView.Fits<PerkAmmoDrop>(tag, at):
+            {
+                ref readonly var node = ref TagView.At<PerkAmmoDrop>(tag, at);
+                if (node.Opcode == 11 && node.StateFlag == 0 && node.MustBeZero4 == 0 && node.MustBeZero8 == 0)
+                    return "ammo-drop";
+                break;
+            }
+            case SpawnClass when TagView.Fits<PerkSpawn>(tag, at):
+            {
+                ref readonly var node = ref TagView.At<PerkSpawn>(tag, at);
+                if (node.Opcode == 1 && node.StateFlag == 1 && node.Target <= 3) return "spawn";
+                break;
+            }
+            case DrivenSpawnClass when TagView.Fits<PerkDrivenSpawn>(tag, at):
+            {
+                ref readonly var node = ref TagView.At<PerkDrivenSpawn>(tag, at);
+                if (node.Opcode == 2 && node.StateFlag == 1 && node.Target <= 3) return "driven-spawn";
+                break;
+            }
+            case EnergyClass when TagView.Fits<PerkAbilityEnergy>(tag, at):
+            {
+                ref readonly var node = ref TagView.At<PerkAbilityEnergy>(tag, at);
+                if (node.Opcode == 8 && node.StateFlag == 0 && node.Slot <= 7 && node.Gate <= 2) return "ability-energy";
+                break;
+            }
+            case DamageScaleClass when TagView.Fits<PerkDamageMultiplier>(tag, at):
+            {
+                ref readonly var node = ref TagView.At<PerkDamageMultiplier>(tag, at);
+                if (node.Opcode == 40 && node.StateFlag == 0 && node.MustBeZero2 == 0 && node.MustBeZero4 == 0)
+                    return "damage-multiplier";
+                break;
+            }
+            case CounterEffectClass when TagView.Fits<PerkSetCounter>(tag, at):
+            {
+                ref readonly var node = ref TagView.At<PerkSetCounter>(tag, at);
+                if (node.Opcode == 42 && node.StateFlag == 0 && node.Mode <= 1 && node.MustBeZero == 0) return "perk-counter";
+                break;
+            }
+            case TransmatClass when TagView.Fits<PerkTransmat>(tag, at):
+                if (TagView.At<PerkTransmat>(tag, at).Opcode47Opcode == 47) return "transmat";
+                break;
+        }
+        return SpecOf(PerkBehaviorNodeKind.Effect, type, TagRead.U8(tag, at + EffectOpcode)) is { } spec && spec.Size >= 0
+            && at <= tag.Length - spec.Size
+            && (spec.Size <= EffectStateFlag || TagRead.U8(tag, at + EffectStateFlag) == StateFlag(spec.Opcode)) ? spec.Key : null;
+    }
 
     /** Rows keep their native order; a row's own inputs join its condition's inputs. */
     private static bool ReadRows(ReadOnlyMemory<byte> bytes, int at, PerkBehaviorNode node, string id, List<string> diagnostics)
     {
-        var data = new TagReader(bytes);
-        var rows = data.Array(at + 8, CounterRowClass, 32);
-        for (int i = 0; i < rows.Count; i++)
+        var tag = bytes.Span;
+        var rows = TagView.CheckedRows(tag, in TagView.At<PerkCounter>(tag, at).Rows, CounterRowClass);
+        var offsets = TagView.RowOffsets(tag, rows);
+        for (int i = 0; i < rows.Length; i++)
         {
-            int row = rows.Data + i * 32, childAt = Target(data, row);
+            ref readonly var row = ref rows[i];
+            int childAt = TagPointer.TryChecked(tag, TagView.OffsetOf(tag, in row.CounterTrigger));
             if (childAt < 4) return false;
             var child = ReadNode(bytes, childAt, PerkBehaviorNodeKind.Condition, Role.Row, $"{id}/{i}", diagnostics);
             child.Editable = true;
             var inputs = RowInputs();
             child.Properties.AddRange(inputs);
-            if (!ReadFields(bytes, row, Fields["row"], child)) return false;
-            if (data.U8(row + 8) > 2) inputs[0].Editable = false;
-            if (data.U8(row + 9) != 0 || data.U32(row + 20) != 0 || data.U32(row + 24) != 0 || data.U32(row + 28) != 0
-                || data.U16(row + 10) != 0)
+            if (!ReadFields(bytes, offsets[i], Fields["row"], child)) return false;
+            if (row.RowMode > 2) inputs[0].Editable = false;
+            if (row.Unknown9 != 0 || row.Unknown20 != 0 || row.Unknown24 != 0 || row.Unknown28 != 0 || row.Unknown10 != 0)
                 child.Properties.Add(Info("row_extra", "Row: other settings (kept as is)", 1));
             foreach (var property in inputs)
             {
@@ -226,13 +300,16 @@ public static partial class NativePerkBehavior
 
     private static void ReadDamageMultiplier(ReadOnlyMemory<byte> bytes, int at, PerkBehaviorNode node)
     {
-        var data = new TagReader(bytes);
-        int child = Target(data, at + 320);
-        uint type = child >= 4 && data.Has(child, 8) ? data.U32(child - 4) : 0;
+        var tag = bytes.Span;
+        ref readonly var view = ref TagView.At<PerkDamageMultiplier>(tag, at);
+        int child = TagPointer.TryChecked(tag, TagView.OffsetOf(tag, in view.Bonus));
+        uint type = child >= 4 && TagView.Fits<PerkDamageBonusConstant>(tag, child)
+            ? TagView.TargetClass(tag, in view.Bonus) ?? 0 : 0;
         if (type == BonusClass)
         {
-            node.Properties.First(row => row.Key == "bonus").Value = F32(bytes, child);
-            node.Properties.First(row => row.Key == "player_bonus").Value = F32(bytes, child + 4);
+            ref readonly var bonus = ref TagView.At<PerkDamageBonusConstant>(tag, child);
+            node.Properties.First(row => row.Key == "bonus").Value = bonus.Bonus;
+            node.Properties.First(row => row.Key == "player_bonus").Value = bonus.PlayerBonus;
         }
         else
         {
@@ -242,54 +319,85 @@ public static partial class NativePerkBehavior
                 0 => 0, BonusExpressionClass => 2, BonusOwnerClass => 3, _ => 4
             }, PerkBehaviorValueKind.Integer), (0, "None"), (2, "Input expression"), (3, "Owner value"), (4, "Other")));
         }
-        if (!AllFiltersPass(data, at)) node.Properties.Add(Info("filtered", "Other native filters (kept as is)", 1));
-        foreach (var (field, name) in new[] { (288, "Set"), (304, "Scale") })
+        if (!AllFiltersPass(tag, at)) node.Properties.Add(Info("filtered", "Other native filters (kept as is)", 1));
+        int stride = Unsafe.SizeOf<PerkDamageValueRow>();
+        var tables = new[]
         {
-            if (!data.TryArray(at + field, DamageRowClass, 12, out var rows)) continue;
+            (TagView.OffsetOf(tag, in view.SetDamageValues), "Set"), (TagView.OffsetOf(tag, in view.ScaleDamageValues), "Scale")
+        };
+        foreach (var (field, name) in tables)
+        {
+            if (!TagArray.TryChecked(tag, field, DamageRowClass, stride, out var rows)) continue;
             for (int i = 0; i < rows.Count; i++)
+            {
+                ref readonly var row = ref TagView.At<PerkDamageValueRow>(tag, rows.Data + i * stride);
                 node.Properties.Add(Info($"{name.ToLowerInvariant()}_{i}",
-                    $"{name} damage value {i + 1} (index {(sbyte)data.U8(rows.Data + i * 12)})",
-                    F32(bytes, rows.Data + i * 12 + 4), PerkBehaviorValueKind.Float));
+                    $"{name} damage value {i + 1} (index {(sbyte)row.Index})", row.Value, PerkBehaviorValueKind.Float));
+            }
         }
     }
 
     /** Every filter other than the editable label filters is empty or off. */
-    private static bool AllFiltersPass(TagReader data, int at) =>
-        data.U8(at + 8) == 0x20 && data.U32(at + 156) == 0 && data.U8(at + 177) == 1 && data.U8(at + 328) == 0
-        && new[] { 24, 40, 56, 288, 304 }.All(field => data.U64(at + field) == 0);
+    private static bool AllFiltersPass(ReadOnlySpan<byte> tag, int at)
+    {
+        ref readonly var view = ref TagView.At<PerkDamageMultiplier>(tag, at);
+        return view.HBa690325.RelationFilterKind == 0x20 && view.H4b1eab13.Unknown156 == 0 && view.H4b1eab13.Unknown177 == 1
+            && view.Unknown328 == 0 && view.HBa690325.FiltersInline.Filters.Count == 0 && view.H1862ac0e.Filter40.Count == 0
+            && view.H1862ac0e.Filter56.Count == 0 && view.SetDamageValues.Count == 0 && view.ScaleDamageValues.Count == 0;
+    }
 
     /** True when an installed filter other than a label filter differs from the form Studio writes. */
-    private static bool OtherFilters(TagReader data, int at, string key) => key switch
+    private static bool OtherFilters(ReadOnlySpan<byte> tag, int at, string key)
     {
-        "unequip" => false,
-        "kill" => data.U8(at + 312) != 1 || data.U8(at + 313) != 1 || data.U64(at + 168) != 0 || data.U8(at + 322) != 0
-            || data.U32(at + 324) != EmptyHash || data.U32(at + 328) != EmptyHash || data.U8(at + 332) != 0
-            || data.U32(at + 340) != 0xBF800000 || data.U32(at + 288) != 0 || data.U32(at + 292) != 0,
-        _ => data.U8(at + 144) != 1 || data.U8(at + 145) != 1
-            || data.U32(at + 156) != EmptyHash || data.U8(at + 165) != 0 || data.U8(at + 166) != 0
-            || data.U8(at + 167) != 0 || data.U64(at + 176) != 0 || data.U32(at + 192) != 0
-            || data.I64(at + 200) != 0 || data.U32(at + 120) != 0 || data.U32(at + 124) != 0
-    };
+        if (key == "unequip") return false;
+        if (key == "kill")
+        {
+            ref readonly var kill = ref TagView.At<PerkKill>(tag, at);
+            return kill.HBd96c334.AnyDamageType != 1 || kill.HBd96c334.SkipExcludeMask != 1 || kill.Unknown168 != 0
+                || kill.Unknown322 != 0 || kill.Unknown324 != EmptyHash || kill.Unknown328 != EmptyHash || kill.Unknown332 != 0
+                || BitConverter.SingleToUInt32Bits(kill.Unknown340) != 0xBF800000 || kill.HBd96c334.Unknown288 != 0
+                || kill.HBd96c334.Unknown292 != 0;
+        }
+        ref readonly var damage = ref TagView.At<PerkDamage>(tag, at);
+        return damage.H4b1eab13.Unknown144 != 1 || damage.H4b1eab13.Unknown145 != 1
+            || damage.Unknown156 != EmptyHash || damage.Unknown165 != 0 || damage.Unknown166 != 0
+            || damage.Unknown167 != 0 || damage.H8e428e9f.Filters.Count != 0 || damage.Unknown192 != 0
+            || damage.StateRecord.Relative != 0 || damage.H4b1eab13.Unknown120 != 0 || damage.H4b1eab13.Unknown124 != 0;
+    }
 
+    /** True when the body differs from the template outside the header, the slot test, the state fields and Invert. */
     private static bool OtherStateTests(ReadOnlyMemory<byte> bytes, int at)
     {
-        var span = bytes.Span.Slice(at, 256);
         var template = StateTemplate();
-        return !span[8..128].SequenceEqual(template.AsSpan(8, 120)) || !span[130..212].SequenceEqual(template.AsSpan(130, 82))
-            || !span[228..248].SequenceEqual(template.AsSpan(228, 20)) || !span[249..256].SequenceEqual(template.AsSpan(249, 7));
+        var span = bytes.Span.Slice(at, template.Length);
+        ref readonly var body = ref TagView.At<PerkWhileState>(template);
+        int slot = TagView.OffsetOf(template, in body.SlotSelector);
+        int slotEnd = TagView.OffsetOf(template, in body.SlotBits) + sizeof(byte);
+        int property = TagView.OffsetOf(template, in body.Property);
+        int holdEnd = TagView.OffsetOf(template, in body.Hold) + sizeof(float);
+        int invert = TagView.OffsetOf(template, in body.Invert);
+        int invertEnd = invert + sizeof(byte);
+        return !Same(span, template, StateBodyStart, slot) || !Same(span, template, slotEnd, property)
+            || !Same(span, template, holdEnd, invert) || !Same(span, template, invertEnd, template.Length);
+
+        static bool Same(ReadOnlySpan<byte> span, byte[] template, int from, int to) =>
+            span[from..to].SequenceEqual(template.AsSpan(from, to - from));
     }
 
     /** Native defaults of the while-state body: every range is open and every optional test is off. */
     private static byte[] StateTemplate()
     {
-        byte[] bytes = new byte[256];
-        void Float(int at, float value) => BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(at), value);
-        foreach (int at in new[] { 12, 28, 36, 44, 136, 144, 152, 160, 168, 176, 184, 216, 220 }) Float(at, 1);
-        Float(16, -1); Float(20, -1); Float(52, 32);
-        // The relation filter's +0 is 0x20 in every installed node.
-        bytes[64] = 0x20;
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(200), NoTag);
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(212), EmptyHash);
+        byte[] bytes = new byte[Unsafe.SizeOf<PerkWhileState>()];
+        ref var body = ref TagView.Edit<PerkWhileState>(bytes);
+        body.Range12 = body.Range28 = body.Range36 = body.Range44 = 1;
+        body.Range136 = body.Range144 = body.Range152 = body.Range160 = body.Range168 = body.Range176 = body.Range184 = 1;
+        body.Minimum = body.Maximum = 1;
+        body.Range16 = body.Range20 = -1;
+        body.Unknown52 = 32;
+        // Every installed node holds 0x20 here.
+        body.H9b8b27d3.RelationFilterKind = 0x20;
+        body.Unknown200 = NoTag;
+        body.Property = EmptyHash;
         return bytes;
     }
 
@@ -312,23 +420,34 @@ public static partial class NativePerkBehavior
     /** Returns 0 for a constant, 1 for pass-through, 2 for any other expression program. */
     private static (int Form, float Constant) Expression(ReadOnlyMemory<byte> bytes, int at)
     {
-        var data = new TagReader(bytes);
-        if (!data.Has(at - 8, 56) || data.U64(at - 8) != 0 || data.U64(at + 32) != 1 || data.U64(at + 40) != 1
-            || !data.TryArray(at, CodeClass, 1, out var code) || !data.TryArray(at + 16, ConstantClass, 16, out var constants)
+        var tag = bytes.Span;
+        // The parent's pointer just before the expression must be null.
+        int parent = at - Unsafe.SizeOf<RelativePointer<Unknown>>();
+        if (parent < 0 || !TagView.Fits<SCompiledExpression>(tag, at)
+            || !TagView.At<RelativePointer<Unknown>>(tag, parent).IsNull) return (2, 0);
+        ref readonly var expression = ref TagView.At<SCompiledExpression>(tag, at);
+        if (expression.Unknown56One != 1 || expression.Unknown64One != 1
+            || !TagArray.TryChecked(tag, TagView.OffsetOf(tag, in expression.Bytecode), CodeClass,
+                Unsafe.SizeOf<ExpressionCode>(), out var code)
+            || !TagArray.TryChecked(tag, TagView.OffsetOf(tag, in expression.ConstantBuffer), ConstantClass,
+                Unsafe.SizeOf<ExpressionConstant>(), out var constants)
             || code.Count != 4) return (2, 0);
-        var program = bytes.Span.Slice(code.Data, 4);
+        var program = tag.Slice(code.Data, 4);
         if (program.SequenceEqual(PassCode) && constants.Count == 0) return (1, 1);
         if (!program.SequenceEqual(ConstantCode) || constants.Count != 1) return (2, 0);
-        uint lane = data.U32(constants.Data);
+        var value = TagView.At<ExpressionConstant>(tag, constants.Data).Value;
+        uint lane = BitConverter.SingleToUInt32Bits(value.X);
         float scalar = BitConverter.UInt32BitsToSingle(lane);
-        if (!float.IsFinite(scalar) || Enumerable.Range(1, 3).Any(i => data.U32(constants.Data + i * 4) != lane)) return (2, 0);
+        if (!float.IsFinite(scalar) || BitConverter.SingleToUInt32Bits(value.Y) != lane
+            || BitConverter.SingleToUInt32Bits(value.Z) != lane || BitConverter.SingleToUInt32Bits(value.W) != lane)
+            return (2, 0);
         return (0, scalar);
     }
 
     /** Booleans must be 0 or 1 and floats finite, or the node stays native. */
     private static bool ReadFields(ReadOnlyMemory<byte> bytes, int at, Field[] fields, PerkBehaviorNode node)
     {
-        var data = new TagReader(bytes);
+        var tag = bytes.Span;
         foreach (var field in fields)
         {
             var property = node.Properties.FirstOrDefault(row => row.Key == field.Key);
@@ -336,10 +455,10 @@ public static partial class NativePerkBehavior
             // Each arm is widened to double; a float arm would otherwise round the u32 hashes.
             double value = field.Width switch
             {
-                Width.U8 => (double)data.U8(at + field.Offset),
-                Width.I8 => (double)(sbyte)data.U8(at + field.Offset),
-                Width.U32 => (double)data.U32(at + field.Offset),
-                Width.I32 => (double)data.I32(at + field.Offset),
+                Width.U8 => (double)TagRead.U8(tag, at + field.Offset),
+                Width.I8 => (double)TagRead.I8(tag, at + field.Offset),
+                Width.U32 => (double)TagRead.U32(tag, at + field.Offset),
+                Width.I32 => (double)TagRead.I32(tag, at + field.Offset),
                 _ => (double)F32(bytes, at + field.Offset)
             };
             if (!double.IsFinite(value) || property.Kind == PerkBehaviorValueKind.Boolean && value > 1) return false;
@@ -372,28 +491,37 @@ public static partial class NativePerkBehavior
         if (node.Primitive == "native") return;
         string shape = Shape(node.Primitive);
         if (shape == GroupKey) return;
-        if (node.Kind == PerkBehaviorNodeKind.Condition) writer.F32(at, (float)Value(node, "probability"));
+        // The writer starts as a copy of the original, so offsets read from the original hold for it.
+        var tag = original.Span;
+        if (node.Kind == PerkBehaviorNodeKind.Condition) writer.Edit<PerkAlways>(at).Probability = (float)Value(node, "probability");
         if (FieldsOf(shape) is { } fields) WriteFields(writer, at, fields, node);
         if (SpecOf(shape) is { } spec) PatchSpec(writer, original, node, at, spec);
         switch (shape)
         {
             case "timer":
-                writer.F32(at + 8, (float)Value(node, "seconds"));
+                writer.F32(TagView.OffsetOf(tag, in TagView.At<PerkTimer>(tag, at).Seconds), (float)Value(node, "seconds"));
                 break;
             case "property":
-                writer.U8(at + 2, (byte)Value(node, "target")); writer.U32(at + 8, (uint)Value(node, "hash"));
-                writer.U8(at + 73, (byte)Value(node, "operation"));
+            {
+                ref readonly var view = ref TagView.At<PerkProperty>(tag, at);
+                writer.U8(TagView.OffsetOf(tag, in view.Target), (byte)Value(node, "target"));
+                writer.U32(TagView.OffsetOf(tag, in view.PropertyHash), (uint)Value(node, "hash"));
+                writer.U8(TagView.OffsetOf(tag, in view.Operation), (byte)Value(node, "operation"));
                 if (node.Properties.Any(row => row.Key == "restore"))
-                    writer.U8(at + 74, Value(node, "restore") == 0 ? (byte)0 : (byte)2);
+                    writer.U8(TagView.OffsetOf(tag, in view.RestoreMode), Value(node, "restore") == 0 ? (byte)0 : (byte)2);
                 if (node.Properties.All(row => row.Key != "value")) break;
-                int constant = ConstantLocation(original, at + 24);
+                ref readonly var expression = ref view.HC6e92962.H45dee76f;
+                int constant = ConstantLocation(original, TagView.OffsetOf(tag, in expression));
                 float value = (float)Value(node, "value");
-                if (BitConverter.SingleToInt32Bits(F32(original, constant)) != BitConverter.SingleToInt32Bits(value))
+                if (BitConverter.SingleToInt32Bits(TagView.At<ExpressionConstant>(tag, constant).Value.X)
+                    != BitConverter.SingleToInt32Bits(value))
                 {
-                    constant = writer.Array(at + 40, ConstantClass, 1, 16);
-                    for (int lane = 0; lane < 4; lane++) writer.F32(constant + lane * 4, value);
+                    constant = writer.Array(TagView.OffsetOf(tag, in expression.ConstantBuffer), ConstantClass, 1,
+                        Unsafe.SizeOf<ExpressionConstant>());
+                    writer.Edit<ExpressionConstant>(constant).Value = new Vector4(value);
                 }
                 break;
+            }
             case "ammo-drop":
                 WriteAmmoDrop(writer, node, at);
                 break;
@@ -401,21 +529,26 @@ public static partial class NativePerkBehavior
                 WriteStateExtras(writer, node, at, role);
                 break;
             case "ability-energy" or "driven-spawn":
-                PatchExpression(writer, original, node, at + (shape == "ability-energy" ? 24 : 32));
+                PatchExpression(writer, original, node, at + ExpressionField(shape));
                 break;
             case "damage-multiplier" when node.Properties.Any(row => row.Key == "bonus"):
-                int child = Target(new TagReader(original), at + 320);
-                writer.F32(child, (float)Value(node, "bonus"));
-                writer.F32(child + 4, (float)Value(node, "player_bonus"));
+            {
+                int child = TagPointer.TryChecked(tag, TagView.OffsetOf(tag, in TagView.At<PerkDamageMultiplier>(tag, at).Bonus));
+                ref readonly var bonus = ref TagView.At<PerkDamageBonusConstant>(tag, child);
+                writer.F32(TagView.OffsetOf(tag, in bonus.Bonus), (float)Value(node, "bonus"));
+                writer.F32(TagView.OffsetOf(tag, in bonus.PlayerBonus), (float)Value(node, "player_bonus"));
                 break;
+            }
             case "counter":
-                var rows = new TagReader(original).Array(at + 8, CounterRowClass, 32);
-                for (int i = 0; i < rows.Count; i++)
+            {
+                var rows = TagView.RowOffsets(tag, TagView.CheckedRows(tag, in TagView.At<PerkCounter>(tag, at).Rows, CounterRowClass));
+                for (int i = 0; i < rows.Length; i++)
                 {
-                    WriteFields(writer, rows.Data + i * 32, Fields["row"], node.Children[i]);
+                    WriteFields(writer, rows[i], Fields["row"], node.Children[i]);
                     PatchNode(writer, original, node.Children[i], node.Children[i].OriginalOffset, Role.Row);
                 }
                 break;
+            }
         }
         if (shape == "state") PatchNode(writer, original, node.Children[0], node.Children[0].OriginalOffset, Role.Inner);
         WriteLabelFilters(writer, original, node, at);
@@ -427,78 +560,119 @@ public static partial class NativePerkBehavior
         string shape = Shape(node.Primitive);
         int size = shape switch
         {
-            "always" or "perk-counter" or "transmat" => 8, "timer" or "event" => 12, "unequip" => 112,
-            "kill" => 344, "damage" => 208, "while-state" => 256, "state" => 264, "counter" => 56,
-            "property" => 80, "ammo-drop" => 48, "spawn" => 64, "driven-spawn" => 88, "ability-energy" => 80,
-            "damage-multiplier" => 336,
+            "always" => Unsafe.SizeOf<PerkAlways>(), "perk-counter" => Unsafe.SizeOf<PerkSetCounter>(),
+            "transmat" => Unsafe.SizeOf<PerkTransmat>(), "timer" => Unsafe.SizeOf<PerkTimer>(),
+            "event" => Unsafe.SizeOf<PerkEvent>(), "unequip" => Unsafe.SizeOf<PerkUnequip>(),
+            "kill" => Unsafe.SizeOf<PerkKill>(), "damage" => Unsafe.SizeOf<PerkDamage>(),
+            "while-state" => Unsafe.SizeOf<PerkWhileState>(), "state" => Unsafe.SizeOf<PerkStateGated>(),
+            "counter" => Unsafe.SizeOf<PerkCounter>(), "property" => Unsafe.SizeOf<PerkProperty>(),
+            "ammo-drop" => Unsafe.SizeOf<PerkAmmoDrop>(), "spawn" => Unsafe.SizeOf<PerkSpawn>(),
+            "driven-spawn" => Unsafe.SizeOf<PerkDrivenSpawn>(), "ability-energy" => Unsafe.SizeOf<PerkAbilityEnergy>(),
+            "damage-multiplier" => Unsafe.SizeOf<PerkDamageMultiplier>(),
             _ => SpecOf(shape)?.Size ?? throw new InvalidDataException("This native node has no writer.")
         };
         int at = writer.Node(node.NativeClass, size);
         int opcode = PrimitiveOf(node.Primitive)!.Opcode;
         if (node.Kind == PerkBehaviorNodeKind.Condition)
         {
-            writer.F32(at, (float)Value(node, "probability"));
-            writer.U8(at + 4, byte.MaxValue);
-            writer.U8(at + 5, checked((byte)opcode));
+            ref var header = ref writer.Edit<PerkAlways>(at);
+            header.Probability = (float)Value(node, "probability");
+            header.ConditionMarkerFf = byte.MaxValue;
+            header.Opcode = checked((byte)opcode);
             // Extend-timers conditions take no index; every other condition takes the next free one.
-            writer.U8(at + 7, role == Role.Op32 ? byte.MaxValue : checked((byte)index++));
+            header.ConditionIndex = role == Role.Op32 ? byte.MaxValue : checked((byte)index++);
         }
         else
         {
-            writer.U8(at, checked((byte)opcode));
-            if (size > 1) writer.U8(at + 1, StateFlag(opcode));
+            writer.U8(at + EffectOpcode, checked((byte)opcode));
+            if (size > 1) writer.U8(at + EffectStateFlag, StateFlag(opcode));
         }
         switch (shape)
         {
             case "timer":
-                writer.F32(at + 8, (float)Value(node, "seconds"));
+                writer.Edit<PerkTimer>(at).Seconds = (float)Value(node, "seconds");
                 break;
             case "property":
-                writer.U8(at + 1, 1);
-                writer.U8(at + 2, (byte)Value(node, "target")); writer.U8(at + 3, 1);
-                writer.U32(at + 8, (uint)Value(node, "hash"));
-                int code = writer.Array(at + 24, CodeClass, 4, 1);
-                writer.Copy(code, ConstantCode);
-                int constant = writer.Array(at + 40, ConstantClass, 1, 16);
-                for (int lane = 0; lane < 4; lane++) writer.F32(constant + lane * 4, (float)Value(node, "value"));
-                writer.U64(at + 56, 1); writer.U64(at + 64, 1);
-                writer.U8(at + 73, (byte)Value(node, "operation"));
-                writer.U8(at + 74, Value(node, "restore") == 0 ? (byte)0 : (byte)2);
+            {
+                ref var property = ref writer.Edit<PerkProperty>(at);
+                property.StateFlag = 1;
+                property.Target = (byte)Value(node, "target");
+                property.Unknown3 = 1;
+                property.PropertyHash = (uint)Value(node, "hash");
+                WriteExpression(writer, at + TagView.FieldOffset<PerkProperty>("HC6e92962.H45dee76f"), 0,
+                    (float)Value(node, "value"));
+                // WriteExpression grows the bytes, so the view is taken again.
+                property = ref writer.Edit<PerkProperty>(at);
+                property.HC6e92962.H45dee76f.Unknown56One = 1;
+                property.HC6e92962.H45dee76f.Unknown64One = 1;
+                property.Operation = (byte)Value(node, "operation");
+                property.RestoreMode = Value(node, "restore") == 0 ? (byte)0 : (byte)2;
                 break;
+            }
             case "ammo-drop":
                 WriteAmmoDrop(writer, node, at);
                 break;
             case "unequip":
-                writer.U32(at + 88, NoTag); writer.U8(at + 96, byte.MaxValue);
+            {
+                ref var unequip = ref writer.Edit<PerkUnequip>(at);
+                unequip.HCd4f0043.ItemLabelTable = NoTag;
+                unequip.H9e7302e4.ItemFilterKind = byte.MaxValue;
                 break;
+            }
             case "kill":
-                writer.U32(at + 80, NoTag); writer.U8(at + 88, byte.MaxValue);
-                writer.U32(at + 280, NoTag); writer.U8(at + 296, byte.MaxValue);
+            {
+                ref var kill = ref writer.Edit<PerkKill>(at);
+                kill.HB3c84afa.ItemLabelTable = NoTag;
+                kill.H8e428e9f.ItemFilterKind = byte.MaxValue;
+                kill.HDcf12b13.H3c11ad32.ItemLabelTable = NoTag;
+                kill.HBd96c334.H3c11ad32.ItemFilterKind = byte.MaxValue;
                 // Any damage type, and skip the exclude mask; the zero masks alone never pass.
-                writer.U8(at + 312, 1); writer.U8(at + 313, 1);
-                writer.U32(at + 324, EmptyHash); writer.U32(at + 328, EmptyHash); writer.F32(at + 340, -1);
+                kill.HBd96c334.AnyDamageType = 1;
+                kill.HBd96c334.SkipExcludeMask = 1;
+                kill.Unknown324 = EmptyHash;
+                kill.Unknown328 = EmptyHash;
+                kill.Unknown340 = -1;
                 break;
+            }
             case "damage":
-                writer.U32(at + 112, NoTag); writer.U8(at + 128, byte.MaxValue);
-                writer.U8(at + 144, 1); writer.U8(at + 145, 1); writer.U32(at + 156, EmptyHash);
+            {
+                ref var damage = ref writer.Edit<PerkDamage>(at);
+                damage.H1862ac0e.H3c11ad32.ItemLabelTable = NoTag;
+                damage.H4b1eab13.H3c11ad32.ItemFilterKind = byte.MaxValue;
+                damage.H4b1eab13.Unknown144 = 1;
+                damage.H4b1eab13.Unknown145 = 1;
+                damage.Unknown156 = EmptyHash;
                 break;
+            }
             case "while-state" or "state":
-                writer.Copy(at + 8, StateTemplate()[8..]);
+                writer.Copy(at + StateBodyStart, StateTemplate()[StateBodyStart..]);
                 break;
             case "spawn" or "driven-spawn":
                 // Spawning effects keep a state slot for the spawned object.
-                writer.U8(at + 1, 1);
+                writer.U8(at + EffectStateFlag, 1);
                 break;
             case "damage-multiplier":
-                writer.U8(at + 8, 0x20);
+            {
+                writer.Edit<PerkDamageMultiplier>(at).HBa690325.RelationFilterKind = 0x20;
                 int path = writer.String(LabelGlobalsPath);
-                writer.I64(at + 136, path - at - 136); writer.U32(at + 144, LabelGlobalsTag);
-                writer.I64(at + 256, path - at - 256); writer.U32(at + 264, LabelGlobalsTag);
-                writer.U8(at + 160, byte.MaxValue); writer.U8(at + 177, 1); writer.U8(at + 272, byte.MaxValue);
-                int bonus = writer.Node(BonusClass, 8);
-                writer.F32(bonus, (float)Value(node, "bonus")); writer.F32(bonus + 4, (float)Value(node, "player_bonus"));
-                writer.I64(at + 320, bonus - at - 320);
+                int filterPath = at + TagView.FieldOffset<PerkDamageMultiplier>("H1862ac0e.H3c11ad32.ItemLabelTablePath");
+                int itemPath = at + TagView.FieldOffset<PerkDamageMultiplier>("H8e428e9f.ItemLabelTablePath");
+                writer.I64(filterPath, path - filterPath);
+                writer.I64(itemPath, path - itemPath);
+                ref var multiplier = ref writer.Edit<PerkDamageMultiplier>(at);
+                multiplier.H1862ac0e.H3c11ad32.ItemLabelTable = LabelGlobalsTag;
+                multiplier.H8e428e9f.ItemLabelTable = LabelGlobalsTag;
+                multiplier.H4b1eab13.H3c11ad32.ItemFilterKind = byte.MaxValue;
+                multiplier.H4b1eab13.Unknown177 = 1;
+                multiplier.H84675955.ItemFilterKind = byte.MaxValue;
+                int bonus = writer.Node(BonusClass, Unsafe.SizeOf<PerkDamageBonusConstant>());
+                ref var constant = ref writer.Edit<PerkDamageBonusConstant>(bonus);
+                constant.Bonus = (float)Value(node, "bonus");
+                constant.PlayerBonus = (float)Value(node, "player_bonus");
+                int bonusField = at + TagView.FieldOffset<PerkDamageMultiplier>(nameof(PerkDamageMultiplier.Bonus));
+                writer.I64(bonusField, bonus - bonusField);
                 break;
+            }
         }
         var spec = SpecOf(shape);
         if (spec is not null) WriteSpecDefaults(writer, at, spec);
@@ -507,76 +681,119 @@ public static partial class NativePerkBehavior
         if (shape is "while-state" or "state") WriteStateExtras(writer, node, at, role);
         if (shape is "ability-energy" or "driven-spawn")
         {
-            int expression = at + (shape == "ability-energy" ? 24 : 32);
+            int expression = at + ExpressionField(shape);
             WriteExpression(writer, expression, (int)Value(node, "expression"), (float)Value(node, "constant"));
-            writer.U64(expression + 32, 1); writer.U64(expression + 40, 1);
+            ref var compiled = ref writer.Edit<SCompiledExpression>(expression);
+            compiled.Unknown56One = 1;
+            compiled.Unknown64One = 1;
         }
         if (shape == "state")
         {
             int inner = WriteNode(writer, node.Children[0], Role.Inner, ref index);
-            writer.I64(at + 256, inner - at - 256);
+            int innerField = at + TagView.FieldOffset<PerkStateGated>(nameof(PerkStateGated.InnerCondition));
+            writer.I64(innerField, inner - innerField);
         }
         if (shape == "counter")
         {
-            int rows = writer.Array(at + 8, CounterRowClass, node.Children.Count, 32);
+            int stride = Unsafe.SizeOf<PerkCounterRow>();
+            int rows = writer.Array(at + TagView.FieldOffset<PerkCounter>(nameof(PerkCounter.Rows)), CounterRowClass,
+                node.Children.Count, stride);
             for (int i = 0; i < node.Children.Count; i++)
             {
-                int row = rows + i * 32;
+                int row = rows + i * stride;
                 int child = WriteNode(writer, node.Children[i], Role.Row, ref index);
-                writer.I64(row, child - row);
+                int trigger = row + TagView.FieldOffset<PerkCounterRow>(nameof(PerkCounterRow.CounterTrigger));
+                writer.I64(trigger, child - trigger);
                 WriteFields(writer, row, Fields["row"], node.Children[i]);
             }
-            writer.U64(at + 24, node.Children.Aggregate(0UL, (mask, child) => mask | Bits(child)));
+            ulong mask = node.Children.Aggregate(0UL, (mask, child) => mask | Bits(child));
+            writer.Edit<PerkCounter>(at).RowEventMask = mask;
         }
         WriteLabelFilters(writer, null, node, at);
         return at;
     }
 
-    /** Byte +6 marks a condition that owns a state record; an inner condition never does. */
+    /** OwnsStateRecord marks a condition that owns a state record; an inner condition never does. */
     private static void WriteStateExtras(PerkWriter writer, PerkBehaviorNode node, int at, Role role)
     {
         bool owns = role is not (Role.Inner or Role.Op32) && (uint)Value(node, "property") != EmptyHash;
-        writer.U8(at + 6, owns ? (byte)1 : (byte)0);
+        // A gated condition starts with the while-state body.
+        ref var state = ref writer.Edit<PerkWhileState>(at);
+        state.OwnsStateRecord = owns ? (byte)1 : (byte)0;
         if (node.Properties.FirstOrDefault(row => row.Key == "this_weapon_active") is { } active)
         {
             // Selector 1 is this perk's slot; bit 0 requires that slot's weapon to be active.
-            writer.U8(at + 128, (byte)active.Value);
-            writer.U8(at + 129, (byte)active.Value);
+            state.SlotSelector = (byte)active.Value;
+            state.SlotBits = (byte)active.Value;
         }
     }
 
     /** New programs are appended, so a shared program is never changed in place. */
     private static void WriteExpression(PerkWriter writer, int at, int form, float constant)
     {
-        int code = writer.Array(at, CodeClass, 4, 1);
+        int code = writer.Array(at + TagView.FieldOffset<SCompiledExpression>(nameof(SCompiledExpression.Bytecode)),
+            CodeClass, 4, Unsafe.SizeOf<ExpressionCode>());
         writer.Copy(code, form == 0 ? ConstantCode : PassCode);
-        int values = writer.Array(at + 16, ConstantClass, form == 0 ? 1 : 0, 16);
-        if (form == 0)
-            for (int lane = 0; lane < 4; lane++) writer.F32(values + lane * 4, constant);
+        int values = writer.Array(at + TagView.FieldOffset<SCompiledExpression>(nameof(SCompiledExpression.ConstantBuffer)),
+            ConstantClass, form == 0 ? 1 : 0, Unsafe.SizeOf<ExpressionConstant>());
+        if (form == 0) writer.Edit<ExpressionConstant>(values).Value = new Vector4(constant);
     }
 
     private static void WriteAmmoDrop(PerkWriter writer, PerkBehaviorNode node, int at)
     {
-        writer.U8(at, 11);
         var expected = Inputs("ammo-drop", PerkBehaviorNodeKind.Effect);
-        for (int i = 0; i < expected.Count; i++) writer.F32(at + 12 + i * 4, (float)Value(node, expected[i].Key));
+        float Input(int i) => (float)Value(node, expected[i].Key);
+        ref var drop = ref writer.Edit<PerkAmmoDrop>(at);
+        drop.Opcode = 11;
+        (drop.PrimaryInterval, drop.PrimaryChance, drop.PrimaryRepeat) = (Input(0), Input(1), Input(2));
+        (drop.SpecialInterval, drop.SpecialChance, drop.SpecialRepeat) = (Input(3), Input(4), Input(5));
+        (drop.HeavyInterval, drop.HeavyChance, drop.HeavyRepeat) = (Input(6), Input(7), Input(8));
     }
 
     /** Native evaluator overrides and multi-instruction expressions remain read-only here. */
     private static int ConstantLocation(ReadOnlyMemory<byte> bytes, int expression)
     {
-        var data = new TagReader(bytes);
-        if (!data.Has(expression, 48) || data.U32(expression + 44) != 0) return -1;
-        var code = data.Array(expression, CodeClass, 1);
-        var constants = data.Array(expression + 16, ConstantClass, 16);
+        var tag = bytes.Span;
+        if (!TagView.Fits<SCompiledExpression>(tag, expression)) return -1;
+        ref readonly var view = ref TagView.At<SCompiledExpression>(tag, expression);
+        if (view.EvaluatorOverride2c != 0) return -1;
+        var code = TagArray.Checked(tag, TagView.OffsetOf(tag, in view.Bytecode), CodeClass, Unsafe.SizeOf<ExpressionCode>());
+        var constants = TagArray.Checked(tag, TagView.OffsetOf(tag, in view.ConstantBuffer), ConstantClass,
+            Unsafe.SizeOf<ExpressionConstant>());
         if (code.Count != 4 || constants.Count != 1
-            || !bytes.Span.Slice(code.Data, 4).SequenceEqual(ConstantCode)) return -1;
-        float scalar = F32(bytes, constants.Data);
+            || !tag.Slice(code.Data, 4).SequenceEqual(ConstantCode)) return -1;
+        var value = TagView.At<ExpressionConstant>(tag, constants.Data).Value;
+        float scalar = value.X;
         if (!float.IsFinite(scalar)) return -1;
-        for (int lane = 1; lane < 4; lane++)
-            if (F32(bytes, constants.Data + lane * 4) != scalar) return -1;
+        // Lanes match by bits, as in Expression, so 0.0 and -0.0 differ.
+        uint lane = BitConverter.SingleToUInt32Bits(scalar);
+        if (BitConverter.SingleToUInt32Bits(value.Y) != lane || BitConverter.SingleToUInt32Bits(value.Z) != lane
+            || BitConverter.SingleToUInt32Bits(value.W) != lane) return -1;
         return constants.Data;
     }
+
+    /** Where the compiled expression sits inside an ability-energy or driven-spawn payload. */
+    private static int ExpressionField(string shape) => shape == "ability-energy"
+        ? TagView.FieldOffset<PerkAbilityEnergy>("H018f4b40.H45dee76f")
+        : TagView.FieldOffset<PerkDrivenSpawn>("H7217af80.H45dee76f");
+
+    /** A gated condition's inner condition, or -1 when its pointer is empty or leaves the payload. */
+    private static int InnerTarget(ReadOnlySpan<byte> tag, int at) =>
+        TagPointer.TryChecked(tag, TagView.OffsetOf(tag, in TagView.At<PerkStateGated>(tag, at).InnerCondition));
+
+    // TODO: use a registry view of the shared condition header; the registry has none yet, and PerkAlways is that header alone.
+    private static ref readonly PerkAlways ConditionHeader(ReadOnlySpan<byte> tag, int at) =>
+        ref TagView.At<PerkAlways>(tag, at);
+    private static int ConditionHeaderSize => Unsafe.SizeOf<PerkAlways>();
+    internal static int ConditionOpcode => TagView.FieldOffset<PerkAlways>(nameof(PerkAlways.Opcode));
+
+    // TODO: use a registry view of the shared effect header; the registry has none yet, and PerkSwordGuard is that header alone.
+    internal static int EffectOpcode => TagView.FieldOffset<PerkSwordGuard>(nameof(PerkSwordGuard.Opcode));
+    private static int EffectStateFlag => TagView.FieldOffset<PerkSwordGuard>(nameof(PerkSwordGuard.StateFlag));
+
+    /** The while-state body starts after the condition header. */
+    private static int StateBodyStart =>
+        TagView.FieldOffset<PerkWhileState>(nameof(PerkWhileState.ConditionIndex)) + sizeof(byte);
 
     private static PerkBehaviorProperty Info(string key, string label, double value,
         PerkBehaviorValueKind kind = PerkBehaviorValueKind.Boolean)
@@ -584,13 +801,6 @@ public static partial class NativePerkBehavior
         var property = Property(key, label, value, value, value, kind, "Read only; kept as installed.");
         property.Editable = false;
         return property;
-    }
-
-    /** A relative pointer's target, or -1 when it is empty or leaves the payload. */
-    private static int Target(TagReader data, int field)
-    {
-        try { return data.Relative(field); }
-        catch (InvalidDataException) { return -1; }
     }
 
     private static float F32(ReadOnlyMemory<byte> bytes, int at) =>

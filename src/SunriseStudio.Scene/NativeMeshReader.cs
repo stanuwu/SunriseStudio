@@ -1,5 +1,7 @@
 using System.Numerics;
-using System.Text;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -11,7 +13,7 @@ public sealed partial class AssetSceneLoader
     private NativeLayoutCatalog? nativeLayouts;
 
     /** Raw buffers use their original vertex numbering and retain the authored draw range. */
-    private NativeMeshData NativeMesh(NativeMeshKind kind, TagData source, uint material,
+    private NativeMeshData NativeMesh(NativeMeshKind kind, byte[] source, uint material,
         uint vertex0, uint vertex1, uint index, uint first, uint count, byte primitive,
         uint word38 = 0, uint word0C = 0, uint weights = 0, int declarationId = -1, int renderStage = -1,
         (Vector4 UvTransform, uint DyeTexture)? terrainGroup = null)
@@ -19,7 +21,7 @@ public sealed partial class AssetSceneLoader
         var streams = new List<NativeVertexStream> { NativeStream(vertex0) };
         if (catalog.TryGetEntry(vertex1, out var extra) && extra.Type == 32 && extra.SubType == 4)
             streams.Add(NativeStream(vertex1));
-        var indices = Buffer(index, 6, out var indexHeader);
+        var indices = ReadBuffer(index, 6, out var indexHeader);
         var indexEntry = catalog.TryGetEntry(index, out var found) ? found : throw new InvalidDataException("Index header disappeared.");
         var input = MaterialInputs(material);
         var elements = MatchInputLayout(kind, streams, input.Inputs, out var layoutStatus);
@@ -47,8 +49,8 @@ public sealed partial class AssetSceneLoader
             elements.Any(e => e.Semantic == i.Semantic && e.SemanticIndex == i.SemanticIndex && e.Slot < streams.Count));
         var scale = kind switch
         {
-            NativeMeshKind.Static => new Vector4(source.F32(0x6C)),
-            NativeMeshKind.Entity => Vector(source, 0x50),
+            NativeMeshKind.Static => new Vector4(TagRead.F32(source, TagView.FieldOffset<SStaticMesh>(nameof(SStaticMesh.PositionScale)))),
+            NativeMeshKind.Entity => EntityScale(source),
             _ => Vector4.One
         };
         NativeVertexStream? skin = null;
@@ -59,10 +61,10 @@ public sealed partial class AssetSceneLoader
             Kind = kind,
             VertexStreams = streams.ToArray(),
             SkinWeightStream = skin,
-            IndexData = indices.Bytes,
+            IndexData = indices,
             IndexHeaderTag = index,
             IndexDataTag = indexEntry.Reference,
-            Is32Bit = indexHeader.U8(1) != 0,
+            Is32Bit = TagRead.U8(indexHeader, TagView.FieldOffset<IndexBufferHeader>(nameof(IndexBufferHeader.Wide))) != 0,
             FirstIndex = first,
             IndexCount = count,
             GamePrimitiveType = primitive,
@@ -80,17 +82,35 @@ public sealed partial class AssetSceneLoader
             RenderStage = renderStage,
             LayoutStatus = input.Status.Length != 0 ? input.Status : layoutStatus,
             PositionScale = scale,
-            PositionOffset = kind == NativeMeshKind.Terrain ? Vector4.Zero : Vector(source, 0x60),
-            UvTransform = kind == NativeMeshKind.Terrain ? terrainGroup?.UvTransform ?? Vector4.Zero : Vector(source, 0x70),
+            PositionOffset = kind == NativeMeshKind.Terrain ? Vector4.Zero : PositionOffset(kind, source),
+            UvTransform = kind == NativeMeshKind.Terrain ? terrainGroup?.UvTransform ?? Vector4.Zero : UvTransform(kind, source),
             TerrainDyeTexture = terrainGroup?.DyeTexture ?? uint.MaxValue,
-            TerrainOffset = kind == NativeMeshKind.Terrain ? Vector(source, 0x30) : Vector4.Zero,
-            SourceHeader = source.Bytes,
+            TerrainOffset = kind == NativeMeshKind.Terrain
+                ? TagRead.Vec4(source, TagView.FieldOffset<STerrain>(nameof(STerrain.PositionOffset))) : Vector4.Zero,
+            SourceHeader = source,
             ResourceWord38 = word38,
             BufferGroupWord0C = word0C
         };
     }
 
-    private static Vector4 Vector(TagData data, int offset) => new(data.F32(offset), data.F32(offset + 4), data.F32(offset + 8), data.F32(offset + 12));
+    /** The model scale and the word after it, read as one float4. */
+    private static Vector4 EntityScale(byte[] source) => new(TagRead.Vec3(source, TagView.FieldOffset<SEntityModel>(nameof(SEntityModel.PositionScale))),
+        TagRead.F32(source, TagView.FieldOffset<SEntityModel>(nameof(SEntityModel.Unk5c))));
+
+    /** The position offset and the word after it; only static and entity sources have one. */
+    private static Vector4 PositionOffset(NativeMeshKind kind, byte[] source) => kind == NativeMeshKind.Static
+        ? new(TagRead.Vec3(source, TagView.FieldOffset<SStaticMesh>(nameof(SStaticMesh.PositionOffset))),
+            TagRead.F32(source, TagView.FieldOffset<SStaticMesh>(nameof(SStaticMesh.PositionScale))))
+        : new(TagRead.Vec3(source, TagView.FieldOffset<SEntityModel>(nameof(SEntityModel.PositionOffset))),
+            TagRead.F32(source, TagView.FieldOffset<SEntityModel>(nameof(SEntityModel.PositionScaleW))));
+
+    /** UV scale then UV offset; only static and entity sources have them. */
+    private static Vector4 UvTransform(NativeMeshKind kind, byte[] source) => kind == NativeMeshKind.Static
+        ? UvTransform<SStaticMesh>(source) : UvTransform<SEntityModel>(source);
+
+    private static Vector4 UvTransform<T>(byte[] source) where T : unmanaged => new(
+        TagRead.F32(source, TagView.FieldOffset<T>(nameof(SStaticMesh.UvScaleU))), TagRead.F32(source, TagView.FieldOffset<T>(nameof(SStaticMesh.UvScaleV))),
+        TagRead.F32(source, TagView.FieldOffset<T>(nameof(SStaticMesh.UvOffsetU))), TagRead.F32(source, TagView.FieldOffset<T>(nameof(SStaticMesh.UvOffsetV))));
 
     /** Preview UVs use the authored semantic offset, including UVs stored with positions. Terrain reads TEXCOORD1. */
     private static void ApplyNativeTexcoords(MeshData mesh)
@@ -101,18 +121,17 @@ public sealed partial class AssetSceneLoader
         var element = native.InputElements.FirstOrDefault(e => e.Semantic == "TEXCOORD" && e.SemanticIndex == index);
         if (element == null || element.PerInstance || element.Slot >= native.VertexStreams.Length) return;
         var stream = native.VertexStreams[element.Slot];
-        var data = new TagData(stream.Data);
+        var data = stream.Data;
         for (var i = 0; i < mesh.Vertices.Length; ++i)
         {
             var offset = checked((int)mesh.SourceVertexIndices[i] * stream.Stride + element.Offset);
             var uv = element.Format switch
             {
                 NativeVertexFormat.R16G16SNorm or NativeVertexFormat.R16G16B16A16SNorm =>
-                    new Vector2(Snorm(data.I16(offset)), Snorm(data.I16(offset + 2))),
-                NativeVertexFormat.R16G16Float => new Vector2((float)BitConverter.UInt16BitsToHalf(data.U16(offset)),
-                    (float)BitConverter.UInt16BitsToHalf(data.U16(offset + 2))),
-                NativeVertexFormat.R32G32Float or NativeVertexFormat.R32G32B32A32Float =>
-                    new Vector2(data.F32(offset), data.F32(offset + 4)),
+                    new Vector2(GpuBufferData.Snorm(TagRead.I16(data, offset)), GpuBufferData.Snorm(TagRead.I16(data, offset + sizeof(short)))),
+                NativeVertexFormat.R16G16Float => new Vector2((float)TagRead.F16(data, offset),
+                    (float)TagRead.F16(data, offset + sizeof(ushort))),
+                NativeVertexFormat.R32G32Float or NativeVertexFormat.R32G32B32A32Float => TagRead.Vec2(data, offset),
                 _ => mesh.Vertices[i].TexCoord
             };
             if (element.Format is not (NativeVertexFormat.R16G16SNorm or NativeVertexFormat.R16G16B16A16SNorm
@@ -126,12 +145,14 @@ public sealed partial class AssetSceneLoader
     /** Vertex headers carry byte size, stride and the original type word. */
     private NativeVertexStream NativeStream(uint tag)
     {
-        var data = Buffer(tag, 4, out var header);
-        var stride = header.U16(4);
-        if (stride == 0 || header.U32(0) != data.Length || data.Length % stride != 0)
+        var data = ReadBuffer(tag, 4, out var header);
+        var stride = TagRead.U16(header, TagView.FieldOffset<VertexBufferHeader>(nameof(VertexBufferHeader.Stride)));
+        if (stride == 0 || TagRead.U32(header, TagView.FieldOffset<VertexBufferHeader>(nameof(VertexBufferHeader.ByteCount))) != data.Length
+            || data.Length % stride != 0)
             throw new InvalidDataException("Native vertex stream size or stride is invalid.");
         catalog.TryGetEntry(tag, out var entry);
-        return new NativeVertexStream(tag, entry.Reference, stride, header.U16(6), data.Bytes);
+        return new NativeVertexStream(tag, entry.Reference, stride,
+            TagRead.U16(header, TagView.FieldOffset<VertexBufferHeader>(nameof(VertexBufferHeader.Unk6))), data);
     }
 
     /** Shader signatures omit input-assembler formats. */
@@ -141,39 +162,29 @@ public sealed partial class AssetSceneLoader
         uint states = 0;
         try
         {
-            if (Class(material) != 0x808071E8) return nativeInputs[material] = new(0, 0, [], "Material input layout is unavailable.");
-            var materialData = Read(material);
-            states = materialData.U32(0x20);
-            var shader = materialData.U32(0x48);
+            if (Class(material) != STechnique.Class) return nativeInputs[material] = new(0, 0, [], "Material input layout is unavailable.");
+            var technique = ReadBytes(material);
+            states = TagRead.U32(technique, TagView.FieldOffset<STechnique>(nameof(STechnique.StateOverrides)));
+            var shader = TagRead.U32(technique, TagView.FieldOffset<STechnique>("VertexShader.Shader"));
             if (!catalog.TryGetEntry(shader, out var header) || header.Type != 33 || header.SubType != 1
                 || !catalog.TryGetEntry(header.Reference, out var payload) || payload.Type != 41 || payload.SubType != 1)
                 return nativeInputs[material] = new(shader, 0, [], "Material has no supported vertex shader.", states);
-            var data = Read(payload.TagHash);
-            if (!data.Has(0, 32) || data.U32(0) != 0x43425844 || data.U32(24) != data.Length)
+            var data = ReadBytes(payload.TagHash);
+            var fault = DxbcContainer.ReadHeader(data, out var chunkCount);
+            if (fault == DxbcContainer.Fault.Header)
                 throw new InvalidDataException("Native shader has no bounded DXBC container.");
-            var chunkCount = data.U32(28);
-            if (chunkCount > (data.Length - 32) / 4) throw new InvalidDataException("DXBC chunk count is invalid.");
+            if (fault == DxbcContainer.Fault.ChunkTable) throw new InvalidDataException("DXBC chunk count is invalid.");
             for (var i = 0; i < chunkCount; ++i)
             {
-                var offset = checked((int)data.U32(32 + i * 4));
-                if (!data.Has(offset, 8)) throw new InvalidDataException("DXBC chunk offset is invalid.");
-                var length = checked((int)data.U32(offset + 4));
-                if (!data.Has(offset + 8, length)) throw new InvalidDataException("DXBC chunk length is invalid.");
-                if (data.U32(offset) != 0x4E475349) continue;
-                var start = offset + 8;
-                var count = data.U32(start);
-                if (length < 8 || count > (length - 8) / 24) throw new InvalidDataException("DXBC input signature count is invalid.");
-                var inputs = new NativeShaderInput[count];
-                for (var j = 0; j < count; ++j)
-                {
-                    var row = start + 8 + j * 24;
-                    var name = checked((int)data.U32(row));
-                    if (name >= length) throw new InvalidDataException("DXBC semantic name is outside its signature.");
-                    var end = Array.IndexOf(data.Bytes, (byte)0, start + name, length - name);
-                    if (end < 0) throw new InvalidDataException("DXBC semantic name is unterminated.");
-                    inputs[j] = new NativeShaderInput(Encoding.ASCII.GetString(data.Bytes, start + name, end - start - name),
-                        data.U32(row + 4), data.U32(row + 16), data.U32(row + 12), data.U8(row + 20), data.U32(row + 8));
-                }
+                fault = DxbcContainer.ReadChunk(data, i, out var chunk);
+                // A word past int.MaxValue fails with OverflowException before the range check.
+                _ = checked((int)chunk.Offset);
+                if (fault == DxbcContainer.Fault.ChunkOffset) throw new InvalidDataException("DXBC chunk offset is invalid.");
+                _ = checked((int)chunk.Size);
+                if (fault == DxbcContainer.Fault.ChunkSize) throw new InvalidDataException("DXBC chunk length is invalid.");
+                if (chunk.Kind != DxbcContainer.InputSignatureChunk) continue;
+                var inputs = DxbcContainer.InputSignature(data, in chunk).Select(x => new NativeShaderInput(x.Name,
+                    x.SemanticIndex, x.Register, x.ComponentType, x.Mask, x.SystemValue)).ToArray();
                 return nativeInputs[material] = new(shader, payload.TagHash, inputs, "", states);
             }
             return nativeInputs[material] = new(shader, payload.TagHash, [], "Native shader has no supported ISGN chunk.", states);

@@ -1,6 +1,10 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Formats;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -13,24 +17,28 @@ public sealed partial class CuiConfigBindingCompiler
         var selected = bindings.Where(binding => binding.Site.Profile == ConfigBindingLimits.PropertyProfile).ToArray();
         Dictionary<string, (int Row, int Value)> positions = [];
         if (selected.Length == 0) return positions;
-        var original = CuiDocument.Read(tag, ResourceClass, output);
+        var original = CuiDocument.Read(tag, CuiResource.Class, output);
+        int componentSize = Unsafe.SizeOf<CuiComponentRow>(), propertySize = Unsafe.SizeOf<CuiPropertyRow>();
         foreach (var owner in selected.GroupBy(binding => binding.Site.OwnerIndex))
         {
-            int components = CloneArray(ref output, original.Objects[owner.Key].Offset + 32, 24, [16]);
+            int objectField = original.Objects[owner.Key].Offset + TagView.FieldOffset<CuiObjectRow>(nameof(CuiObjectRow.Components));
+            int components = CloneArray(ref output, objectField, componentSize, ComponentPointers);
             foreach (var component in owner.GroupBy(binding => binding.Site.ComponentIndex))
             {
-                int references = CloneArray(ref output, components + component.Key * 24 + 8, 24, [0, 16]);
+                int componentRow = components + component.Key * componentSize;
+                int componentField = componentRow + TagView.FieldOffset<CuiComponentRow>(nameof(CuiComponentRow.Properties));
+                int references = CloneArray(ref output, componentField, propertySize, PropertyPointers);
                 var old = original.Objects[owner.Key].Components[component.Key];
                 foreach (var binding in component)
                 {
                     int index = old.Properties.ToList().FindIndex(property => property.RecordOffset == binding.Site.RowOffset);
                     if (index < 0) throw new InvalidDataException("A bound property row disappeared.");
-                    positions.Add(binding.Site.Identity, (references + index * 24, 0));
+                    positions.Add(binding.Site.Identity, (references + index * propertySize, 0));
                 }
             }
         }
-        Put64(output, 0, output.Length);
-        var detached = CuiDocument.Read(tag, ResourceClass, output);
+        Put64(output, SizeWord, output.Length);
+        var detached = CuiDocument.Read(tag, CuiResource.Class, output);
         foreach (var group in selected.GroupBy(binding => binding.Site.PoolOffset))
         {
             var pool = detached.Pools.Single(pool => pool.DescriptorOffset == group.Key);
@@ -39,7 +47,10 @@ public sealed partial class CuiConfigBindingCompiler
             int start = AppendArray(ref output, pool.DescriptorOffset, pool.ClassHash, pool.Stride, count);
             output.AsSpan(pool.DataOffset, pool.Count * pool.Stride).CopyTo(output.AsSpan(start));
             foreach (var property in detached.Properties.Where(property => property.PoolDescriptor == group.Key).DistinctBy(property => property.RecordOffset))
-                Put64(output, property.RecordOffset + 16, start + property.ValueOffset - pool.DataOffset - property.RecordOffset - 16);
+            {
+                int field = ValueField(property.RecordOffset);
+                Put64(output, field, start + property.ValueOffset - pool.DataOffset - field);
+            }
             int index = pool.Count;
             foreach (var binding in group)
             {
@@ -47,18 +58,28 @@ public sealed partial class CuiConfigBindingCompiler
                 var property = detached.Properties.Single(property => property.RecordOffset == row);
                 int value = start + index++ * pool.Stride;
                 output.AsSpan(property.ValueOffset, pool.Stride).CopyTo(output.AsSpan(value));
-                Put64(output, row + 16, value - row - 16);
+                int field = ValueField(row);
+                Put64(output, field, value - field);
                 positions[binding.Site.Identity] = (row, value);
             }
         }
         return positions;
     }
 
+    // The relative words a cloned row rebases.
+    private static readonly int[] ComponentPointers = [TagView.FieldOffset<CuiComponentRow>("Properties.Relative")];
+    private static readonly int[] PropertyPointers =
+        [TagView.FieldOffset<CuiPropertyRow>(nameof(CuiPropertyRow.PathSlot)), TagView.FieldOffset<CuiPropertyRow>(nameof(CuiPropertyRow.Value))];
+
+    private static int ValueField(int row) => row + TagView.FieldOffset<CuiPropertyRow>(nameof(CuiPropertyRow.Value));
+
     private static int CloneArray(ref byte[] output, int field, int stride, int[] pointers)
     {
-        int count = checked((int)BinaryPrimitives.ReadInt64LittleEndian(output.AsSpan(field)));
-        int source = checked(field + 24 + (int)BinaryPrimitives.ReadInt64LittleEndian(output.AsSpan(field + 8)));
-        uint type = BinaryPrimitives.ReadUInt32LittleEndian(output.AsSpan(source - 8));
+        var array = new TagArray(output, field);
+        int count = checked((int)array.Count);
+        int source = array.DataOffset;
+        // Read at the header offset even when the relative word is zero.
+        uint type = TagRead.U32(output, array.HeaderOffset + TagArray.ElementClassOffset);
         int target = AppendArray(ref output, field, type, stride, count);
         output.AsSpan(source, count * stride).CopyTo(output.AsSpan(target));
         for (int row = 0; row < count; row++)
@@ -73,11 +94,8 @@ public sealed partial class CuiConfigBindingCompiler
 
     private static int AppendArray(ref byte[] output, int field, uint type, int stride, int count)
     {
-        int header = checked((output.Length + 11) & ~7), data = checked(header + 16);
-        Grow(ref output, checked(data + count * stride));
-        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(header - 4), 0x80809FBD);
-        Put64(output, header, count); Put64(output, header + 8, type);
-        Put64(output, field, count); Put64(output, field + 8, header - field - 8);
+        int data = TagRelocator.AppendArray(ref output, field, type, count, checked(count * stride), 8);
+        RequireSize(output);
         return data;
     }
 }

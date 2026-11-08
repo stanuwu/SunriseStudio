@@ -17,14 +17,15 @@ public sealed record CompoundInstanceRow(byte[] Bytes, string? Import, int? Chil
     public ulong UserData => BinaryPrimitives.ReadUInt64LittleEndian(Bytes.AsSpan(0x40));
 
     /** Writes the transform and flags 2, 4 and 8 from it; flag 1 is the child's convexity. */
-    public void SetTransform(QsTransform transform, bool convex)
+    public void SetTransform(QsTransform transform, bool convex) =>
+        CollisionCompoundWriter.WriteInstanceTransform(Bytes, 0, transform, StaticCompoundShape.Flags(transform, convex));
+
+    /** Writes the filter, the child mask and the user data. */
+    internal void SetPaletteData(uint filter, uint mask, ulong userData)
     {
-        var (t, q, s) = (transform.Translation, transform.Rotation, transform.Scale);
-        NativeRows.Write(Bytes, 0x00, t.X, t.Y, t.Z);
-        BinaryPrimitives.WriteUInt32LittleEndian(Bytes.AsSpan(0x0C), StaticCompoundShape.FlagBase | StaticCompoundShape.Flags(transform, convex));
-        NativeRows.Write(Bytes, 0x10, q.X, q.Y, q.Z, q.W);
-        NativeRows.Write(Bytes, 0x20, s.X, s.Y, s.Z);
-        BinaryPrimitives.WriteUInt32LittleEndian(Bytes.AsSpan(0x2C), StaticCompoundShape.FlagBase);
+        BinaryPrimitives.WriteUInt32LittleEndian(Bytes.AsSpan(0x38), filter);
+        BinaryPrimitives.WriteUInt32LittleEndian(Bytes.AsSpan(0x3C), mask);
+        BinaryPrimitives.WriteUInt64LittleEndian(Bytes.AsSpan(0x40), userData);
     }
 
     private Vector3 Read(int at) => new(F(at), F(at + 4), F(at + 8));
@@ -37,7 +38,31 @@ public sealed record CompoundInstanceRow(byte[] Bytes, string? Import, int? Chil
  */
 public static class CollisionCompoundWriter
 {
-    private const int ObjectSize = 0xA0, Instances = 0x38, ExtraInfos = 0x48, DisabledKeys = 0x58, Tree = 0x70;
+    private const int ObjectSize = 0xA0, KeyBits = 0x30, Instances = 0x38, ExtraInfos = 0x48, DisabledKeys = 0x58, Tree = 0x70;
+
+    /** The compound's stored child key width, the signed byte at root +0x30. */
+    internal static sbyte ChildKeyBits(HavokPackfile file) => (sbyte)file.U8(file.RootOffset + KeyBits);
+
+    /** The user data word of the Havok shape object at `shape`. */
+    internal static int ShapeUserData(HavokPackfile file, int shape) => file.I32(shape + 0x18);
+
+    /** Writes an instance's transform and flag words at `at`; `flags` omits the base flag. */
+    internal static void WriteInstanceTransform(byte[] bytes, int at, QsTransform transform, uint flags)
+    {
+        var (t, q, s) = (transform.Translation, transform.Rotation, transform.Scale);
+        WriteFloats(bytes, at, t.X, t.Y, t.Z);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at + 0x0C), StaticCompoundShape.FlagBase | flags);
+        WriteFloats(bytes, at + 0x10, q.X, q.Y, q.Z, q.W);
+        WriteFloats(bytes, at + 0x20, s.X, s.Y, s.Z);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at + 0x2C), StaticCompoundShape.FlagBase);
+    }
+
+    /** Writes the floats in a row; a range outside the bytes throws InvalidDataException. */
+    internal static void WriteFloats(byte[] bytes, int offset, params float[] values)
+    {
+        if (offset < 0 || offset > bytes.Length - values.Length * 4) throw new InvalidDataException("Placement range leaves its source.");
+        for (int i = 0; i < values.Length; i++) BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(offset + i * 4), values[i]);
+    }
 
     /** A native shape key holds the instance index and child key in one u32. */
     internal static void RequireKeyCapacity(int instanceCount, int childBits)
@@ -93,9 +118,9 @@ public static class CollisionCompoundWriter
         var shape = file.Bytes.AsSpan(file.Absolute(root), ObjectSize).ToArray();
         // Array pointers stay zero on disk; the fixups fill them.
         foreach (int field in new[] { Instances, ExtraInfos, Tree }) shape.AsSpan(field, 8).Clear();
-        if (childKeyBits is sbyte bits) shape[0x30] = (byte)bits;
-        NativeRows.Write(shape, Tree + 0x10, domainMin.X, domainMin.Y, domainMin.Z);
-        NativeRows.Write(shape, Tree + 0x20, domainMax.X, domainMax.Y, domainMax.Z);
+        if (childKeyBits is sbyte bits) shape[KeyBits] = (byte)bits;
+        WriteFloats(shape, Tree + 0x10, domainMin.X, domainMin.Y, domainMin.Z);
+        WriteFloats(shape, Tree + 0x20, domainMax.X, domainMax.Y, domainMax.Z);
         int at = builder.PlaceObject(shape, StaticCompoundShape.ClassName);
         if (at != root) throw new NotSupportedException("The compound is not the first object of its packfile.");
         var instances = new byte[StaticCompoundShape.InstanceSize * rows.Count];

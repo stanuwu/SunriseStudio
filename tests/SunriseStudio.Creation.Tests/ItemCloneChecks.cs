@@ -1,5 +1,6 @@
 using SunriseStudio.Formats;
 using static SunriseStudio.Creation.Tests.Fixture;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Creation.Tests;
 
@@ -8,7 +9,7 @@ internal static class ItemCloneChecks
 {
     public static void Run()
     {
-        Check(InvestmentItemClone.Fnv1("") == EmptyHash && InvestmentItemClone.Fnv1("a") == 0x050C5D7E, "Clone hash is not FNV-1.");
+        Check(StringBankWriter.Hash("") == EmptyHash && StringBankWriter.Hash("a") == 0x050C5D7E, "Clone hash is not FNV-1.");
 
         byte[] table = IndexTable(3);
         var (grown, index) = InvestmentItemClone.AppendIndexRow(table, 0xDEADBEEF, 0x80A10000);
@@ -64,9 +65,9 @@ internal static class ItemCloneChecks
         Reject<ArgumentOutOfRangeException>(() => InvestmentItemClone.SetDisplayString(display, 140, 1, 1), "An unknown pair offset was written.");
         Reject<InvalidDataException>(() => InvestmentItemClone.SetDisplayIcon(new byte[100], 1), "A truncated display record was written.");
 
-        var used = new HashSet<uint> { InvestmentItemClone.Fnv1("key") };
-        uint fresh = InvestmentItemClone.NewDefinitionHash("key", used);
-        Check(fresh != InvestmentItemClone.Fnv1("key") && fresh is not (0 or uint.MaxValue or EmptyHash), "A used definition hash was returned.");
+        var used = new HashSet<uint> { StringBankWriter.Hash("key") };
+        uint fresh = StringHash.NewDefinitionHash("key", used);
+        Check(fresh != StringBankWriter.Hash("key") && fresh is not (0 or uint.MaxValue or EmptyHash), "A used definition hash was returned.");
         Check(InvestmentItemClone.FindAlignedValue(named, 0x12345678).SequenceEqual([136]), "Aligned value search failed.");
         Console.WriteLine("creation item_clone=pass");
     }

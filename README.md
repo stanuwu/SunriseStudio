@@ -11,9 +11,9 @@ Mod Editor for Sunrise
 
 ## Features
 - View assets, maps, missions and investment data
-- Move objects, edit properties and collision
+- Move objects, copy and remove statics; edit properties, tag fields and collision
 - create weapons, items, vendors, static props, textures, materials,
-  perk behaviors and more
+  perk behaviors, destinations and more
 - Edit mission scripts as graphs
 - Export to Blender, Import from Blender, Rebuild from Blender edits
 - Attach to Sunrise with live cui or inworld view
@@ -82,16 +82,22 @@ Opening Studio's exports in Blender, and making files Studio imports from Blende
 | `src/SunriseStudio.Viewport` | The 3D and 2D views, cameras, selection and shortcuts |
 | `src/SunriseStudio.Rendering` | Direct3D 11 renderer, game shaders and ImGui backend |
 | `src/SunriseStudio.Scene` | Map, mission and asset scene decoding |
-| `src/SunriseStudio.Packages` | Package reading and writing, names and caches |
+| `src/SunriseStudio.Packages` | Package reading and writing, names and caches, the tag registry model |
 | `src/SunriseStudio.Projects` | Projects, deltas, object edits, builds and mod installs |
 | `src/SunriseStudio.Authoring` | Importers and object edit rules |
 | `src/SunriseStudio.Formats` | Typed readers and editors for game formats; glTF, OBJ, DDS and PNG conversion |
+| `src/SunriseStudio.Tags` | Tag parsing and writing, the content graph, path queries, `.tft` loose tags; `Views/` compiles into SunriseStudio.Packages |
+| `src/SunriseStudio.Tags.Generated` | One struct per tag class, generated from the registry; compiled into SunriseStudio.Packages |
+| `registry/` | The tag registry for each game build; generated, never edited by hand |
+| `data/` | Registry inputs: `seed-registry.json` holds hand-written class facts (names, browser categories, live tiers), `merge-annotations.json` the merge recipes, `layout-conflicts.json` and `tft-type-names-d1.json` the seed's conflict list and tag type names |
+| `src/SunriseStudio.World` | Destination copies as `.tft` files, activity rows and the activity SDK pack |
 | `src/SunriseStudio.Interchange` | Blender bundles and world scene export |
 | `src/SunriseStudio.Animation` | Skeletons, clips and skinning |
 | `src/SunriseStudio.Audio` | Wwise reading, playback and export |
 | `src/SunriseStudio.Missions` | Mission script graphs |
 | `src/SunriseStudio.Live` | The link to a running game |
 | `tests/` | Check programs; `verify.ps1` runs all but RootManifest and Sandbox |
+| `tests/Fixtures/testbed` | The testbed World Import Bundle; run `generate_testbed.py` in Blender to rebuild it and `check_testbed.py` to check it, since `verify.ps1` runs neither |
 | `licenses/` | Notice files of the .NET runtime and the Community Toolkit, copied unchanged |
 
 ## Contributing

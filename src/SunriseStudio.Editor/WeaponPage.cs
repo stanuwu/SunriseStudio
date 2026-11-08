@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json;
 using ImGuiNET;
@@ -8,6 +7,8 @@ using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
@@ -97,8 +98,9 @@ public sealed record WeaponPageState(uint Weapon, long Overlay)
             {
                 var row = WeaponFiringRow.Find(project!, catalog, catalog.Read, weapon);
                 byte[] hud = catalog.Read(row.Hud);
-                muzzle = owned.Contains(BinaryPrimitives.ReadUInt32LittleEndian(hud.AsSpan(row.Row + WeaponFiringRow.MuzzleSlot)));
-                reloadEffect = owned.Contains(BinaryPrimitives.ReadUInt32LittleEndian(hud.AsSpan(row.Row + WeaponFiringRow.ReloadSlot)));
+                ref readonly var firing = ref TagView.At<SWeaponFiringRow>(hud, row.Row);
+                muzzle = owned.Contains(firing.MuzzleSlotEntityRestartsEachShot);
+                reloadEffect = owned.Contains(firing.ReloadSlotEntityNeverPaused);
             }
             // A weapon that still shares its firing row has no effects of its own.
             catch (InvalidDataException) { }
@@ -168,7 +170,7 @@ public sealed class WeaponPage : IStudioPage
     public string Id => "sunrise.weapon";
     public string Title => "Weapon";
     public bool CanOpen(StudioDocument document) => document.Entry.Reference == InvestmentCatalog.ItemClass
-        && document.Entry.Type is 8 or 16 && document.Bytes.Length > 184 && document.Bytes[184] <= 2;
+        && document.Entry.Type is 8 or 16 && document.Bytes.Length > ItemFields.Bucket && document.Bytes[ItemFields.Bucket] <= 2;
 
     /** Draw reads no package records; a worker reads them once per weapon and overlay revision. */
     public void Draw(StudioPageContext context)

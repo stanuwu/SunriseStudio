@@ -1,3 +1,6 @@
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+
 namespace SunriseStudio.Scene;
 
 /** Reads the class-0x808084E9 sequence resource and gives each particle node its activation. */
@@ -13,12 +16,16 @@ internal static class EffectSequence
      * Activations of the config's particle nodes, keyed by node body offset.
      * @return Empty when the config holds no sequence resource.
      */
-    public static Dictionary<int, EffectActivation> Read(uint config, TagData data)
+    public static Dictionary<int, EffectActivation> Read(uint config, byte[] data)
     {
         var result = new Dictionary<int, EffectActivation>();
-        if (!data.Has(0x18, 8) || data.I64(0x18) == 0) return result;
-        int resource = data.Relative(0x18);
-        if (!data.Has(resource - 4, 0x2EC) || data.U32(resource - 4) != SequenceResource.ResourceClass) return result;
+        // The config must reach Definition; the members after it are not read.
+        if (!TagView.FitsThrough<SEntityConfig>(data, 0, nameof(SEntityConfig.Definition))) return result;
+        ref readonly var definition = ref TagView.At<RelativePointer<Unknown>>(data,
+            TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition)));
+        if (TagView.TargetOffset(data, in definition) is not { } resource
+            || TagView.TargetClass(data, in definition) != SParticleSequenceResource.Class
+            || !TagView.Fits<SParticleSequenceResource>(data, resource)) return result;
         var sequence = new SequenceResource(data, resource);
         var works = sequence.Works;
         for (int index = 0; index < works.Length; index++)

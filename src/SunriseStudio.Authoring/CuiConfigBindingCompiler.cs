@@ -1,8 +1,12 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using SunriseStudio.Formats;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -10,16 +14,18 @@ namespace SunriseStudio.Authoring;
 public sealed partial class CuiConfigBindingCompiler : IConfigBindingCompiler
 {
     public static CuiConfigBindingCompiler Default { get; } = new();
-    private const uint ResourceClass = 0x80804825;
     private static readonly HashSet<ulong> LayoutTypes = [CuiTypeRegistry.FrameType, CuiTypeRegistry.TextType,
         CuiTypeRegistry.BitmapType, CuiTypeRegistry.ContainerType];
 
     public IReadOnlyList<ConfigBindingCandidate> FindSites(uint tag, uint classHash, ReadOnlyMemory<byte> bytes)
     {
-        if (classHash != ResourceClass) return [];
+        if (classHash != CuiResource.Class) return [];
         if (bytes.Length > ConfigBindingLimits.MaximumEntryBytes)
             throw new InvalidDataException("A bound CUI entry must fit 64 MiB.");
         var document = CuiDocument.Read(tag, classHash, bytes);
+        int boolPool = TagView.FieldOffset<CuiResource>("ValuePool.BoolValues");
+        int floatPoolA = TagView.FieldOffset<CuiResource>("ValuePool.PoolFloatsA");
+        int floatPoolB = TagView.FieldOffset<CuiResource>("ValuePool.PoolFloatsBNormalized");
         List<ConfigBindingCandidate> result = [];
         for (int ownerIndex = 0; ownerIndex < document.Objects.Count; ownerIndex++)
         {
@@ -39,14 +45,14 @@ public sealed partial class CuiConfigBindingCompiler : IConfigBindingCompiler
                     string label;
                     uint bits;
                     if (type == CuiTypeRegistry.TextType && property.Selector == 0x41A
-                        && property.PoolDescriptor == 136 && property.ValueClass == 0x8080468D)
+                        && property.PoolDescriptor == boolPool && property.ValueClass == SCuiBoolValue.Class)
                     {
                         bits = bytes.Span[property.ValueOffset];
                         if (bits > 1) continue;
                         kind = ModConfigType.Bool; label = "Auto width";
                     }
                     else if (LayoutTypes.Contains(type) && property.Selector is >= 0x206 and <= 0x209
-                        && property.PoolDescriptor is 184 or 200 && property.ValueClass == 0x80804694)
+                        && (property.PoolDescriptor == floatPoolA || property.PoolDescriptor == floatPoolB) && property.ValueClass == SCuiFloatValue.Class)
                     {
                         bits = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Span[property.ValueOffset..]);
                         if (!float.IsFinite(BitConverter.UInt32BitsToSingle(bits))) continue;
@@ -70,8 +76,10 @@ public sealed partial class CuiConfigBindingCompiler : IConfigBindingCompiler
             string guard = Hash($"comparison/{binding.Source.Node}/{binding.Source.AuthoredNode}/{binding.Source.PathKey}/"
                 + $"{binding.Target.Node}/{binding.Target.AuthoredNode}/{binding.Target.PathKey}/"
                 + $"{binding.Transform.ClassHash:X8}/{binding.Transform.Kind}/{binding.Transform.Comparison}");
+            int operand = binding.Transform.Offset + (kind == ModConfigType.Int
+                ? TagView.FieldOffset<CuiCompareInteger>(nameof(CuiCompareInteger.Operand)) : TagView.FieldOffset<CuiCompareFloat>(nameof(CuiCompareFloat.Operand)));
             result.Add(new(new(ConfigBindingLimits.ComparisonProfile, binding.Offset, -1, -1, -1,
-                guard, binding.Transform.Operand, $"Binding {binding.Index}: {binding.Transform.Kind} operand"), kind, binding.Transform.Offset + 4));
+                guard, binding.Transform.Operand, $"Binding {binding.Index}: {binding.Transform.Kind} operand"), kind, operand));
         }
         return result.AsReadOnly();
     }
@@ -85,7 +93,7 @@ public sealed partial class CuiConfigBindingCompiler : IConfigBindingCompiler
         foreach (var group in bindings.GroupBy(binding => binding.TagHash).OrderBy(group => group.Key))
         {
             byte[] source = readSource(group.Key);
-            var available = FindSites(group.Key, ResourceClass, source);
+            var available = FindSites(group.Key, CuiResource.Class, source);
             var selected = group.OrderBy(binding => binding.Site.Identity, StringComparer.Ordinal).ToArray();
             foreach (var binding in selected)
             {
@@ -101,25 +109,30 @@ public sealed partial class CuiConfigBindingCompiler : IConfigBindingCompiler
             foreach (var binding in selected.Where(binding => binding.Site.Profile == ConfigBindingLimits.ComparisonProfile))
             {
                 var old = CuiBindings.Read(source).Single(row => row.Offset == binding.Site.RowOffset);
-                int record = checked((output.Length + 11) & ~7);
-                Grow(ref output, checked(record + 8));
-                source.AsSpan(old.Transform.Offset - 4, 12).CopyTo(output.AsSpan(record - 4));
-                Put64(output, binding.Site.RowOffset + 48, record - binding.Site.RowOffset - 48);
-                positions.Add(binding.Site.Identity, (binding.Site.RowOffset, record + 4));
+                int size = old.Transform.Kind == CuiBindingTransformKind.CompareInteger
+                    ? Unsafe.SizeOf<CuiCompareInteger>() : Unsafe.SizeOf<CuiCompareFloat>();
+                int record = TagRelocator.AppendObject(ref output, old.Transform.ClassHash, size, 8);
+                RequireSize(output);
+                source.AsSpan(old.Transform.Offset, size).CopyTo(output.AsSpan(record));
+                int conversion = TagView.OffsetOf(output, in TagView.At<CuiBindingRow>(output, binding.Site.RowOffset).Conversion);
+                Put64(output, conversion, record - conversion);
+                int operand = old.Transform.Kind == CuiBindingTransformKind.CompareInteger
+                    ? TagView.FieldOffset<CuiCompareInteger>(nameof(CuiCompareInteger.Operand)) : TagView.FieldOffset<CuiCompareFloat>(nameof(CuiCompareFloat.Operand));
+                positions.Add(binding.Site.Identity, (binding.Site.RowOffset, record + operand));
             }
             foreach (var binding in selected)
             {
                 var setting = settings.Single(value => value.Key == binding.Key && value.Type == binding.Type);
                 WriteDefault(output, positions[binding.Site.Identity].Value, setting);
             }
-            Put64(output, 0, output.Length);
-            _ = CuiDocument.Read(group.Key, ResourceClass, output);
+            Put64(output, SizeWord, output.Length);
+            _ = CuiDocument.Read(group.Key, CuiResource.Class, output);
             string digest = BinaryDelta.Hash(output);
             foreach (var binding in selected)
             {
                 var (row, value) = positions[binding.Site.Identity];
                 bool property = binding.Site.Profile == ConfigBindingLimits.PropertyProfile;
-                sites.Add(new(binding.Key, binding.Site.Profile, group.Key, ResourceClass, output.Length,
+                sites.Add(new(binding.Key, binding.Site.Profile, group.Key, CuiResource.Class, output.Length,
                     digest, value, binding.Type, property ? row : null,
                     property ? binding.Site.PoolOffset : null, property ? null : row));
             }
@@ -141,9 +154,9 @@ public sealed partial class CuiConfigBindingCompiler : IConfigBindingCompiler
 
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     private static void Put64(byte[] bytes, int at, long value) => BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at), value);
-    private static void Grow(ref byte[] bytes, int length)
+    private static void RequireSize(byte[] bytes)
     {
-        if (length > ConfigBindingLimits.MaximumEntryBytes) throw new InvalidDataException("A compiled CUI entry exceeds 64 MiB.");
-        Array.Resize(ref bytes, length);
+        if (bytes.Length > ConfigBindingLimits.MaximumEntryBytes) throw new InvalidDataException("A compiled CUI entry exceeds 64 MiB.");
     }
+    private static readonly int SizeWord = TagView.FieldOffset<CuiResource>(nameof(CuiResource.TagSize));
 }

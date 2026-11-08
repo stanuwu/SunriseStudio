@@ -1,22 +1,28 @@
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using SunriseStudio.Packages;
+
 namespace SunriseStudio.Formats;
 
 public static partial class NativePerkBehavior
 {
-    private const uint AlwaysClass = 0x80803E03, TimerClass = 0x80803DCD;
-    private const uint KillClass = 0x80803DE7, DamageClass = 0x80802F5F, UnequipClass = 0x80803DDB;
-    private const uint StateClass = 0x80803DCE, GatedClass = 0x80803DCC, EventClass = 0x80803DEB;
-    private const uint CounterClass = 0x80803E30, CounterRowClass = 0x80803E32;
-    private const uint PropertyClass = 0x808029ED, AmmoDropClass = 0x80803E35;
-    private const uint SpawnClass = 0x80803E45, DrivenSpawnClass = 0x80803E44, EnergyClass = 0x80803E4D;
-    private const uint DamageScaleClass = 0x80802F16, CounterEffectClass = 0x80803E2F, TransmatClass = 0x80803E2E;
+    private const uint AlwaysClass = PerkAlways.Class, TimerClass = PerkTimer.Class;
+    private const uint KillClass = PerkKill.Class, DamageClass = PerkDamage.Class, UnequipClass = PerkUnequip.Class;
+    private const uint StateClass = PerkWhileState.Class, GatedClass = PerkStateGated.Class, EventClass = PerkEvent.Class;
+    private const uint CounterClass = PerkCounter.Class, CounterRowClass = PerkCounterRow.Class;
+    private const uint PropertyClass = PerkProperty.Class, AmmoDropClass = PerkAmmoDrop.Class;
+    private const uint SpawnClass = PerkSpawn.Class, DrivenSpawnClass = PerkDrivenSpawn.Class, EnergyClass = PerkAbilityEnergy.Class;
+    private const uint DamageScaleClass = PerkDamageMultiplier.Class, CounterEffectClass = PerkSetCounter.Class;
+    private const uint TransmatClass = PerkTransmat.Class;
     // Damage multiplier bonus children: constant pair, input expression, owner value.
-    private const uint BonusClass = 0x80802F1A, BonusExpressionClass = 0x80802F18, BonusOwnerClass = 0x80802F19;
-    private const uint DamageRowClass = 0x80803E22;
-    private const uint CodeClass = 0x80800009, ConstantClass = 0x80800090, StringClass = 0x80800065;
+    private const uint BonusClass = PerkDamageBonusConstant.Class, BonusExpressionClass = C80802f18.Class;
+    private const uint BonusOwnerClass = C80802f19.Class;
+    private const uint DamageRowClass = PerkDamageValueRow.Class;
+    private const uint CodeClass = ExpressionCode.Class, ConstantClass = ExpressionConstant.Class, StringClass = SInlineString.Class;
     // Every installed damage multiplier names this label table in both label references.
     private const uint LabelGlobalsTag = PerkLabelTable.Tag;
     private const string LabelGlobalsPath = "content/common/native/sandbox/label_globals.label_globals.tft";
-    private const uint EmptyHash = InvestmentItemClone.EmptyStringHash, NoTag = uint.MaxValue;
+    private const uint EmptyHash = StringHash.Empty, NoTag = uint.MaxValue;
     private const string StatePrefix = "state-";
     private static readonly byte[] ConstantCode = [0x34, 0, 0x3E, 0], PassCode = [0x3C, 0, 0x3E, 0];
 
@@ -33,34 +39,46 @@ public static partial class NativePerkBehavior
         {
             "super_active", "is_thermal", "is_arc", "is_void", "reloading", "nearby_enemy_count", "melee_energy",
             "equipped_item_magazine_fraction", "is_guarding_with_sword", "melee_overcharge_state"
-        }.Select(name => new PerkBehaviorChoice(InvestmentItemClone.Fnv1(name), name))
+        }.Select(name => new PerkBehaviorChoice(StringBankWriter.Hash(name), name))
     ];
 
     /** Scalar inputs at fixed payload offsets, keyed by node shape; row fields are relative to the row. */
     private static readonly Dictionary<string, Field[]> Fields = new(StringComparer.Ordinal)
     {
-        ["event"] = [new("event", 8, Width.U32)],
-        ["unequip"] = [new("this_weapon", 8, Width.U8), new("slots", 9, Width.U8)],
-        ["kill"] = [new("slots", 320, Width.U8), new("this_weapon", 321, Width.U8), new("min_share", 336, Width.F32)],
-        ["damage"] = [new("slots", 152, Width.U8), new("this_weapon", 153, Width.U8), new("min_share", 160, Width.F32),
-            new("positive_damage", 164, Width.U8)],
-        ["while-state"] = [new("property", 212, Width.U32), new("minimum", 216, Width.F32),
-            new("maximum", 220, Width.F32), new("hold", 224, Width.F32), new("invert", 248, Width.U8)],
-        ["state"] = [new("property", 212, Width.U32), new("minimum", 216, Width.F32),
-            new("maximum", 220, Width.F32), new("invert", 248, Width.U8)],
-        ["counter"] = [new("threshold", 32, Width.F32), new("reset", 36, Width.F32),
-            new("minimum", 40, Width.F32), new("maximum", 44, Width.F32)],
-        ["row"] = [new("row_mode", 8, Width.U8), new("row_value", 12, Width.F32), new("row_window", 16, Width.F32)],
-        ["spawn"] = [new("target", 2, Width.U8), new("definition", 16, Width.U32), new("keep", 24, Width.U32),
-            new("removal", 28, Width.U32), new("counter_parameter", 48, Width.U32)],
-        ["driven-spawn"] = [new("target", 2, Width.U8), new("definition", 16, Width.U32),
-            new("input", 80, Width.I8), new("normalize", 81, Width.U8)],
-        ["ability-energy"] = [new("slot", 2, Width.U8), new("gate", 3, Width.U8), new("amount", 8, Width.F32),
-            new("cap", 12, Width.F32), new("input", 72, Width.I8)],
-        ["damage-multiplier"] = [new("elements", 152, Width.U32), new("any_element", 176, Width.U8),
-            new("this_weapon", 184, Width.U8)],
-        ["perk-counter"] = [new("mode", 2, Width.U8), new("value", 4, Width.F32)],
-        ["transmat"] = [new("key", 4, Width.U32)]
+        ["event"] = [new("event", TagView.FieldOffset<PerkEvent>("EventHash"), Width.U32)],
+        ["unequip"] = [new("this_weapon", TagView.FieldOffset<PerkUnequip>("ThisWeapon"), Width.U8),
+            new("slots", TagView.FieldOffset<PerkUnequip>("Slots"), Width.U8)],
+        ["kill"] = [new("slots", TagView.FieldOffset<PerkKill>("Slots"), Width.U8), new("this_weapon", TagView.FieldOffset<PerkKill>("ThisWeapon"), Width.U8),
+            new("min_share", TagView.FieldOffset<PerkKill>("MinShare"), Width.F32)],
+        ["damage"] = [new("slots", TagView.FieldOffset<PerkDamage>("Slots"), Width.U8),
+            new("this_weapon", TagView.FieldOffset<PerkDamage>("ThisWeapon"), Width.U8), new("min_share", TagView.FieldOffset<PerkDamage>("MinShare"), Width.F32),
+            new("positive_damage", TagView.FieldOffset<PerkDamage>("PositiveDamage"), Width.U8)],
+        ["while-state"] = [new("property", TagView.FieldOffset<PerkWhileState>("Property"), Width.U32),
+            new("minimum", TagView.FieldOffset<PerkWhileState>("Minimum"), Width.F32), new("maximum", TagView.FieldOffset<PerkWhileState>("Maximum"), Width.F32),
+            new("hold", TagView.FieldOffset<PerkWhileState>("Hold"), Width.F32), new("invert", TagView.FieldOffset<PerkWhileState>("Invert"), Width.U8)],
+        ["state"] = [new("property", TagView.FieldOffset<PerkStateGated>("Property"), Width.U32),
+            new("minimum", TagView.FieldOffset<PerkStateGated>("Minimum"), Width.F32), new("maximum", TagView.FieldOffset<PerkStateGated>("Maximum"), Width.F32),
+            new("invert", TagView.FieldOffset<PerkStateGated>("Invert"), Width.U8)],
+        ["counter"] = [new("threshold", TagView.FieldOffset<PerkCounter>("Threshold"), Width.F32),
+            new("reset", TagView.FieldOffset<PerkCounter>("Reset"), Width.F32), new("minimum", TagView.FieldOffset<PerkCounter>("Minimum"), Width.F32),
+            new("maximum", TagView.FieldOffset<PerkCounter>("Maximum"), Width.F32)],
+        ["row"] = [new("row_mode", TagView.FieldOffset<PerkCounterRow>("RowMode"), Width.U8),
+            new("row_value", TagView.FieldOffset<PerkCounterRow>("RowValue"), Width.F32),
+            new("row_window", TagView.FieldOffset<PerkCounterRow>("RowWindow"), Width.F32)],
+        ["spawn"] = [new("target", TagView.FieldOffset<PerkSpawn>("Target"), Width.U8), new("definition", TagView.FieldOffset<PerkSpawn>("Definition"), Width.U32),
+            new("keep", TagView.FieldOffset<PerkSpawn>("Keep"), Width.U32), new("removal", TagView.FieldOffset<PerkSpawn>("Removal"), Width.U32),
+            new("counter_parameter", TagView.FieldOffset<PerkSpawn>("CounterParameter"), Width.U32)],
+        ["driven-spawn"] = [new("target", TagView.FieldOffset<PerkDrivenSpawn>("Target"), Width.U8),
+            new("definition", TagView.FieldOffset<PerkDrivenSpawn>("Definition"), Width.U32), new("input", TagView.FieldOffset<PerkDrivenSpawn>("Input"), Width.I8),
+            new("normalize", TagView.FieldOffset<PerkDrivenSpawn>("Normalize"), Width.U8)],
+        ["ability-energy"] = [new("slot", TagView.FieldOffset<PerkAbilityEnergy>("Slot"), Width.U8),
+            new("gate", TagView.FieldOffset<PerkAbilityEnergy>("Gate"), Width.U8), new("amount", TagView.FieldOffset<PerkAbilityEnergy>("Amount"), Width.F32),
+            new("cap", TagView.FieldOffset<PerkAbilityEnergy>("Cap"), Width.F32), new("input", TagView.FieldOffset<PerkAbilityEnergy>("Input"), Width.I8)],
+        ["damage-multiplier"] = [new("elements", TagView.FieldOffset<PerkDamageMultiplier>("H4b1eab13.Elements"), Width.U32),
+            new("any_element", TagView.FieldOffset<PerkDamageMultiplier>("H4b1eab13.AnyElement"), Width.U8),
+            new("this_weapon", TagView.FieldOffset<PerkDamageMultiplier>("ThisWeapon"), Width.U8)],
+        ["perk-counter"] = [new("mode", TagView.FieldOffset<PerkSetCounter>("Mode"), Width.U8), new("value", TagView.FieldOffset<PerkSetCounter>("Value"), Width.F32)],
+        ["transmat"] = [new("key", TagView.FieldOffset<PerkTransmat>("EffectKey"), Width.U32)]
     };
 
     private static string Shape(string primitive) =>

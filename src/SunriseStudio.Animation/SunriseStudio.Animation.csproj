@@ -4,6 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="SunriseStudio.Animation.Tests" />
-    <ProjectReference Include="../SunriseStudio.Packages/SunriseStudio.Packages.csproj" />
+    <ProjectReference Include="../SunriseStudio.Tags/SunriseStudio.Tags.csproj" />
   </ItemGroup>
 </Project>

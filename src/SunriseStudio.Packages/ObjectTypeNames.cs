@@ -1,6 +1,6 @@
 namespace SunriseStudio.Packages;
 
-/** The game's object type names; the index is entity definition byte +150. */
+/** The game's object type names, indexed by SEntity.ObjectType. */
 public static class ObjectTypeNames
 {
     private static readonly string[] Names =

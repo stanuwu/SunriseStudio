@@ -119,7 +119,7 @@ internal static class LiveAuditChecks
         await Canceled(connection.ReloadModAsync("dev.test.pre_canceled", cancellation.Token));
         var open = typeof(LiveCommandConnection).GetMethod("OpenAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
         Task task;
-        try { task = (Task)open.Invoke(connection, [cancellation.Token])!; }
+        try { task = (Task)open.Invoke(connection, [LiveCommandProtocol.OldestVersion, cancellation.Token])!; }
         catch (TargetInvocationException error) when (error.InnerException is not null)
         { ExceptionDispatchInfo.Capture(error.InnerException).Throw(); throw; }
         await Canceled(task);

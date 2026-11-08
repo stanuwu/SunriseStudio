@@ -19,7 +19,7 @@ internal static class TransactionChecks
         {
             Check(project.AddedAssets.Count == 1 && StudioProject.Open(project.DirectoryPath).Changes.Count == 0,
                 "Staged additions became visible before their linked edits.");
-            uint target = 0x80800000u + ((uint)allocated[0].Native!.PackageId << 13) + (uint)allocated[0].Native!.EntryIndex!.Value;
+            uint target = TagHashes.Make(allocated[0].Native!.PackageId, allocated[0].Native!.EntryIndex!.Value);
             BinaryPrimitives.WriteUInt32LittleEndian(linked, target);
             return new(new Dictionary<uint, byte[]> { [tag] = linked }, new Dictionary<string, byte[]> { [label.Id] = [9, 8] });
         }, catalog);

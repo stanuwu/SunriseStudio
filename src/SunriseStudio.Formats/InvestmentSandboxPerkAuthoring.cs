@@ -1,6 +1,9 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -15,12 +18,18 @@ public static class InvestmentSandboxPerkAuthoring
 {
     public const uint DefinitionTableTag = 0x81319327, DisplayTableTag = 0x81613D28;
     public const uint RuntimeNameMapTag = 0x80EC3F60, GameplayClass = InvestmentTags.PerkProgramClass;
-    public const uint DefinitionTableClass = 0x80807AAA, DefinitionRowClass = 0x80807AAE;
-    public const uint RuntimeNameMapClass = 0x80809780, RuntimeNameRowClass = 0x80809252;
-    private const int DefinitionStride = 8, DisplayStride = 24, TextStride = 28;
-    private const int ArrayField = 8, TextArrayField = 24;
+    public const uint DefinitionTableClass = SSandboxPerkDefinitionTable.Class, DefinitionRowClass = SSandboxPerkDefinition.Class;
+    public const uint RuntimeNameMapClass = SRuntimeNameMap.Class, RuntimeNameRowClass = SRuntimeNameRow.Class;
+    private static readonly int DefinitionStride = Unsafe.SizeOf<SSandboxPerkDefinition>(),
+        DisplayStride = Unsafe.SizeOf<SSandboxPerkDisplayRow>(), TextStride = Unsafe.SizeOf<SSandboxPerkDisplayText>(),
+        NameStride = Unsafe.SizeOf<SRuntimeNameRow>();
+    private static readonly int DefinitionRowsField = TagView.FieldOffset<SSandboxPerkDefinitionTable>("Table"),
+        DisplayRowsField = TagView.FieldOffset<SSandboxPerkDisplayTable>("Table"),
+        TextArrayField = TagView.FieldOffset<SSandboxPerkDisplayTable>("ComponentStorage.Displays"),
+        NameRowsField = TagView.FieldOffset<SRuntimeNameMap>("TagEntries"),
+        TextPointer = TagView.FieldOffset<SSandboxPerkDisplayRow>("Display");
     // The native display default uses an unavailable bank and empty-name hashes.
-    private const uint EmptyName = 0x811C9DC5, UnavailableBank = ushort.MaxValue;
+    private const uint UnavailableBank = ushort.MaxValue;
     // The native perk UI compares this key when showing its exotic frame.
     private const uint ExoticPresentation = 0x85899A33;
 
@@ -34,12 +43,11 @@ public static class InvestmentSandboxPerkAuthoring
         byte[] displays = catalog.Read(DisplayTableTag);
         byte[] names = catalog.Read(RuntimeNameMapTag);
         var pair = ReadPair(definitions, displays, index);
-        var reader = new TagReader(displays);
-        uint effectTag = ResolveRuntimeName(names, reader.U32(pair.Display + 4));
+        uint effectTag = ResolveRuntimeName(names, TagView.At<SSandboxPerkDisplayRow>(displays, pair.Display).GameplayNameHash);
         RequireClass(catalog, effectTag, GameplayClass);
         byte[] gameplay = catalog.Read(effectTag);
         RequireSize(gameplay);
-        return new(index, reader.U32(pair.Display), effectTag, gameplay);
+        return new(index, TagView.At<SSandboxPerkDisplayRow>(displays, pair.Display).DefinitionHash, effectTag, gameplay);
     }
 
     /**
@@ -55,55 +63,57 @@ public static class InvestmentSandboxPerkAuthoring
     {
         RequireIdentity(definitionHash); RequireIdentity(gameplayNameHash);
         RequireSize(definitions); RequireSize(displays);
-        if (gameplayTag < 0x80800000 || gameplayTag == uint.MaxValue)
+        if (!TagHashes.IsTag(gameplayTag) || gameplayTag == uint.MaxValue)
             throw new InvalidDataException("A new perk needs a package gameplay tag.");
-        var source = new TagReader(displays);
-        var rows = source.Array(ArrayField, SandboxPerkDisplays.RowClass, DisplayStride);
-        var native = new TagReader(definitions);
-        var nativeRows = native.Array(ArrayField, DefinitionRowClass, DefinitionStride);
+        var source = displays.Span;
+        var rows = TagArray.Checked(source, DisplayRowsField, SandboxPerkDisplays.RowClass, DisplayStride);
+        var native = definitions.Span;
+        var nativeRows = TagArray.Checked(native, DefinitionRowsField, DefinitionRowClass, DefinitionStride);
         if (rows.Count != nativeRows.Count || rows.Count >= InvestmentItemClone.MaximumIndexRows)
             throw new InvalidDataException("The sandbox perk tables have no matching reachable row.");
         for (int i = 0; i < rows.Count; i++)
         {
-            uint hash = source.U32(rows.Data + i * DisplayStride);
-            if (hash != native.U32(nativeRows.Data + i * DefinitionStride))
+            uint hash = TagView.At<SSandboxPerkDisplayRow>(source, rows.Data + i * DisplayStride).DefinitionHash;
+            if (hash != TagView.At<SSandboxPerkDefinition>(native, nativeRows.Data + i * DefinitionStride).DefinitionHash)
                 throw new InvalidDataException("The sandbox perk index tables disagree.");
             if (hash == definitionHash)
                 throw new InvalidDataException("This sandbox perk definition hash is already used.");
         }
         byte[] text = DefaultDisplayText();
-        U32(text, 20, PresentationHash(presentation));
-        if (nameHash != EmptyName) { U32(text, 0, bankIndex); U32(text, 4, nameHash); }
-        if (descriptionHash != EmptyName) { U32(text, 8, bankIndex); U32(text, 12, descriptionHash); }
-        BinaryPrimitives.WriteUInt16LittleEndian(text.AsSpan(16), icon);
-        var oldTexts = source.Array(TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
+        ref var added = ref TagView.Edit<SSandboxPerkDisplayText>(text);
+        added.PresentationKey = PresentationHash(presentation);
+        if (nameHash != StringHash.Empty) { added.NameBank = bankIndex; added.NameHash = nameHash; }
+        if (descriptionHash != StringHash.Empty) { added.DescriptionBank = bankIndex; added.DescriptionHash = descriptionHash; }
+        added.IconIndex = icon;
+        var oldTexts = TagArray.Checked(source, TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
         byte[] displayRow = new byte[DisplayStride];
-        U32(displayRow, 0, definitionHash); U32(displayRow, 4, gameplayNameHash);
+        ref var label = ref TagView.Edit<SSandboxPerkDisplayRow>(displayRow);
+        label.DefinitionHash = definitionHash; label.GameplayNameHash = gameplayNameHash;
         // Both arrays grow in one call, so arrays this method moved before are rewritten in place.
         byte[] newDisplays = InvestmentItemClone.AppendRows(displays,
-            [new(TextArrayField, TextStride, [text]), new(ArrayField, DisplayStride, [displayRow])],
+            [new(TextArrayField, TextStride, [text]), new(DisplayRowsField, DisplayStride, [displayRow])],
             stockLength: displayStockLength).Table;
-        var written = new TagReader(newDisplays);
-        var textRows = written.Array(TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
-        var newRows = written.Array(ArrayField, SandboxPerkDisplays.RowClass, DisplayStride);
-        // Row +8 points at its text row, relative to the pointer itself.
+        var textRows = TagArray.Checked(newDisplays, TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
+        var newRows = TagArray.Checked(newDisplays, DisplayRowsField, SandboxPerkDisplays.RowClass, DisplayStride);
+        // A row's display pointer names its text row, relative to the pointer itself.
         for (int i = 0; i < rows.Count; i++)
         {
-            int target = source.Relative(rows.Data + i * DisplayStride + 8);
+            int target = TagPointer.Checked(source, rows.Data + i * DisplayStride + TextPointer);
             if (target < 0) continue;
             if (target < oldTexts.Data || (target - oldTexts.Data) % TextStride != 0
                 || (target - oldTexts.Data) / TextStride >= oldTexts.Count)
                 throw new InvalidDataException("A sandbox perk points outside its display text rows.");
-            int pointer = newRows.Data + i * DisplayStride + 8;
+            int pointer = newRows.Data + i * DisplayStride + TextPointer;
             I64(newDisplays, pointer, textRows.Data + target - oldTexts.Data - pointer);
         }
-        int added = newRows.Data + rows.Count * DisplayStride + 8;
-        I64(newDisplays, added, textRows.Data + (textRows.Count - 1) * TextStride - added);
+        int addedPointer = newRows.Data + rows.Count * DisplayStride + TextPointer;
+        I64(newDisplays, addedPointer, textRows.Data + (textRows.Count - 1) * TextStride - addedPointer);
         byte[] definitionRow = new byte[DefinitionStride];
-        U32(definitionRow, 0, definitionHash);
-        BinaryPrimitives.WriteUInt16LittleEndian(definitionRow.AsSpan(4), ushort.MaxValue);
-        definitionRow[6] = 1;
-        byte[] newDefinitions = InvestmentItemClone.AppendRow(definitions, ArrayField,
+        ref var definition = ref TagView.Edit<SSandboxPerkDefinition>(definitionRow);
+        definition.DefinitionHash = definitionHash;
+        definition.Unknown4 = ushort.MaxValue;
+        definition.Active = 1;
+        byte[] newDefinitions = InvestmentItemClone.AppendRow(definitions, DefinitionRowsField,
             DefinitionStride, definitionRow);
         byte[] newNames = AddRuntimeName(runtimeNames, gameplayNameHash, gameplayTag);
         ReadPair(newDefinitions, newDisplays, rows.Count);
@@ -119,41 +129,38 @@ public static class InvestmentSandboxPerkAuthoring
     public static byte[] Rebuild(ReadOnlyMemory<byte> original, ReadOnlyMemory<byte> current)
     {
         RequireSize(original); RequireSize(current);
-        var stock = new TagReader(original);
-        var edited = new TagReader(current);
-        var rows = stock.Array(ArrayField, SandboxPerkDisplays.RowClass, DisplayStride);
-        var texts = stock.Array(TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
-        var editedRows = edited.Array(ArrayField, SandboxPerkDisplays.RowClass, DisplayStride);
-        var editedTexts = edited.Array(TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
+        var rows = TagArray.Checked(original.Span, DisplayRowsField, SandboxPerkDisplays.RowClass, DisplayStride);
+        var texts = TagArray.Checked(original.Span, TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
+        var editedRows = TagArray.Checked(current.Span, DisplayRowsField, SandboxPerkDisplays.RowClass, DisplayStride);
+        var editedTexts = TagArray.Checked(current.Span, TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
         if (editedRows.Count < rows.Count || editedTexts.Count < texts.Count)
             throw new InvalidDataException("The sandbox perk display table lost rows.");
         InvestmentItemClone.RequireOnlyChanged(original.Span, current.Span,
-            InvestmentItemClone.ArraySpans(original, ArrayField, DisplayStride)
+            InvestmentItemClone.ArraySpans(original, DisplayRowsField, DisplayStride)
                 .Concat(InvestmentItemClone.ArraySpans(original, TextArrayField, TextStride)),
             "The sandbox perk display table changed outside its rows.");
         // Each display row keeps the text row number it names, or none.
         var named = Enumerable.Range(0, editedRows.Count).Select(row =>
-            edited.Relative(editedRows.Data + row * DisplayStride + 8) < 0 ? -1
-                : (DisplayTarget(edited, editedRows.Data + row * DisplayStride, editedTexts.Data, editedTexts.Count)
+            TagPointer.Checked(current.Span, editedRows.Data + row * DisplayStride + TextPointer) < 0 ? -1
+                : (DisplayTarget(current.Span, editedRows.Data + row * DisplayStride, editedTexts.Data, editedTexts.Count)
                     - editedTexts.Data) / TextStride).ToArray();
         byte[][] Added(int data, int from, int to, int stride) =>
             Enumerable.Range(from, to - from).Select(row => current.Span.Slice(data + row * stride, stride).ToArray()).ToArray();
         var appends = new List<RowAppend>
         {
             new(TextArrayField, TextStride, Added(editedTexts.Data, texts.Count, editedTexts.Count, TextStride)),
-            new(ArrayField, DisplayStride, Added(editedRows.Data, rows.Count, editedRows.Count, DisplayStride))
+            new(DisplayRowsField, DisplayStride, Added(editedRows.Data, rows.Count, editedRows.Count, DisplayStride))
         };
         byte[] output = InvestmentItemClone.AppendRows(original, appends.Where(append => append.Rows.Count > 0).ToArray(),
             stockLength: original.Length).Table;
-        var written = new TagReader(output);
-        var outRows = written.Array(ArrayField, SandboxPerkDisplays.RowClass, DisplayStride);
-        var outTexts = written.Array(TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
+        var outRows = TagArray.Checked(output, DisplayRowsField, SandboxPerkDisplays.RowClass, DisplayStride);
+        var outTexts = TagArray.Checked(output, TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
         // Installed rows take their edited bytes where they now live; a moved array's old copy stays installed.
         current.Span.Slice(editedTexts.Data, texts.Count * TextStride).CopyTo(output.AsSpan(outTexts.Data));
         current.Span.Slice(editedRows.Data, rows.Count * DisplayStride).CopyTo(output.AsSpan(outRows.Data));
         for (int row = 0; row < outRows.Count; row++)
         {
-            int pointer = outRows.Data + row * DisplayStride + 8;
+            int pointer = outRows.Data + row * DisplayStride + TextPointer;
             I64(output, pointer, named[row] < 0 ? 0 : outTexts.Data + named[row] * TextStride - pointer);
         }
         return output;
@@ -163,14 +170,14 @@ public static class InvestmentSandboxPerkAuthoring
     public static SandboxPerkPresentation? ReadPresentation(ReadOnlyMemory<byte> displays, int index)
     {
         RequireSize(displays);
-        var source = new TagReader(displays);
-        var rows = source.Array(ArrayField, SandboxPerkDisplays.RowClass, DisplayStride);
-        var texts = source.Array(TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
+        var source = displays.Span;
+        var rows = TagArray.Checked(source, DisplayRowsField, SandboxPerkDisplays.RowClass, DisplayStride);
+        var texts = TagArray.Checked(source, TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
         if (index < 0 || index >= rows.Count) throw new ArgumentOutOfRangeException(nameof(index));
         int text = DisplayTarget(source, rows.Data + index * DisplayStride, texts.Data, texts.Count);
-        return source.U32(text + 20) switch
+        return TagView.At<SSandboxPerkDisplayText>(source, text).PresentationKey switch
         {
-            EmptyName => SandboxPerkPresentation.Normal,
+            StringHash.Empty => SandboxPerkPresentation.Normal,
             ExoticPresentation => SandboxPerkPresentation.Exotic,
             _ => null
         };
@@ -183,7 +190,7 @@ public static class InvestmentSandboxPerkAuthoring
         var targets = PrivateDisplayTargets(displays,
             new Dictionary<int, uint> { [index] = expectedDefinitionHash });
         byte[] output = displays.ToArray();
-        U32(output, targets[index] + 20, PresentationHash(presentation));
+        TagView.Edit<SSandboxPerkDisplayText>(output, targets[index]).PresentationKey = PresentationHash(presentation);
         return output;
     }
 
@@ -194,7 +201,7 @@ public static class InvestmentSandboxPerkAuthoring
         var targets = PrivateDisplayTargets(displays,
             new Dictionary<int, uint> { [index] = expectedDefinitionHash });
         byte[] output = displays.ToArray();
-        BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(targets[index] + 16), iconIndex);
+        TagView.Edit<SSandboxPerkDisplayText>(output, targets[index]).IconIndex = iconIndex;
         return output;
     }
 
@@ -205,8 +212,9 @@ public static class InvestmentSandboxPerkAuthoring
         var targets = PrivateDisplayTargets(displays,
             new Dictionary<int, uint> { [index] = expectedDefinitionHash });
         byte[] output = displays.ToArray();
-        U32(output, targets[index], name.Bank); U32(output, targets[index] + 4, name.Hash);
-        U32(output, targets[index] + 8, description.Bank); U32(output, targets[index] + 12, description.Hash);
+        ref var text = ref TagView.Edit<SSandboxPerkDisplayText>(output, targets[index]);
+        text.NameBank = name.Bank; text.NameHash = name.Hash;
+        text.DescriptionBank = description.Bank; text.DescriptionHash = description.Hash;
         return output;
     }
 
@@ -215,27 +223,28 @@ public static class InvestmentSandboxPerkAuthoring
         IReadOnlyDictionary<int, uint> expectedDefinitionHashes)
     {
         RequireSize(displays);
-        var source = new TagReader(displays);
-        var rows = source.Array(ArrayField, SandboxPerkDisplays.RowClass, DisplayStride);
-        var texts = source.Array(TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
+        var source = displays.Span;
+        var rows = TagArray.Checked(source, DisplayRowsField, SandboxPerkDisplays.RowClass, DisplayStride);
+        var texts = TagArray.Checked(source, TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
         var selected = new Dictionary<int, int>();
         foreach (var (index, hash) in expectedDefinitionHashes)
         {
-            if (index < 0 || index >= rows.Count || source.U32(rows.Data + index * DisplayStride) != hash)
+            if (index < 0 || index >= rows.Count
+                || TagView.At<SSandboxPerkDisplayRow>(source, rows.Data + index * DisplayStride).DefinitionHash != hash)
                 throw new InvalidDataException("The perk display identity changed before this edit.");
             int text = DisplayTarget(source, rows.Data + index * DisplayStride, texts.Data, texts.Count);
             selected.Add(index, text);
         }
         for (int index = 0; index < rows.Count; index++)
-            if (!selected.ContainsKey(index) && selected.ContainsValue(source.Relative(rows.Data
-                + index * DisplayStride + 8)))
+            if (!selected.ContainsKey(index) && selected.ContainsValue(TagPointer.Checked(source, rows.Data
+                + index * DisplayStride + TextPointer)))
                 throw new InvalidDataException("Another perk shares this display text; give it a private row first.");
         return selected;
     }
 
-    private static int DisplayTarget(TagReader source, int row, int first, int count)
+    private static int DisplayTarget(ReadOnlySpan<byte> source, int row, int first, int count)
     {
-        int text = source.Relative(row + 8);
+        int text = TagPointer.Checked(source, row + TextPointer);
         if (text < first || (text - first) % TextStride != 0 || (text - first) / TextStride >= count)
             throw new InvalidDataException("The perk display points outside its text rows.");
         return text;
@@ -243,36 +252,42 @@ public static class InvestmentSandboxPerkAuthoring
 
     private static uint PresentationHash(SandboxPerkPresentation value) => value switch
     {
-        SandboxPerkPresentation.Normal => EmptyName,
+        SandboxPerkPresentation.Normal => StringHash.Empty,
         SandboxPerkPresentation.Exotic => ExoticPresentation,
         _ => throw new ArgumentOutOfRangeException(nameof(value))
     };
 
-    /** Unassigned fields match the native 28-byte display default, including zero bytes at +18. */
+    /** Unassigned fields match the native 28-byte display default, including the zero u16 after the icon. */
     private static byte[] DefaultDisplayText()
     {
         byte[] text = new byte[TextStride];
-        U32(text, 0, UnavailableBank); U32(text, 4, EmptyName);
-        U32(text, 8, UnavailableBank); U32(text, 12, EmptyName);
-        BinaryPrimitives.WriteUInt16LittleEndian(text.AsSpan(16), ushort.MaxValue);
-        U32(text, 20, EmptyName); U32(text, 24, EmptyName);
+        ref var view = ref TagView.Edit<SSandboxPerkDisplayText>(text);
+        view.NameBank = UnavailableBank; view.NameHash = StringHash.Empty;
+        view.DescriptionBank = UnavailableBank; view.DescriptionHash = StringHash.Empty;
+        view.IconIndex = ushort.MaxValue;
+        view.PresentationKey = StringHash.Empty; view.Unknown24 = StringHash.Empty;
         return text;
     }
     /** Runtime lookup uses an ascending map and rejects duplicate names. */
     public static byte[] AddRuntimeName(ReadOnlyMemory<byte> current, uint nameHash, uint tag)
     {
         RequireIdentity(nameHash);
-        if (tag < 0x80800000 || tag == uint.MaxValue)
+        if (!TagHashes.IsTag(tag) || tag == uint.MaxValue)
             throw new InvalidDataException("A runtime name needs a package tag.");
         var rows = ReadRuntimeNames(current);
         if (rows.Any(row => row.Name == nameHash))
             throw new InvalidDataException("This runtime name hash is already used.");
-        byte[] added = new byte[8]; U32(added, 0, nameHash); U32(added, 4, tag);
-        byte[] output = InvestmentItemClone.AppendRow(current, ArrayField, 8, added);
-        var array = new TagReader(output).Array(ArrayField, RuntimeNameRowClass, 8);
-        var sorted = rows.Append((nameHash, tag)).OrderBy(row => row.Item1).ToArray();
+        byte[] added = new byte[NameStride];
+        ref var name = ref TagView.Edit<SRuntimeNameRow>(added);
+        name.NameHash = nameHash; name.ProgramTag = tag;
+        byte[] output = InvestmentItemClone.AppendRow(current, NameRowsField, NameStride, added);
+        var array = TagArray.Checked(output, NameRowsField, RuntimeNameRowClass, NameStride);
+        var sorted = rows.Append((nameHash, tag)).OrderBy(pair => pair.Item1).ToArray();
         for (int i = 0; i < sorted.Length; i++)
-        { U32(output, array.Data + i * 8, sorted[i].Item1); U32(output, array.Data + i * 8 + 4, sorted[i].Item2); }
+        {
+            ref var entry = ref TagView.Edit<SRuntimeNameRow>(output, array.Data + i * NameStride);
+            entry.NameHash = sorted[i].Item1; entry.ProgramTag = sorted[i].Item2;
+        }
         return output;
     }
 
@@ -286,28 +301,29 @@ public static class InvestmentSandboxPerkAuthoring
     }
 
     public static uint NewRuntimeNameHash(ReadOnlyMemory<byte> current, string key) =>
-        InvestmentItemClone.NewDefinitionHash(key, ReadRuntimeNames(current).Select(row => row.Name).ToHashSet());
+        StringHash.NewDefinitionHash(key, ReadRuntimeNames(current).Select(row => row.Name).ToHashSet());
 
     /** Only the repeated typed arrays and their paired identities define a valid source row. */
     private static (int Count, int Definition, int Display, int Text) ReadPair(
         ReadOnlyMemory<byte> definitions, ReadOnlyMemory<byte> displays, int index)
     {
         RequireSize(definitions); RequireSize(displays);
-        var native = new TagReader(definitions);
-        var display = new TagReader(displays);
-        var rows = native.Array(ArrayField, DefinitionRowClass, DefinitionStride);
-        var labels = display.Array(ArrayField, SandboxPerkDisplays.RowClass, DisplayStride);
-        var texts = display.Array(TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
+        var native = definitions.Span;
+        var display = displays.Span;
+        var rows = TagArray.Checked(native, DefinitionRowsField, DefinitionRowClass, DefinitionStride);
+        var labels = TagArray.Checked(display, DisplayRowsField, SandboxPerkDisplays.RowClass, DisplayStride);
+        var texts = TagArray.Checked(display, TextArrayField, SandboxPerkDisplays.DisplayClass, TextStride);
         if (rows.Count != labels.Count || index < 0 || index >= rows.Count)
             throw new InvalidDataException("The sandbox perk index tables do not match this row.");
         for (int i = 0; i < rows.Count; i++)
-            if (native.U32(rows.Data + i * DefinitionStride) != display.U32(labels.Data + i * DisplayStride))
+            if (TagView.At<SSandboxPerkDefinition>(native, rows.Data + i * DefinitionStride).DefinitionHash
+                != TagView.At<SSandboxPerkDisplayRow>(display, labels.Data + i * DisplayStride).DefinitionHash)
                 throw new InvalidDataException($"Sandbox perk {i} differs between its index tables.");
         int row = checked(rows.Data + index * DefinitionStride);
         int label = checked(labels.Data + index * DisplayStride);
-        if (native.U8(row + 6) == 0)
+        if (TagView.At<SSandboxPerkDefinition>(native, row).Active == 0)
             throw new InvalidDataException("This perk is a display label and has no active gameplay effect.");
-        int text = display.Relative(label + 8);
+        int text = TagPointer.Checked(display, label + TextPointer);
         if (text < texts.Data || (text - texts.Data) % TextStride != 0
             || (text - texts.Data) / TextStride >= texts.Count)
             throw new InvalidDataException("The sandbox perk display points outside its text rows.");
@@ -318,22 +334,24 @@ public static class InvestmentSandboxPerkAuthoring
     private static (uint Name, uint Tag)[] ReadRuntimeNames(ReadOnlyMemory<byte> current)
     {
         RequireSize(current);
-        var data = new TagReader(current);
-        var array = data.Array(ArrayField, RuntimeNameRowClass, 8);
+        var data = current.Span;
+        var array = TagArray.Checked(data, NameRowsField, RuntimeNameRowClass, NameStride);
         var rows = new (uint Name, uint Tag)[array.Count];
         for (int i = 0; i < rows.Length; i++)
         {
-            int at = array.Data + i * 8;
-            rows[i] = (data.U32(at), data.U32(at + 4));
+            ref readonly var row = ref TagView.At<SRuntimeNameRow>(data, array.Data + i * NameStride);
+            rows[i] = (row.NameHash, row.ProgramTag);
             if (i > 0 && rows[i - 1].Name >= rows[i].Name)
                 throw new InvalidDataException("The runtime name map is not strictly sorted.");
         }
         return rows;
     }
 
+    /** Every sandbox asset opens with a size word; the definition table root is the shortest of them. */
     private static void RequireSize(ReadOnlyMemory<byte> bytes)
     {
-        if (bytes.Length < 24 || BinaryPrimitives.ReadUInt64LittleEndian(bytes.Span) != (ulong)bytes.Length)
+        if (!TagView.Fits<SSandboxPerkDefinitionTable>(bytes.Span, 0)
+            || TagView.At<SSandboxPerkDefinitionTable>(bytes.Span).TagSize != (ulong)bytes.Length)
             throw new InvalidDataException("The sandbox asset size header is invalid.");
     }
 
@@ -345,12 +363,10 @@ public static class InvestmentSandboxPerkAuthoring
 
     private static void RequireIdentity(uint hash)
     {
-        if (hash is 0 or uint.MaxValue or InvestmentItemClone.EmptyStringHash)
+        if (hash is 0 or uint.MaxValue or StringHash.Empty)
             throw new InvalidDataException("A sandbox identity cannot be empty.");
     }
 
-    private static void U32(byte[] bytes, int offset, uint value) =>
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset), value);
     private static void I64(byte[] bytes, int offset, long value) =>
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(offset), value);
 }

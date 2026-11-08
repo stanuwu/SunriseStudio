@@ -1,4 +1,7 @@
 using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -55,6 +58,9 @@ public sealed class InvestmentStatCurve
 
 public sealed partial class InvestmentCatalog
 {
+    private static readonly int StatDisplayPointer = TagView.FieldOffset<ItemDisplayStrings>("TalentGridItemBlock"),
+        StatGroupRowsField = TagView.FieldOffset<SStatGroupTable>("Table");
+
     /** Missing context-dependent values stay raw instead of being labelled final gameplay stats. */
     private IReadOnlyDictionary<byte, InvestmentStatCurve> ReadDisplayCurves(InvestmentItem item, List<string> diagnostics)
     {
@@ -63,35 +69,42 @@ public sealed partial class InvestmentCatalog
         try
         {
             RequireClass(catalog, item.DisplayTag, DisplayClass);
-            var display = new TagReader(catalog.Read(item.DisplayTag));
-            int block = display.Relative(112);
+            ReadOnlySpan<byte> display = catalog.Read(item.DisplayTag);
+            int block = TagPointer.Checked(display, StatDisplayPointer);
             if (block < 0) return result;
-            if (block < 4 || !display.Has(block, 24) || display.U32(block - 4) != 0x80805CF1)
+            if (block < 4 || !TagView.Fits<SItemDisplayStatBlock>(display, block)
+                || new TagPointer(display, StatDisplayPointer).TargetClass != SItemDisplayStatBlock.Class)
                 throw new InvalidDataException("Item stat display block has an unexpected class.");
-            byte groupIndex = display.U8(block + 20);
+            byte groupIndex = TagView.At<SItemDisplayStatBlock>(display, block).StatGroupIndex;
             if (groupIndex == byte.MaxValue) return result;
             if (!catalog.ContainsTag(sources.StatGroups)) throw new InvalidDataException("Stat groups are unavailable.");
-            RequireClass(catalog, sources.StatGroups, 0x80805CFC);
-            var groups = new TagReader(catalog.Read(sources.StatGroups));
-            var groupRows = groups.Array(8, 0x80805D02, 56);
+            RequireClass(catalog, sources.StatGroups, SStatGroupTable.Class);
+            ReadOnlySpan<byte> groups = catalog.Read(sources.StatGroups);
+            int groupStride = Unsafe.SizeOf<SStatGroup>(), statStride = Unsafe.SizeOf<SStatGroupRow>();
+            int pointStride = Unsafe.SizeOf<SStatCurvePoint>();
+            var groupRows = TagArray.Checked(groups, StatGroupRowsField, SStatGroup.Class, groupStride);
             if (groupIndex >= 128 || groupIndex >= groupRows.Count)
                 throw new InvalidDataException("Item stat group is outside its native index.");
-            int group = groupRows.Data + groupIndex * 56;
-            uint groupHash = groups.U32(group);
-            var stats = groups.Array(group + 16, 0x80805D06, 24);
+            ref readonly var group = ref TagView.At<SStatGroup>(groups, groupRows.Data + groupIndex * groupStride);
+            uint groupHash = group.GroupHash;
+            var stats = TagArray.Checked(groups, TagView.OffsetOf(groups, in group.Stats), SStatGroupRow.Class, statStride);
             if (stats.Count > 256) throw new InvalidDataException("Stat group contains too many rows.");
             var seen = new HashSet<byte>();
             for (int i = 0; i < stats.Count; i++)
             {
-                int row = stats.Data + i * 24; byte stat = groups.U8(row);
+                ref readonly var row = ref TagView.At<SStatGroupRow>(groups, stats.Data + i * statStride);
+                byte stat = row.StatIndex;
                 if (!seen.Add(stat)) throw new InvalidDataException("Stat group contains duplicate stat rows.");
                 if (stat == 24)
                 { diagnostics.Add("Magazine display needs item context; the raw value remains editable."); continue; }
-                var curve = groups.Array(row + 8, 0x80807D1A, 8);
+                var curve = TagArray.Checked(groups, TagView.OffsetOf(groups, in row.DisplayCurve), SStatCurvePoint.Class, pointStride);
                 if (curve.Count > 4096) throw new InvalidDataException("Stat display point count is invalid.");
                 var points = new InvestmentStatPoint[curve.Count];
                 for (int j = 0; j < curve.Count; j++)
-                    points[j] = new(groups.I32(curve.Data + j * 8), groups.I32(curve.Data + j * 8 + 4));
+                {
+                    ref readonly var point = ref TagView.At<SStatCurvePoint>(groups, curve.Data + j * pointStride);
+                    points[j] = new(point.Input, point.Output);
+                }
                 result.Add(stat, new(stat, groupIndex, groupHash, points));
             }
         }

@@ -1,4 +1,7 @@
-using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Formats;
 
@@ -9,60 +12,62 @@ public sealed record InvestmentLoreRow(int Index, uint Hash, InvestmentString Ti
 /** An item's lore block holds a u16 row index into two parallel tables of the same length. */
 public static class InvestmentLore
 {
-    /** investment_globals slot 34; 40-byte rows with the lore strings. */
+    /** investment_globals slot 34; LoreTextRow rows hold the lore strings. */
     public const uint ClientTable = 0x81613CF2;
-    /** Root blob +840; 16-byte rows. Its reader has no bounds check, so both tables grow together. */
+    /** Root blob +840; LoreRow rows. Its reader has no bounds check, so both tables grow together. */
     public const uint ExeTable = 0x81319348;
     public const ushort None = 0xFFFF;
-    // Both tables keep their row array at +8.
-    private const int RowsField = 8, ClientStride = 40, ExeStride = 16;
-    private const int HashField = 8, TitleField = 12, SubtitleField = 20, BodyField = 28;
-    // The item definition points at its lore block from +40; the block's class marker precedes it.
-    private const int DefinitionBlock = 40;
-    private const uint BlockClass = 0x808077ED;
+    private static readonly int ClientRowsField = TagView.FieldOffset<C80805ab6>("Table"),
+        ExeRowsField = TagView.FieldOffset<C808077ee>("Table");
+    private static readonly int ClientStride = Unsafe.SizeOf<LoreTextRow>(), ExeStride = Unsafe.SizeOf<LoreRow>();
+    // The item definition points at its lore block; the block's class marker precedes it.
+    private static readonly int DefinitionBlock = TagView.FieldOffset<ItemDefinition>("LoreItemBlock");
     /** An empty subtitle names no bank and the empty-string hash. */
-    public static readonly InvestmentString Empty = new(0xFFFF, 0x811C9DC5);
+    public static readonly InvestmentString Empty = new(None, StringHash.Empty);
 
     /** The lore block's offset, or null when the item has none. */
     public static int? BlockOffset(ReadOnlySpan<byte> definition)
     {
-        if (definition.Length < DefinitionBlock + 8) return null;
-        long relative = BinaryPrimitives.ReadInt64LittleEndian(definition[DefinitionBlock..]);
-        if (relative == 0) return null;
-        long at = DefinitionBlock + relative;
-        if (at < 4 || at > definition.Length - 4 || BinaryPrimitives.ReadUInt32LittleEndian(definition[(int)(at - 4)..]) != BlockClass)
+        if (!TagView.Fits<RelativePointer<SItemLoreBlock>>(definition, DefinitionBlock)) return null;
+        ref readonly var pointer = ref TagView.At<RelativePointer<SItemLoreBlock>>(definition, DefinitionBlock);
+        if (pointer.IsNull) return null;
+        long at = DefinitionBlock + pointer.Relative;
+        if (at < TagView.ClassWordSize || at > definition.Length - TagView.ClassWordSize || TagView.TargetClass(definition, in pointer) != SItemLoreBlock.Class)
             throw new InvalidDataException("The item's lore block is not where its pointer says.");
         return (int)at;
     }
 
     public static ushort? ReadIndex(ReadOnlySpan<byte> definition) =>
-        BlockOffset(definition) is { } at ? BinaryPrimitives.ReadUInt16LittleEndian(definition[at..]) : null;
+        BlockOffset(definition) is { } at ? TagView.At<SItemLoreBlock>(definition, at).LoreTextRow : null;
 
     public static byte[] SetIndex(ReadOnlySpan<byte> definition, ushort index)
     {
         int at = BlockOffset(definition) ?? throw new InvalidDataException("The item has no lore block.");
         byte[] output = definition.ToArray();
-        BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(at), index);
+        TagView.Edit<SItemLoreBlock>(output, at).LoreTextRow = index;
         return output;
     }
 
-    public static int Count(ReadOnlyMemory<byte> client) => new TagReader(client).Array(RowsField, stride: ClientStride).Count;
+    public static int Count(ReadOnlyMemory<byte> client) => TagArray.Checked(client.Span, ClientRowsField, stride: ClientStride).Count;
 
     public static InvestmentLoreRow ReadRow(ReadOnlyMemory<byte> client, int index)
     {
-        var reader = new TagReader(client);
-        var rows = reader.Array(RowsField, stride: ClientStride);
+        var span = client.Span;
+        var rows = TagArray.Checked(span, ClientRowsField, stride: ClientStride);
         if (index < 0 || index >= rows.Count) throw new InvalidDataException("The lore row is outside the table.");
-        int row = rows.Data + index * ClientStride;
-        InvestmentString Read(int field) => new(reader.U16(row + field), reader.U32(row + field + 4));
-        return new(index, reader.U32(row + HashField), Read(TitleField), Read(SubtitleField), Read(BodyField));
+        ref readonly var row = ref TagView.At<LoreTextRow>(span, rows.Data + index * ClientStride);
+        return new(index, row.LoreHash, new(row.TitleBank, row.TitleHash), new(row.SubtitleBank, row.SubtitleHash),
+            new(row.BodyBank, row.BodyHash));
     }
 
     public static IReadOnlySet<uint> Hashes(ReadOnlyMemory<byte> client)
     {
-        var reader = new TagReader(client);
-        var rows = reader.Array(RowsField, stride: ClientStride);
-        return Enumerable.Range(0, rows.Count).Select(index => reader.U32(rows.Data + index * ClientStride + HashField)).ToHashSet();
+        var span = client.Span;
+        var rows = TagArray.Checked(span, ClientRowsField, stride: ClientStride);
+        var hashes = new HashSet<uint>();
+        for (int index = 0; index < rows.Count; index++)
+            hashes.Add(TagView.At<LoreTextRow>(span, rows.Data + index * ClientStride).LoreHash);
+        return hashes;
     }
 
     /**
@@ -72,35 +77,34 @@ public static class InvestmentLore
     public static (byte[] Client, byte[] Exe, int Index) Append(ReadOnlyMemory<byte> client, ReadOnlyMemory<byte> exe,
         int copyFrom, uint hash)
     {
-        var clientRows = new TagReader(client).Array(RowsField, stride: ClientStride);
-        var exeRows = new TagReader(exe).Array(RowsField, stride: ExeStride);
+        var clientRows = TagArray.Checked(client.Span, ClientRowsField, stride: ClientStride);
+        var exeRows = TagArray.Checked(exe.Span, ExeRowsField, stride: ExeStride);
         if (clientRows.Count != exeRows.Count) throw new InvalidDataException("The two lore tables differ in length.");
         if (copyFrom < 0 || copyFrom >= clientRows.Count) throw new InvalidDataException("The lore row to copy is outside the table.");
         if (clientRows.Count >= short.MaxValue) throw new InvalidDataException("The lore table has no index left.");
         if (Hashes(client).Contains(hash)) throw new InvalidDataException("The lore hash is already used.");
         byte[] clientRow = client.Span.Slice(clientRows.Data + copyFrom * ClientStride, ClientStride).ToArray();
         byte[] exeRow = exe.Span.Slice(exeRows.Data + copyFrom * ExeStride, ExeStride).ToArray();
-        BinaryPrimitives.WriteUInt32LittleEndian(clientRow.AsSpan(HashField), hash);
-        BinaryPrimitives.WriteUInt32LittleEndian(exeRow.AsSpan(HashField), hash);
-        return (InvestmentItemClone.AppendRow(client, RowsField, ClientStride, clientRow),
-            InvestmentItemClone.AppendRow(exe, RowsField, ExeStride, exeRow), clientRows.Count);
+        TagView.Edit<LoreTextRow>(clientRow).LoreHash = hash;
+        TagView.Edit<LoreRow>(exeRow).LoreHash = hash;
+        return (InvestmentItemClone.AppendRow(client, ClientRowsField, ClientStride, clientRow),
+            InvestmentItemClone.AppendRow(exe, ExeRowsField, ExeStride, exeRow), clientRows.Count);
     }
 
     public static byte[] SetStrings(ReadOnlyMemory<byte> client, int index, InvestmentString title,
         InvestmentString subtitle, InvestmentString body)
     {
-        var rows = new TagReader(client).Array(RowsField, stride: ClientStride);
+        var rows = TagArray.Checked(client.Span, ClientRowsField, stride: ClientStride);
         if (index < 0 || index >= rows.Count) throw new InvalidDataException("The lore row is outside the table.");
         byte[] output = client.ToArray();
-        int row = rows.Data + index * ClientStride;
-        void Write(int field, InvestmentString value)
-        {
-            if (value.Bank > ushort.MaxValue) throw new InvalidDataException("A lore string bank must fit 16 bits.");
-            // The bank is a u16; bytes +2 and +3 keep their stored values.
-            BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(row + field), (ushort)value.Bank);
-            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(row + field + 4), value.Hash);
-        }
-        Write(TitleField, title); Write(SubtitleField, subtitle); Write(BodyField, body);
+        // Each bank is a u16; the two bytes after it keep their stored values.
+        ref var row = ref TagView.Edit<LoreTextRow>(output, rows.Data + index * ClientStride);
+        row.TitleBank = Bank(title); row.TitleHash = title.Hash;
+        row.SubtitleBank = Bank(subtitle); row.SubtitleHash = subtitle.Hash;
+        row.BodyBank = Bank(body); row.BodyHash = body.Hash;
         return output;
     }
+
+    private static ushort Bank(InvestmentString value) => value.Bank <= ushort.MaxValue
+        ? (ushort)value.Bank : throw new InvalidDataException("A lore string bank must fit 16 bits.");
 }

@@ -4,6 +4,7 @@ using SunriseStudio.Authoring;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene.Collision;
+using SunriseStudio.Tags.Generated;
 using static Checks;
 
 /** Partial typed edits preserve raw components; unsupported trigger frames refuse admission. */
@@ -63,9 +64,9 @@ internal static class AuthoringAuditChecks
         int at = installed.File.Absolute(installed.Instances[0].Offset);
         var stored = new QsTransform(new(3, -4, 5), Quaternion.Normalize(Quaternion.CreateFromYawPitchRoll(.4f, .2f, .6f)), new(-2, 3, 4));
         byte[] raw = original.ToArray();
-        NativeRows.Write(raw, at, stored.Translation.X, stored.Translation.Y, stored.Translation.Z);
-        NativeRows.Write(raw, at + 0x10, stored.Rotation.X, stored.Rotation.Y, stored.Rotation.Z, stored.Rotation.W);
-        NativeRows.Write(raw, at + 0x20, stored.Scale.X, stored.Scale.Y, stored.Scale.Z);
+        CollisionCompoundWriter.WriteFloats(raw, at, stored.Translation.X, stored.Translation.Y, stored.Translation.Z);
+        CollisionCompoundWriter.WriteFloats(raw, at + 0x10, stored.Rotation.X, stored.Rotation.Y, stored.Rotation.Z, stored.Rotation.W);
+        CollisionCompoundWriter.WriteFloats(raw, at + 0x20, stored.Scale.X, stored.Scale.Y, stored.Scale.Z);
         BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(at + 12), StaticCompoundShape.FlagBase | StaticCompoundShape.Flags(stored, false));
         var position = new Vector3(30, 40, 50);
         var rotation = Quaternion.Normalize(Quaternion.CreateFromYawPitchRoll(-.3f, .7f, .4f));
@@ -120,10 +121,12 @@ internal static class AuthoringAuditChecks
         var target = new ObjectEditTarget(TriggerTag, ObjectEditLayout.TriggerVolume, row, 0x120, 0, 0,
             BinaryDelta.Hash(original.AsSpan(row, 0x120)));
         ObjectRows.Locate(catalog, target, original);
-        foreach (int lane in new[] { 0x30, 0x34, 0x38, 0x3C, 0x40, 0x44, 0x48 })
+        (string Member, int Lane)[] lanes = [("SpawnEntry.Rotation", 0), ("SpawnEntry.Rotation", 4), ("SpawnEntry.Rotation", 8),
+            ("SpawnEntry.Rotation", 12), ("SpawnEntry.Position", 0), ("SpawnEntry.Position", 4), ("SpawnEntry.Position", 8)];
+        foreach (var (member, lane) in lanes)
             foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity })
             {
-                byte[] raw = original.ToArray(); NativeRows.Write(raw, row + lane, invalid);
+                byte[] raw = original.ToArray(); ObjectRows.Member<STriggerVolumeRow, float>(raw, row + lane, member) = invalid;
                 Throws<NotSupportedException>(() => ObjectRows.Locate(catalog, target, raw));
             }
     }
@@ -170,7 +173,7 @@ internal static class AuthoringAuditChecks
     {
         var builder = new HavokPackfileBuilder();
         byte[] root = new byte[0xA0]; root[0x30] = 1;
-        NativeRows.Write(root, 0x80, -10, -10, -10); NativeRows.Write(root, 0x90, 10, 10, 10);
+        CollisionCompoundWriter.WriteFloats(root, 0x80, -10, -10, -10); CollisionCompoundWriter.WriteFloats(root, 0x90, 10, 10, 10);
         builder.PlaceObject(root, StaticCompoundShape.ClassName);
         var instance = new CompoundInstanceRow(new byte[StaticCompoundShape.InstanceSize], "i0", null);
         instance.SetTransform(QsTransform.Identity, false);
@@ -198,7 +201,7 @@ internal static class AuthoringAuditChecks
             int row = rows + index * 144;
             bytes.Qts(row + 16);
             int payload = bytes.Allocate(32) + 4;
-            bytes.U32(payload - 4, index == 0 ? StaticCollisionReader.CollisionMarker : StaticCollisionReader.InstancesMarker);
+            bytes.U32(payload - 4, index == 0 ? SStaticCollisionPayload.Class : SStaticInstancesPayload.Class);
             bytes.U32(payload + 16, index == 0 ? OwnerTag : TableTag);
             bytes.I64(row + 0x78, payload - row - 0x78);
         }

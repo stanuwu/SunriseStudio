@@ -17,6 +17,8 @@ internal sealed class MaterialExpressionCompiler
     }
     private IReadOnlyList<Vector4>? constants;
     private IReadOnlyDictionary<int, TfxTerm> timeTerms = new Dictionary<int, TfxTerm>();
+    // cb0 rows TFX writes; null when no row is a constant template copy.
+    private IReadOnlySet<int>? writtenRows;
     private readonly Dictionary<TfxTerm, int> imported = new(ReferenceEqualityComparer.Instance);
     private IReadOnlySet<uint> textures = new HashSet<uint>();
     // 3D texture slots; a read whose coordinates resolve becomes a "volume" node, otherwise its stand-in.
@@ -64,15 +66,17 @@ internal sealed class MaterialExpressionCompiler
      * @param water A water surface: its reflect() normal becomes the Normal output.
      * @param diagnostics Receives the inputs and operations that left some lane unknown.
      * @param volumes 3D texture slots the program may sample as "volume" nodes.
+     * @param writtenRows cb0 rows TFX writes; a lane of any other row is tagged with its template lane.
      */
     internal static BundleMaterialProgram? Compile(string text, IReadOnlyList<Vector4>? constants, string blend,
         IReadOnlySet<uint> textures, out bool approximateLoop, bool nativeTangentInputs = false,
         IReadOnlyDictionary<int, TfxTerm>? terms = null, bool worldVaryings = false, bool uvPairs = false, bool detailUv = false,
         IReadOnlyDictionary<uint, Vector4[]>? buffers = null, ShaderVaryings? varyings = null,
         IReadOnlyDictionary<uint, Vector4>? standIns = null, bool water = false, ISet<string>? diagnostics = null,
-        IReadOnlySet<uint>? volumes = null)
+        IReadOnlySet<uint>? volumes = null, IReadOnlySet<int>? writtenRows = null)
     {
         var compiler = new MaterialExpressionCompiler { constants = constants, textures = textures, worldVaryings = worldVaryings,
+            writtenRows = writtenRows,
             volumes = volumes ?? new HashSet<uint>(),
             uvPairs = uvPairs, detailUv = detailUv, timeTerms = terms ?? new Dictionary<int, TfxTerm>(),
             buffers = buffers ?? new Dictionary<uint, Vector4[]>(), varyings = varyings,
@@ -753,7 +757,10 @@ internal sealed class MaterialExpressionCompiler
                 else if (register == "cb12[6]" && component < 3) value = Add(new("view", [], Channel: component));
                 else if (register.StartsWith("cb0[") && constants is not null
                     && int.TryParse(register.AsSpan(4, register.Length - 5), out int row) && row < constants.Count)
-                    value = timeTerms.TryGetValue(row * 4 + component, out var term) ? Import(term) : Number(constants[row][component]);
+                    value = timeTerms.TryGetValue(row * 4 + component, out var term) ? Import(term)
+                        : writtenRows?.Contains(row) == false && float.IsFinite(constants[row][component])
+                        ? Add(new("constant", [], constants[row][component]) { TemplateLane = row * 4 + component })
+                        : Number(constants[row][component]);
                 else if (Regex.Match(register, @"^cb(?<slot>\d+)\[(?<row>\d+)\]$") is { Success: true } buffer
                     && buffers.TryGetValue(uint.Parse(buffer.Groups["slot"].Value), out var rows)
                     && int.Parse(buffer.Groups["row"].Value) is var bufferRow && bufferRow < rows.Length)
@@ -1023,7 +1030,7 @@ internal sealed class MaterialExpressionCompiler
             unresolved.Add("nonfinite");
             return -1;
         }
-        string key = $"{value.Operation}:{value.Value:R}:{value.Slot}:{value.Channel}:{value.SamplerSlot}:{string.Join(',', value.Inputs)}";
+        string key = $"{value.Operation}:{value.Value:R}:{value.Slot}:{value.Channel}:{value.SamplerSlot}:{value.TemplateLane}:{string.Join(',', value.Inputs)}";
         if (cache.TryGetValue(key, out int existing)) return existing;
         int index = nodes.Count; nodes.Add(value); cache.Add(key, index); return index;
     }

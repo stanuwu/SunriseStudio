@@ -6,8 +6,8 @@ using SunriseStudio.Editor;
 using SunriseStudio.Editor.Creation;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
-using SunriseStudio.Viewport;
 using SunriseStudio.Scene;
+using SunriseStudio.Viewport;
 using System.Numerics;
 
 namespace SunriseStudio.Creation.Tests;
@@ -188,7 +188,7 @@ internal static class ExoticWeaponWorkflowChecks
     }
 
     private static uint Tag(SunriseStudio.Projects.NativeAssetMetadata metadata) =>
-        checked(0x80800000U + ((uint)metadata.PackageId << 13) + (uint)metadata.EntryIndex!.Value);
+        TagHashes.Make(metadata.PackageId, metadata.EntryIndex!.Value);
     private static long I64(byte[] bytes, int offset) => BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(offset));
     private static void Wait(StudioWorkspace workspace)
     {

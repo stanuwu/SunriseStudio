@@ -7,7 +7,7 @@
     <EmbeddedResource Include="Data/NativeRenderStates86657.json" LogicalName="NativeRenderStates86657.json" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="../SunriseStudio.Packages/SunriseStudio.Packages.csproj" />
+    <ProjectReference Include="../SunriseStudio.Tags/SunriseStudio.Tags.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="SunriseStudio.Rendering.Validation" />

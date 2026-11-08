@@ -1,10 +1,13 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using SunriseStudio.Interchange;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using Vortice.D3DCompiler;
 
 /**
@@ -99,13 +102,13 @@ internal static class WorldLightChecks
             + $" volumes=1 sky_fill={fill:P1} path={path}");
     }
 
-    /** A class-0x80806B7F resource: payload +0x10 holds the half sizes, +0xF0 the box to world. */
+    /** A cubemap resource with its half sizes and its box to world. */
     private static byte[] CubemapResource(Matrix4x4 box, Vector3 extents)
     {
-        var bytes = new byte[0x1C0];
-        Rows(new Vector4(extents, 0)).CopyTo(bytes, 0x20);
-        Rows(new(box.M11, box.M12, box.M13, box.M14), new(box.M21, box.M22, box.M23, box.M24), new(box.M31, box.M32, box.M33, box.M34),
-            new(box.M41, box.M42, box.M43, box.M44)).CopyTo(bytes, 0x100);
+        var bytes = new byte[Unsafe.SizeOf<UnknownCubemapPayload>()];
+        ref var payload = ref TagView.Edit<UnknownCubemapPayload>(bytes);
+        payload.Extents = extents;
+        payload.SourceMatrixF0 = box;
         return bytes;
     }
 

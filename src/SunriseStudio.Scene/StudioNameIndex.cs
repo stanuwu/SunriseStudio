@@ -1,3 +1,4 @@
+using SunriseStudio.Tags.Generated;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
@@ -129,14 +130,14 @@ public sealed partial class StudioNameIndex
                 token.ThrowIfCancellationRequested();
                 string? title = entry.Reference switch
                 {
-                    0x808091DE => game.MapTitle(entry.TagHash),
-                    0x80809994 => ActivityName(game.Scenario(entry.TagHash)),
-                    0x80807DAE when game.BubbleNameHash(entry.TagHash) is { } bubble => game.BubbleName(bubble),
+                    SMapRoot.Class => game.MapTitle(entry.TagHash),
+                    SScenario.Class => ActivityName(game.Scenario(entry.TagHash)),
+                    SBubbleParent.Class when game.BubbleNameHash(entry.TagHash) is { } bubble => game.BubbleName(bubble),
                     _ => null
                 };
                 if (title is not null && !AssetSceneLoader.IsPlaceholderName(title)) AddTag(entry.TagHash, new(title, StudioNameSource.Localization,
                     title.EndsWith(" (candidate)", StringComparison.Ordinal) ? StudioNameConfidence.Candidate
-                        : entry.Reference == 0x808091DE ? StudioNameConfidence.Contextual : StudioNameConfidence.Authored,
+                        : entry.Reference == SMapRoot.Class ? StudioNameConfidence.Contextual : StudioNameConfidence.Authored,
                     "Installed map and activity strings", 10, entry.TagHash));
             }
             Publish("Localized names", false);
@@ -230,7 +231,7 @@ public sealed partial class StudioNameIndex
     /** Conflicting hash preimages stay unresolved instead of selecting the first match. */
     public string? ResolveHash(uint hash)
     {
-        if (hash is 0 or uint.MaxValue or 0x811C9DC5) return null;
+        if (hash is 0 or uint.MaxValue or StringHash.Empty) return null;
         if (GameNames?.Strings.Get(hash) is { } localized) return localized;
         if (!hashNames.TryGetValue(hash, out var values) || values.Length == 0) return null;
         var best = values.Where(x => x.Priority == values[0].Priority).ToArray();
@@ -337,7 +338,7 @@ public sealed partial class StudioNameIndex
 
     private void LoadComponentNames(GameNames game, CancellationToken token, Action<string>? progress)
     {
-        var selected = catalog.Entries.Where(x => x.Reference is 0x80809C0F or 0x80809C36 or 0x80809802).ToArray();
+        var selected = catalog.Entries.Where(x => x.Reference is SEntity.Class or SEntityConfig.Class or SWwiseEvent.Class).ToArray();
         for (int i = 0; i < selected.Length; i++)
         {
             token.ThrowIfCancellationRequested();
@@ -417,8 +418,8 @@ public sealed partial class StudioNameIndex
 
     private static string Kind(PackageEntry entry) => entry.Reference switch
     {
-        0x80804825 => "CUI resource", 0x8080496A => "CUI program", 0x8080941E => "Behavior",
-        0x80807BEA => "Investment item", 0x80805CE1 => "Item display", 0x8080306D => "Collections",
+        CuiResource.Class => "CUI resource", SCuiHierarchy.Class => "CUI program", ObjectBehaviorRoot.Class => "Behavior",
+        ItemDefinition.Class => "Investment item", ItemDisplayStrings.Class => "Item display", CollectibleTable.Class => "Collections",
         _ when AssetCategories.CategoryOf(entry) != "Other" => Humanize(AssetCategories.CategoryOf(entry)),
         _ when AssetCategories.IsStructured(entry) => ClassNames.Get(entry.Reference) is { } name ? Humanize(name) : "Asset",
         _ => "Binary asset"

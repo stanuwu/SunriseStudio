@@ -1,4 +1,6 @@
 using System.Numerics;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Animation;
 
@@ -14,19 +16,21 @@ internal sealed class SparseAnimationCodec
     internal SparseAnimationCodec(AnimationControlReader.Data data, int resource, int frames,
         int scales, int rotations, int translations)
     {
-        if (data.U16(resource + 2) != scales || data.U16(resource + 4) != rotations
-            || data.U16(resource + 6) != translations)
+        static int At(int resource, string member) => resource + TagView.FieldOffset<SAnimationCodec1Sparse>(member);
+        if (data.U16(At(resource, nameof(SAnimationCodec1Sparse.ScaleTrackCount))) != scales
+            || data.U16(At(resource, nameof(SAnimationCodec1Sparse.RotationTrackCount))) != rotations
+            || data.U16(At(resource, nameof(SAnimationCodec1Sparse.TranslationTrackCount))) != translations)
             throw new InvalidDataException("Sparse codec counts disagree with the control maps.");
         this.frames = frames;
         scaleCount = scales;
         rotationCount = rotations;
-        dense = data.SignedWords(resource + 0x10);
-        descriptors = data.SignedWords(resource + 0x20);
-        durations = data.Bytes(resource + 0x30);
-        tangents = data.Bytes(resource + 0x40);
-        extents = data.Floats(resource + 0x50);
-        biases = data.Floats(resource + 0x60);
-        tracks = data.SignedWords(resource + 0x70);
+        dense = data.SignedWords(At(resource, nameof(SAnimationCodec1Sparse.DenseSamples)));
+        descriptors = data.SignedWords(At(resource, nameof(SAnimationCodec1Sparse.SegmentDescriptors)));
+        durations = data.Bytes(At(resource, nameof(SAnimationCodec1Sparse.SegmentDurations)));
+        tangents = data.Bytes(At(resource, nameof(SAnimationCodec1Sparse.SparseTangents)));
+        extents = data.Floats(At(resource, nameof(SAnimationCodec1Sparse.Extents)));
+        biases = data.Floats(At(resource, nameof(SAnimationCodec1Sparse.Biases)));
+        tracks = data.SignedWords(At(resource, nameof(SAnimationCodec1Sparse.Offsets)));
         if (tracks.Length < scales + rotations + translations || extents.Length < scales + translations
             || biases.Length != extents.Length)
             throw new InvalidDataException("Sparse codec tables omit a track or quantizer.");

@@ -1,0 +1,49 @@
+{
+  "schema_version": 0,
+  "name": "bubble_a",
+  "kind": "outdoor",
+  "bounds": {
+    "min": [
+      -16,
+      -16,
+      -8
+    ],
+    "max": [
+      16,
+      16,
+      24
+    ]
+  },
+  "neighbours": [
+    "bubble_b"
+  ],
+  "statics": [
+    {
+      "name": "terrain_and_block",
+      "glb": "static.glb",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "scale": 1
+    }
+  ],
+  "spawn_points": [
+    {
+      "name": "arrival",
+      "position": [
+        0,
+        -8,
+        -0.1
+      ],
+      "facing": 90
+    }
+  ]
+}

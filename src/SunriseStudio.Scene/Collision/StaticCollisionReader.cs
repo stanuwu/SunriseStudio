@@ -1,14 +1,17 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene.Collision;
 
-/** A placement row whose payload names a tag: list, row, payload marker, tag and transform. */
+/** A placement row with a payload: list, row, marker, named tag (0 for none) and transform. */
 public readonly record struct PlacedPayload(uint ListTag, int Row, uint Marker, uint Tag, QsTransform Placement)
 {
     /** Offset of the payload in the list. */
     public int PayloadOffset { get; init; }
-    /** The i32 at payload +0x18: a trigger volume row's shape index; -1 past the list's end. */
+    /** A trigger volume row's shape index; -1 for another payload class or past the list's end. */
     public int ShapeIndex { get; init; } = -1;
 }
 
@@ -63,12 +66,10 @@ public sealed class StaticCollisionSet
  */
 public sealed class StaticCollisionReader(PackageCatalog catalog)
 {
-    public const uint ObjectListClass = 0x808099D6, PlacementRowClass = 0x808099D8;
-    public const uint CollisionMarker = 0x80808A13, OwnerClass = 0x80808A15;
-    public const uint InstancesMarker = 0x808071B3;
+    public const uint ObjectListClass = SMapPlacements.Class, PlacementRowClass = AuthoredPlacementEntry.Class;
+    public const uint OwnerClass = SCollisionOwner.Class;
     // The client refuses a collision entity whose placement scale is not within 1e-4 of 1.
     public const float PlacementScaleTolerance = 1e-4f;
-    private const uint ArrayMarker = 0x80809FBD;
 
     private readonly Dictionary<(uint Tag, int Offset), CollisionShape> shapes = [];
     private readonly Dictionary<uint, HavokPackfile?> packfiles = [];
@@ -89,7 +90,7 @@ public sealed class StaticCollisionReader(PackageCatalog catalog)
     {
         var set = new StaticCollisionSet();
         foreach (uint list in objectLists.Distinct().Order())
-            foreach (var payload in PlacedPayloads(catalog.Read(list), list).Where(p => p.Marker == CollisionMarker))
+            foreach (var payload in PlacedPayloads(catalog.Read(list), list).Where(p => p.Marker == SStaticCollisionPayload.Class))
             {
                 token.ThrowIfCancellationRequested();
                 ReadEntity(set, payload);
@@ -97,41 +98,56 @@ public sealed class StaticCollisionReader(PackageCatalog catalog)
         return set;
     }
 
-    /**
-     * Rows of a 0x808099D6 object list whose +0x78 payload carries a tag at +0x10.
-     * The placement is the row's rotation at +0x10, translation at +0x20 and scale lane at +0x2C.
-     */
+    /** Rows of a 0x808099D6 object list with a payload, whatever its class. */
     public static IEnumerable<PlacedPayload> PlacedPayloads(byte[] objectList, uint listTag)
     {
-        var data = new TagData(objectList);
-        foreach (int row in data.Rows(8, PlacementRowClass, 144))
-        {
-            int field = row + 0x78;
-            if (data.I64(field) == 0) continue;
-            long payload = field + data.I64(field);
-            if (payload < 4 || payload > data.Length - 0x14) continue;
-            int at = (int)payload;
-            float scale = data.F32(row + 0x2C);
-            yield return new(listTag, row, data.U32(at - 4), data.U32(at + 0x10),
-                new(data.V3(row + 0x20), data.Q4(row + 0x10), new Vector3(scale)))
-            { PayloadOffset = at, ShapeIndex = data.Has(at + 0x18, 4) ? data.I32(at + 0x18) : -1 };
-        }
+        foreach (var payload in ReadPayloads(objectList, listTag)) yield return payload;
     }
+
+    private static List<PlacedPayload> ReadPayloads(byte[] objectList, uint listTag)
+    {
+        var result = new List<PlacedPayload>();
+        ref readonly var list = ref TagView.Checked<SMapPlacements>(objectList, 0);
+        foreach (ref readonly var row in TagView.Rows(objectList, in list.Placements, PlacementRowClass))
+        {
+            if (row.Payload.IsNull) continue;
+            long payload = TagView.OffsetOf(objectList, in row.Payload) + row.Payload.Relative;
+            // Any row is kept whose payload reaches a collision payload's owner word.
+            if (payload < TagView.ClassWordSize || payload > objectList.Length || !TagView.FitsThrough<SStaticCollisionPayload>(objectList, (int)payload,
+                    nameof(SStaticCollisionPayload.CollisionOwner))) continue;
+            int at = (int)payload;
+            uint marker = TagView.TargetClass(objectList, in row.Payload)!.Value;
+            const string shapeIndex = nameof(TriggerShapeReference.ShapeIndex);
+            result.Add(new(listTag, TagView.OffsetOf(objectList, in row), marker, PlacementPayloads.Tag(objectList, at, marker),
+                new(row.Position, row.Rotation, new Vector3(row.UniformScale)))
+            {
+                PayloadOffset = at,
+                ShapeIndex = marker == TriggerShapeReference.Class && TagView.FitsThrough<TriggerShapeReference>(objectList, at, shapeIndex)
+                    ? TagView.Member<TriggerShapeReference, int>(objectList, at, shapeIndex) : -1
+            });
+        }
+        return result;
+    }
+
+    // Owner import lists above this count are refused.
+    private const int MaximumImports = TagArray.MaximumReaderRows;
 
     public static StaticCollisionOwner ReadOwner(uint tag, byte[] owner)
     {
-        var data = new TagData(owner);
-        long count = data.I64(0x48), relative = data.I64(0x50);
+        ref readonly var view = ref TagView.Checked<SCollisionOwner>(owner, 0);
         var imports = new List<uint>();
-        if (count != 0 || relative != 0)
+        // A zero count with a non-null link still needs a valid header.
+        if (view.ImportTags.Count != 0 || view.ImportTags.Relative != 0)
         {
-            long header = 0x50 + relative;
-            if (count is < 0 or > 1_000_000 || header < 4 || header + 16 + 4 * count > data.Length
-                || data.U32((int)header - 4) != ArrayMarker || data.I64((int)header) != count)
+            long count = view.ImportTags.Count;
+            int stride = Unsafe.SizeOf<TagReferenceElement>();
+            var header = new TagArray(owner, TagView.OffsetOf(owner, in view.ImportTags)).Header;
+            if (count is < 0 or > MaximumImports || !header.IsWellFormed || header.Count != count || !header.RowsFit(stride))
                 throw new InvalidDataException("Collision owner import list is invalid.");
-            for (int i = 0; i < count; i++) imports.Add(data.U32((int)header + 16 + 4 * i));
+            for (int i = 0; i < count; i++)
+                imports.Add(TagView.At<TagReferenceElement>(owner, (int)header.DataOffset + i * stride).Tag);
         }
-        return new(tag, data.U32(0x58), imports);
+        return new(tag, view.CompoundPackfile, imports);
     }
 
     /** Object lists under the map's bubbles and containers, whatever their layer mask. */
@@ -146,21 +162,32 @@ public sealed class StaticCollisionReader(PackageCatalog catalog)
             if (!seen.Add(tag) || !catalog.TryGetEntry(tag, out var entry)) continue;
             switch (entry.Reference)
             {
-                case 0x808091DE:
-                    var map = new TagData(Read(tag));
-                    foreach (int row in map.Rows(0x10, 0x80807D53, 16)) Push(map, row);
+                case SMapRoot.Class:
+                {
+                    byte[] map = Read(tag);
+                    ref readonly var root = ref TagView.Checked<SMapRoot>(map, 0);
+                    foreach (ref readonly var row in TagView.Rows(map, in root.MapEntries, MapBubbleRef.Class)) Push(row.NarrowTag, row.WideTag);
                     break;
-                case 0x80807DAE:
-                    pending.Push(new TagData(Read(tag)).U32(8));
+                }
+                case SBubbleParent.Class:
+                    pending.Push(TagView.Checked<SBubbleParent>(Read(tag), 0).BubbleLink);
                     break;
-                case 0x808091E0:
-                    var group = new TagData(Read(tag));
-                    foreach (int row in group.Rows(8, 0x808084C1, 16)) Push(group, row);
+                case SBubbleDefinition.Class:
+                {
+                    byte[] group = Read(tag);
+                    ref readonly var bubble = ref TagView.Checked<SBubbleDefinition>(group, 0);
+                    foreach (ref readonly var row in TagView.Rows(group, in bubble.BubbleChildren, SBubbleChildRef.Class))
+                        Push(row.NarrowTag, row.WideTag);
                     break;
-                case 0x80808A54:
-                    var container = new TagData(Read(tag));
-                    foreach (int row in container.Rows(0x28, 0x80808BB0, 4)) pending.Push(container.U32(row));
+                }
+                case SMapContainer.Class:
+                {
+                    byte[] container = Read(tag);
+                    ref readonly var members = ref TagView.Checked<SMapContainer>(container, 0);
+                    foreach (ref readonly var row in TagView.Rows(container, in members.Contents, ContainerMember.Class))
+                        pending.Push(row.MemberTag);
                     break;
+                }
                 case ObjectListClass:
                     lists.Add(tag);
                     break;
@@ -168,10 +195,10 @@ public sealed class StaticCollisionReader(PackageCatalog catalog)
         }
         return lists.ToArray();
 
-        // A reference of 0xFFFFFFFF carries a 64-bit hash in the next 8 bytes.
-        void Push(TagData data, int row)
+        // A narrow reference of 0xFFFFFFFF uses the 64-bit hash beside it.
+        void Push(uint narrow, ulong wide)
         {
-            uint child = data.U32(row) == uint.MaxValue ? catalog.Resolve64(data.U64(row + 8)) ?? 0 : data.U32(row);
+            uint child = narrow == uint.MaxValue ? catalog.Resolve64(wide) ?? 0 : narrow;
             if (child != 0) pending.Push(child);
         }
     }

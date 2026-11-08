@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Interchange;
 
@@ -12,7 +13,7 @@ internal static class NativeVertexMotion
     internal static BundleVertexMotion? Read(PackageCatalog catalog, MeshData mesh, GameMaterialReader reader)
     {
         if (mesh.Native is not { Kind: NativeMeshKind.Entity, InputLayoutVerified: true } native) return null;
-        if (!catalog.TryGetEntry(mesh.MaterialTag, out var entry) || entry.Reference != 0x808071E8) return null;
+        if (!catalog.TryGetEntry(mesh.MaterialTag, out var entry) || entry.Reference != STechnique.Class) return null;
         var material = reader.Read(mesh.MaterialTag);
         if (material.VertexShader is not { } shader) return null;
         string hash = Convert.ToHexString(SHA256.HashData(reader.ReadShaderBytecode(shader)));

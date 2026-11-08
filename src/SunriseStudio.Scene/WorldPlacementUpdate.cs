@@ -1,5 +1,8 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -9,9 +12,9 @@ namespace SunriseStudio.Scene;
  */
 public sealed class WorldPlacementUpdate
 {
-    private const uint InstanceTable = 0x8080966D, PlacementList = 0x808099D6, Config = 0x80809C36,
-        LightTable = 0x8080713A, SpawnList = 0x80809162, OwnerRecord = 0x80806EF4, InstanceBounds = 0x80809671,
-        Container = 0x80808A54, ContainerMember = 0x80808BB0;
+    private const uint InstanceTable = SStaticMeshInstances.Class, PlacementList = SMapPlacements.Class, Config = SEntityConfig.Class,
+        LightTable = SLightCollection.Class, SpawnList = SSpawnPoints.Class, OwnerRecord = SMapResourceLink.Class,
+        InstanceBounds = SInstanceBoundsTable.Class, Container = SMapContainer.Class;
 
     /** Classes whose decoded bytes the world keeps; an edit is diffed against them. */
     internal static readonly IReadOnlySet<uint> SnapshotClasses = new HashSet<uint>
@@ -137,8 +140,8 @@ public sealed class WorldPlacementUpdate
             if (bytes.Length != old.Length) return $"Asset {tag:X8} changed size.";
             var changed = ChangedBytes(old, bytes);
             if (changed.Count == 0) continue;
-            var before = new TagData(old);
-            var data = new TagData(bytes);
+            var before = old;
+            var data = bytes;
             if (!SameScans(tag, entry, before, data)) return $"Asset {tag:X8} changed decoded structure.";
             var rows = PlacementRanges(tag, entry.Reference, data);
             var touched = new SortedSet<(RowKind Kind, int Row)>();
@@ -163,7 +166,7 @@ public sealed class WorldPlacementUpdate
 
     /** Generated entries take tags in the new package range, so a removed one still reads as generated. */
     private static bool IsGeneratedTag(uint tag) =>
-        tag >= 0x80800000 && PackageWriter.IsNewPackageId((int)((tag - 0x80800000) >> 13));
+        TagHashes.IsTag(tag) && PackageWriter.IsNewPackageId((int)TagHashes.Package(tag));
 
     /**
      * Accepts a container whose only change adds or drops generated placement lists.
@@ -175,8 +178,10 @@ public sealed class WorldPlacementUpdate
     {
         // The member array is rewritten at the end; the installed body and other header fields stay.
         int body = Math.Min(catalog.ReadOriginal(tag).Length, Math.Min(old.Length, bytes.Length));
-        if (body < 0x38 || !old.AsSpan(8, 0x20).SequenceEqual(bytes.AsSpan(8, 0x20))
-            || !old.AsSpan(0x38, body - 0x38).SequenceEqual(bytes.AsSpan(0x38, body - 0x38)))
+        int header = Unsafe.SizeOf<SMapContainer>();
+        if (body < header
+            || !((ReadOnlySpan<byte>)TagView.At<SMapContainer>(old).BubbleMask).SequenceEqual(TagView.At<SMapContainer>(bytes).BubbleMask)
+            || !old.AsSpan(header, body - header).SequenceEqual(bytes.AsSpan(header, body - header)))
             return $"Asset {tag:X8} changed more than its generated members.";
         uint[] before = Members(old), after = Members(bytes);
         if (!before.Where(member => !IsGeneratedTag(member)).SequenceEqual(after.Where(member => !IsGeneratedTag(member))))
@@ -191,8 +196,11 @@ public sealed class WorldPlacementUpdate
 
         static uint[] Members(byte[] value)
         {
-            var data = new TagData(value);
-            return data.Rows(0x28, ContainerMember, 4).Select(data.U32).ToArray();
+            ref readonly var container = ref TagView.Checked<SMapContainer>(value, 0);
+            var rows = TagView.Rows(value, in container.Contents, ContainerMember.Class);
+            var members = new uint[rows.Length];
+            for (int i = 0; i < rows.Length; i++) members[i] = rows[i].MemberTag;
+            return members;
         }
     }
 
@@ -220,50 +228,89 @@ public sealed class WorldPlacementUpdate
     }
 
     /** A word scan can find structure in any field, so its results must not change. */
-    private static bool SameScans(uint tag, PackageEntry entry, TagData before, TagData after)
+    private static bool SameScans(uint tag, PackageEntry entry, byte[] before, byte[] after)
     {
         if (entry.Type is 8 or 16 && !AssetSceneLoader.InlineNames(before).SequenceEqual(AssetSceneLoader.InlineNames(after)))
             return false;
         if (entry.Reference != Config) return true;
         return AssetSceneLoader.DescriptorCandidates(tag, before).SequenceEqual(AssetSceneLoader.DescriptorCandidates(tag, after))
             && AssetSceneLoader.TriggerLinkOffsets(before).SequenceEqual(AssetSceneLoader.TriggerLinkOffsets(after))
-            && AssetSceneLoader.TriggerLinkOffsets(after).All(offset => before.U64(offset + 8) == after.U64(offset + 8));
+            && AssetSceneLoader.TriggerLinkOffsets(after).All(offset => SameClientRef(before, after,
+                offset + TagBlock.RecordHeaderSize));
+    }
+
+    private static bool SameClientRef(byte[] before, byte[] after, int at)
+    {
+        ref readonly var left = ref TagView.At<ClientRef>(before, at);
+        ref readonly var right = ref TagView.At<ClientRef>(after, at);
+        return left.TargetKey == right.TargetKey && left.TargetSlotType == right.TargetSlotType
+            && left.TargetSlotIndex == right.TargetSlotIndex;
     }
 
     /** Byte ranges each decoded row reads for its placement, sorted by start. */
-    private List<(int Start, int End, RowKind Kind, int Row)> PlacementRanges(uint tag, uint type, TagData data)
+    private List<(int Start, int End, RowKind Kind, int Row)> PlacementRanges(uint tag, uint type, byte[] data)
     {
         var result = new List<(int, int, RowKind, int)>();
+        // Each range runs from the first placement field to the end of the last one.
         switch (type)
         {
             case InstanceTable:
-                var instanceRows = data.Rows(0x40, 0x808071A3, 48);
+            {
+                ref readonly var table = ref TagView.Checked<SStaticMeshInstances>(data, 0);
+                var instanceRows = TagView.Rows(data, in table.Instances.Transforms, SStaticInstanceTransform.Class);
                 for (int index = 0; index < instanceRows.Length; index++)
-                    result.Add((instanceRows[index], instanceRows[index] + 32, RowKind.Instance, index));
+                    result.Add((TagView.OffsetOf(data, in instanceRows[index].Rotation),
+                        TagView.OffsetOf(data, in instanceRows[index].Scale) + sizeof(float), RowKind.Instance, index));
                 break;
+            }
             case PlacementList:
-                foreach (int row in data.Rows(8, 0x808099D8, 144)) result.Add((row + 0x10, row + 0x30, RowKind.Placement, row));
+            {
+                ref readonly var list = ref TagView.Checked<SMapPlacements>(data, 0);
+                foreach (ref readonly var row in TagView.Rows(data, in list.Placements, AuthoredPlacementEntry.Class))
+                    result.Add((TagView.OffsetOf(data, in row.Rotation), TagView.OffsetOf(data, in row.UniformScale) + sizeof(float),
+                        RowKind.Placement, TagView.OffsetOf(data, in row)));
                 break;
+            }
             case LightTable:
-                var lightRows = data.Rows(0x40, 0x80809F75, 32);
+            {
+                ref readonly var table = ref TagView.Checked<SLightCollection>(data, 0);
+                var lightRows = TagView.Rows(data, in table.LightTransforms, SAnimationControlDefault.Class);
                 for (int index = 0; index < lightRows.Length; index++)
-                    result.Add((lightRows[index], lightRows[index] + 32, RowKind.Light, index));
+                    result.Add((TagView.OffsetOf(data, in lightRows[index].Rotation),
+                        TagView.OffsetOf(data, in lightRows[index].Scale) + sizeof(float), RowKind.Light, index));
                 break;
+            }
             case SpawnList:
-                foreach (int row in data.Rows(8, 0x80809164, 48)) result.Add((row, row + 32, RowKind.Spawn, row));
+            {
+                ref readonly var list = ref TagView.Checked<SSpawnPoints>(data, 0);
+                foreach (ref readonly var row in TagView.Rows(data, in list.SpawnPoints, SSpawnPointRow.Class))
+                    result.Add((TagView.OffsetOf(data, in row.Rotation), TagView.OffsetOf(data, in row.Unk1c) + sizeof(float),
+                        RowKind.Spawn, TagView.OffsetOf(data, in row)));
                 break;
+            }
             case DecoratorTags.BlockClass:
-                var records = data.Rows(0x08, DecoratorTags.RecordClass, DecoratorRecords.Size);
+            {
+                ref readonly var block = ref TagView.Checked<SDecoratorBlock>(data, 0);
+                var records = TagView.Rows(data, in block.Records, DecoratorTags.RecordClass);
                 for (int index = 0; index < records.Length; index++)
-                    result.Add((records[index], records[index] + DecoratorRecords.Size, RowKind.Decorator, index));
+                {
+                    int start = TagView.OffsetOf(data, in records[index]);
+                    result.Add((start, start + DecoratorRecords.Size, RowKind.Decorator, index));
+                }
                 break;
+            }
             case Config:
                 // Only rows the world decoded have a placement to move.
                 foreach (var marker in SourceMarkers().Where(marker => marker.SourceTag == tag).DistinctBy(marker => (marker.Layer, marker.SourceOffset)))
                     if (marker.Layer == SceneLayer.Volumes)
-                        result.Add((marker.SourceOffset + 0xB0, marker.SourceOffset + 0xD0, RowKind.Trigger, marker.SourceOffset));
+                        result.Add((marker.SourceOffset + TagView.FieldOffset<STriggerVolumeRow>("Sector.BoundsMin"),
+                            marker.SourceOffset + TagView.FieldOffset<STriggerVolumeRow>("Sector.BoundsMaxW") + sizeof(float),
+                            RowKind.Trigger, marker.SourceOffset));
                     else if (marker is { Layer: SceneLayer.Objects, Slot.Type: 4 })
-                        result.Add((marker.SourceOffset + 0x10, marker.SourceOffset + 0x30, RowKind.Slot, marker.SourceOffset));
+                        result.Add((marker.SourceOffset + TagView.FieldOffset<AuthoredPlacementEntry>(nameof(AuthoredPlacementEntry.Rotation)),
+                            marker.SourceOffset + TagView.FieldOffset<AuthoredPlacementEntry>(nameof(AuthoredPlacementEntry.UniformScale))
+                                + sizeof(float),
+                            RowKind.Slot, marker.SourceOffset));
                 break;
         }
         result.Sort((a, b) => a.Item1.CompareTo(b.Item1));
@@ -286,14 +333,20 @@ public sealed class WorldPlacementUpdate
     /** Bytes an object edit rewrites that no viewer path reads. */
     private static bool Ignored(uint type, int offset) => type switch
     {
-        // The table's aggregate box.
-        InstanceTable => offset is >= 0x80 and < 0xA0,
-        // The culling mode byte.
-        OwnerRecord => offset == 0x20,
-        // The payload's bounding box.
-        DecoratorTags.PayloadClass => offset is >= 0x70 and < 0x90,
+        InstanceTable => offset >= AggregateBoxStart && offset < AggregateBoxEnd,
+        OwnerRecord => offset == CullingMode,
+        DecoratorTags.PayloadClass => offset >= PayloadBoxStart && offset < PayloadBoxEnd,
         _ => false
     };
+
+    // Each table is the tag's root object, so a member offset is its tag offset.
+    private static readonly int AggregateBoxStart = TagView.FieldOffset<SStaticMeshInstances>("Instances.AggregateMinimumW1");
+    private static readonly int AggregateBoxEnd =
+        TagView.FieldOffset<SStaticMeshInstances>("Instances.AggregateMaximumW1") + Unsafe.SizeOf<Vector4>();
+    private static readonly int CullingMode = TagView.FieldOffset<SMapResourceLink>(nameof(SMapResourceLink.VisibilityMode0DynamicIds1Map));
+    private static readonly int PayloadBoxStart = TagView.FieldOffset<SDecoratorPayload>(nameof(SDecoratorPayload.BoundsMinimumW1));
+    private static readonly int PayloadBoxEnd =
+        TagView.FieldOffset<SDecoratorPayload>(nameof(SDecoratorPayload.BoundsMaximumW1)) + Unsafe.SizeOf<Vector4>();
 
     private IEnumerable<SceneMarker> SourceMarkers() => decoded.SelectMany(scene => scene.Markers);
     private IEnumerable<MeshInstance> SourceInstances() => decoded.SelectMany(scene => scene.Instances);
@@ -301,16 +354,18 @@ public sealed class WorldPlacementUpdate
     private bool FeedsSquads(uint tag, int row) => scenes.Any(scene => scene.SquadSourceRows.Contains((tag, row)));
 
     /** @return Why the row cannot move in place; empty when its update was queued. */
-    private string Move(AssetSceneLoader loader, uint tag, RowKind kind, int row, TagData data)
+    private string Move(AssetSceneLoader loader, uint tag, RowKind kind, int row, byte[] data)
     {
         switch (kind)
         {
             case RowKind.Instance:
-                int offset = data.Rows(0x40, 0x808071A3, 48)[row];
+                ref readonly var table = ref TagView.Checked<SStaticMeshInstances>(data, 0);
+                int offset = TagView.OffsetOf(data,
+                    in TagView.Rows(data, in table.Instances.Transforms, SStaticInstanceTransform.Class)[row]);
                 foreach (var instance in byInstanceRow[(tag, row)])
                 {
                     var transform = AssetSceneLoader.InstanceTransform(data, offset, instance.InstanceParent);
-                    var bytes = data.Bytes.AsMemory(offset, 48);
+                    var bytes = data.AsMemory(offset, Unsafe.SizeOf<SStaticInstanceTransform>());
                     MoveInstance(instance, transform, bytes);
                 }
                 return "";
@@ -319,7 +374,7 @@ public sealed class WorldPlacementUpdate
             case RowKind.Slot:
                 if (FeedsSquads(tag, row)) return "The placement anchors a squad.";
                 var (slotPosition, slotRotation) = AssetSceneLoader.SlotPose(data, row);
-                var model = AssetSceneLoader.Placement(data, row + 0x10);
+                var model = AssetSceneLoader.EntryPlacement(data, row);
                 foreach (var marker in SourceMarkers().Where(item => item is { Layer: SceneLayer.Objects, Slot.Type: 4 }
                     && item.SourceTag == tag && item.SourceOffset == row))
                     MoveMarker(marker, slotPosition, slotRotation, marker.Extents);
@@ -327,13 +382,15 @@ public sealed class WorldPlacementUpdate
                     MoveInstance(instance, model, instance.NativeInstanceData);
                 return "";
             case RowKind.Trigger:
-                var box = AssetSceneLoader.TriggerBox(data, row);
+                var box = AssetSceneLoader.TriggerBox(in TagView.At<STriggerVolumeRow>(data, row));
                 foreach (var marker in SourceMarkers().Where(item => item.Layer == SceneLayer.Volumes
                     && item.SourceTag == tag && item.SourceOffset == row))
                     MoveMarker(marker, box.Position, marker.Rotation, box.Extents);
                 return "";
             case RowKind.Light:
-                int transformRow = data.Rows(0x40, 0x80809F75, 32)[row];
+                ref readonly var lights = ref TagView.Checked<SLightCollection>(data, 0);
+                int transformRow = TagView.OffsetOf(data,
+                    in TagView.Rows(data, in lights.LightTransforms, SAnimationControlDefault.Class)[row]);
                 var pose = AssetSceneLoader.LightPose(data, transformRow);
                 foreach (var light in SourceLights().Select(table => table.Table).Where(table => table.TagHash == tag)
                     .Distinct(ReferenceEqualityComparer.Instance).Cast<AuthoredLightTable>().Select(table => table.Rows[row]))
@@ -384,19 +441,22 @@ public sealed class WorldPlacementUpdate
         if (Snapshot(tag) is not { } old || old.AsSpan().SequenceEqual(bytes)) return "";
         if (DecoratorPart(catalog, tag) is not { } owner) return $"Asset {tag:X8} is not drawn by a decorator payload the world holds.";
         sources[tag] = bytes;
-        var block = new TagData(catalog.Read(owner.Block));
-        int count = block.Rows(0x08, DecoratorTags.RecordClass, DecoratorRecords.Size).Length;
+        byte[] block = catalog.Read(owner.Block);
+        int count = DecoratorRecordRows(block).Length;
         for (int row = 0; row < count; row++) MoveDecorator(owner, row, block);
         return "";
     }
 
+    private static ReadOnlySpan<SDecoratorRecord> DecoratorRecordRows(byte[] block) =>
+        TagView.Rows(block, in TagView.Checked<SDecoratorBlock>(block, 0).Records, DecoratorTags.RecordClass);
+
     /** A record decodes through the payload's current quantization, then the placement that drew it. */
-    private string MoveDecorator(DecoratorTags owner, int row, TagData block)
+    private string MoveDecorator(DecoratorTags owner, int row, byte[] block)
     {
         byDecoratorRow ??= SourceInstances().Where(item => item.ObjectPlacement is not null)
             .ToLookup(item => (item.ObjectPlacement!.SourceTag, item.ObjectPlacement.SourceIndex));
         var quantization = DecoratorQuantization.Read(catalog!.Read(owner.Quantization));
-        var record = block.Bytes.AsMemory(block.Rows(0x08, DecoratorTags.RecordClass, DecoratorRecords.Size)[row], DecoratorRecords.Size);
+        var record = block.AsMemory(TagView.OffsetOf(block, in DecoratorRecordRows(block)[row]), DecoratorRecords.Size);
         var local = DecoratorRecords.Decode(record.Span, quantization).Transform;
         foreach (var instance in byDecoratorRow[(owner.Payload, row)])
         {
@@ -409,14 +469,14 @@ public sealed class WorldPlacementUpdate
     }
 
     /** A placement row moves its marker, class model, light table and effect markers. */
-    private string MovePlacement(AssetSceneLoader loader, uint tag, int row, TagData data)
+    private string MovePlacement(AssetSceneLoader loader, uint tag, int row, byte[] data)
     {
         if (FeedsSquads(tag, row)) return "The placement anchors a squad.";
         var (resource, resourceClass) = AssetSceneLoader.PlacementResource(data, row);
         if (loader.VisitsChild(data, resource, resourceClass)) return "The placement moves decoded content below it.";
         // Cubemap resources embed world matrices that the row does not move.
-        if (resourceClass == 0x80806B7F) return "The placement is a reflection probe.";
-        var rotation = data.Q4(row + 0x10);
+        if (resourceClass == UnknownCubemapPayload.Class) return "The placement is a reflection probe.";
+        var rotation = TagView.At<AuthoredPlacementEntry>(data, row).Rotation;
         var lights = SourceLights().ToArray();
         var models = byPlacementRow[(tag, row)].ToArray();
         foreach (var scene in decoded)

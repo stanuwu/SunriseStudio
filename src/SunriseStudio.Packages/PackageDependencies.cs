@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Packages;
 
@@ -98,7 +100,7 @@ public sealed class PackageDependencyTable
     public const int MaximumEntry = 0x1FFF;
     // Misc fields: block size, root record count, then the record word array.
     private const int SizeField = 0, RootCountField = 0x30, CountField = 0x40, ArrayField = 0x48;
-    private const uint ArrayMarker = 0x80809FBD, RecordWordClass = 0x8080000B;
+    private const uint ArrayMarker = TagArray.Marker, RecordWordClass = U32ArrayRow.Class;
 
     public IReadOnlyList<PackageDependencyRecord> Records => records;
     /** Records below this index are root records; child indices are relative to it. */
@@ -143,6 +145,25 @@ public sealed class PackageDependencyTable
         if (!table.Write(misc).AsSpan().SequenceEqual(misc))
             throw new NotSupportedException("The dependency encoder does not reproduce this package's records.");
         return table;
+    }
+
+    /** @return The misc offset of every group's u16 package id, record by record. */
+    public static IReadOnlyList<int> GroupPackageOffsets(byte[] misc)
+    {
+        if (Read(misc) is not { } table) return [];
+        var offsets = new List<int>();
+        foreach (var record in table.records.Where(record => !record.Empty && (record.Flags & PackageDependencyRecord.GroupsFlag) != 0))
+        {
+            int at = checked(table.stream + record.Offset);
+            int count = U16(misc, at);
+            at += 2;
+            for (int group = 0; group < count; group++)
+            {
+                offsets.Add(at);
+                at += 4 + 2 * U16(misc, at + 2);
+            }
+        }
+        return offsets;
     }
 
     /** Marks more entries in one record; nothing is encoded until Write. */

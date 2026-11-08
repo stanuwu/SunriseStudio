@@ -1,9 +1,15 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
-/** Behavior graphs are parsed as data and never execute package expressions. */
+/**
+ * The behavior panel: the node graph and the decoded expressions; the Tag tree shows the node fields.
+ * Graphs are parsed as data and never execute package expressions.
+ */
 public sealed class BehaviorInspector : IAssetInspector
 {
     // Shared and null rows count toward the editor's graph size limit.
@@ -12,74 +18,87 @@ public sealed class BehaviorInspector : IAssetInspector
     private const int MaximumSourceBytes = 1024 * 1024;
     public string Id => "sunrise.behavior";
     public string DisplayName => "Behavior";
-    public bool CanInspect(AssetInspectionContext context) => context.ClassHash == 0x8080941E;
+    public bool CanInspect(AssetInspectionContext context) => context.ClassHash == ObjectBehaviorRoot.Class;
 
-    private sealed record NodeLayout(string Name, int Size, int[] Roots,
-        int Source = -1, bool Link = false, bool Known = false, int Expression = -1);
+    private sealed record NodeLayout(string Name, int Size, int[] Roots, int Source = -1, int Expression = -1);
+
+    /**
+     * The layout of node view T; each name is a member of T.
+     * @param roots Members that hold an embedded behavior graph root.
+     * @param source Member that points at the source text.
+     * @param expression Member that holds the value expression.
+     */
+    private static NodeLayout Layout<T>(string name, string[]? roots = null, string? source = null, string? expression = null)
+        where T : unmanaged =>
+        new(name, Unsafe.SizeOf<T>(), [.. (roots ?? []).Select(TagView.FieldOffset<T>)],
+            source is null ? -1 : TagView.FieldOffset<T>(source), expression is null ? -1 : TagView.FieldOffset<T>(expression));
 
     private static readonly Dictionary<uint, NodeLayout> Layouts = new()
     {
-        [0x80804D5E] = new("Condition structure", 0x10, []),
-        [0x80804D71] = new("Condition leaf", 8, []),
-        [0x80804D72] = new("Condition leaf", 4, []),
-        [0x80804D73] = new("Condition structure", 0x60, []),
-        [0x80804D74] = new("Condition leaf", 0x0C, []),
-        [0x80804D75] = new("Condition leaf", 4, []),
-        [0x80804D76] = new("Condition leaf", 1, []),
-        [0x80804D78] = new("Condition structure", 0x10, []),
-        [0x80804D7A] = new("Condition leaf", 8, []),
-        [0x80804D7B] = new("Condition leaf", 1, []),
-        [0x80804D7C] = new("Condition leaf", 1, []),
-        [0x80804D80] = new("Condition leaf", 1, []),
-        [0x80804D81] = new("Condition leaf", 4, []),
-        [0x80804D82] = new("Condition leaf", 0x0C, []),
-        [0x80804D83] = new("Condition leaf", 4, []),
-        [0x80809310] = new("Condition group", 0x18, []),
-        [0x80804E0E] = new("Town presence", 1, []),
-        [0x80804E12] = new("Resource behavior", 0x20, [8]),
-        [0x80804E13] = new("Resource leaf", 1, []),
-        [0x80804E14] = new("Resource leaf", 1, []),
-        [0x80804E15] = new("Resource leaf", 1, []),
-        [0x80804E1C] = new("Select", 0x60, [0x18, 0x30, 0x48]),
-        [0x80802907] = new("Relative teleportation", 0x58, [], 8, Expression: 0x10),
-        [0x80802DA6] = new("Channel link", 0x0C, []),
-        [0x80804E0F] = new("Timer", 0x58, [], 8, Expression: 0x10),
-        [0x80804E10] = new("Target", 0x10, []),
-        [0x80804E17] = new("Spawn projectile", 0x20, [], 0, true),
-        [0x80804E19] = new("Spawn", 0x20, [], 0, true),
-        [0x80804E23] = new("Search", 0x30, [0x10]),
-        [0x80804E27] = new("Resource", 0x10, []),
-        [0x80804E30] = new("Remove hop on", 0x0C, []),
-        [0x80804E31] = new("Redirect", 0x20, [8], Known: true),
-        [0x80804E35] = new("Player interaction", 0xA8, []),
-        [0x80802A66] = new("Extended player interaction", 0xB8, []),
-        [0x80804E38] = new("Navpoint", 8, []),
-        [0x80804E39] = new("Investment unlock flag", 0x38, [8, 0x20]),
-        [0x80804E3A] = new("Kill", 1, []),
-        [0x80804E3B] = new("Incident", 4, []),
-        [0x80804E3C] = new("Global", 0x28, [8]),
-        [0x80804E3D] = new("Filter", 0x68, [0x28, 0x48], Known: true),
-        [0x80804E3E] = new("External behavior", 0x10, [], 0, true, true),
-        [0x80804E3F] = new("Defer", 0x18, [0]),
-        [0x80804E40] = new("Counter", 0x50, [], 8, Known: true, Expression: 0x10),
-        [0x80804E41] = new("Add hop on", 0x10, [], 0, true, true),
-        [0x80802A6E] = new("Exit seat", 1, []),
-        [0x80802A6F] = new("Storage channel", 0x50, [], 8, Expression: 0x10),
-        [0x80802DA7] = new("Spawn random", 0x38, [], 0, true),
-        [0x80804D7D] = new("Channel comparison", 0x90, [], 0, Known: true)
+        [BehaviorConditionStructure80804D5E.Class] = Layout<BehaviorConditionStructure80804D5E>("Condition structure"),
+        [BehaviorConditionLeaf80804D71.Class] = Layout<BehaviorConditionLeaf80804D71>("Condition leaf"),
+        [BehaviorConditionLeaf80804D72.Class] = Layout<BehaviorConditionLeaf80804D72>("Condition leaf"),
+        [BehaviorConditionStructure80804D73.Class] = Layout<BehaviorConditionStructure80804D73>("Condition structure"),
+        [BehaviorConditionLeaf80804D74.Class] = Layout<BehaviorConditionLeaf80804D74>("Condition leaf"),
+        [BehaviorConditionLeaf80804D75.Class] = Layout<BehaviorConditionLeaf80804D75>("Condition leaf"),
+        [BehaviorConditionLeaf80804D76.Class] = Layout<BehaviorConditionLeaf80804D76>("Condition leaf"),
+        [BehaviorConditionStructure80804D78.Class] = Layout<BehaviorConditionStructure80804D78>("Condition structure"),
+        [BehaviorConditionLeaf80804D7A.Class] = Layout<BehaviorConditionLeaf80804D7A>("Condition leaf"),
+        [BehaviorConditionLeaf80804D7B.Class] = Layout<BehaviorConditionLeaf80804D7B>("Condition leaf"),
+        [BehaviorConditionLeaf80804D7C.Class] = Layout<BehaviorConditionLeaf80804D7C>("Condition leaf"),
+        [BehaviorConditionLeaf80804D80.Class] = Layout<BehaviorConditionLeaf80804D80>("Condition leaf"),
+        [BehaviorConditionLeaf80804D81.Class] = Layout<BehaviorConditionLeaf80804D81>("Condition leaf"),
+        [BehaviorConditionLeaf80804D82.Class] = Layout<BehaviorConditionLeaf80804D82>("Condition leaf"),
+        [BehaviorConditionLeaf80804D83.Class] = Layout<BehaviorConditionLeaf80804D83>("Condition leaf"),
+        [BehaviorConditionGroup.Class] = Layout<BehaviorConditionGroup>("Condition group"),
+        [BehaviorTownPresence.Class] = Layout<BehaviorTownPresence>("Town presence"),
+        [BehaviorResourceBehavior.Class] = Layout<BehaviorResourceBehavior>("Resource behavior", ["Behaviors"]),
+        [BehaviorResourceLeaf80804E13.Class] = Layout<BehaviorResourceLeaf80804E13>("Resource leaf"),
+        [BehaviorResourceLeaf80804E14.Class] = Layout<BehaviorResourceLeaf80804E14>("Resource leaf"),
+        [BehaviorResourceLeaf80804E15.Class] = Layout<BehaviorResourceLeaf80804E15>("Resource leaf"),
+        [BehaviorSelect.Class] = Layout<BehaviorSelect>("Select", ["H8edfa376", "H46040d77", "H79a8f9b3"]),
+        [BehaviorRelativeTeleportation.Class] = Layout<BehaviorRelativeTeleportation>("Relative teleportation",
+            source: "SourceText", expression: "H762b49fd"),
+        [BehaviorChannelLink.Class] = Layout<BehaviorChannelLink>("Channel link"),
+        [BehaviorTimer.Class] = Layout<BehaviorTimer>("Timer", source: "SourceText", expression: "H10b2432c"),
+        [BehaviorTarget.Class] = Layout<BehaviorTarget>("Target"),
+        [BehaviorSpawnProjectile.Class] = Layout<BehaviorSpawnProjectile>("Spawn projectile", source: "SourceText"),
+        [BehaviorSpawn.Class] = Layout<BehaviorSpawn>("Spawn", source: "SourceText"),
+        [BehaviorSearch.Class] = Layout<BehaviorSearch>("Search", ["Behaviors"]),
+        [BehaviorResource.Class] = Layout<BehaviorResource>("Resource"),
+        [BehaviorRemoveHopOn.Class] = Layout<BehaviorRemoveHopOn>("Remove hop on"),
+        [BehaviorRedirect.Class] = Layout<BehaviorRedirect>("Redirect", ["Behaviors"]),
+        [BehaviorPlayerInteraction.Class] = Layout<BehaviorPlayerInteraction>("Player interaction"),
+        [BehaviorExtendedPlayerInteraction.Class] = Layout<BehaviorExtendedPlayerInteraction>("Extended player interaction"),
+        [BehaviorNavpoint.Class] = Layout<BehaviorNavpoint>("Navpoint"),
+        [BehaviorInvestmentUnlockFlag.Class] = Layout<BehaviorInvestmentUnlockFlag>("Investment unlock flag",
+            ["HE0b11eea", "H77f33325"]),
+        [BehaviorKill.Class] = Layout<BehaviorKill>("Kill"),
+        [BehaviorIncident.Class] = Layout<BehaviorIncident>("Incident"),
+        [BehaviorGlobal.Class] = Layout<BehaviorGlobal>("Global", ["Behaviors"]),
+        [BehaviorFilter.Class] = Layout<BehaviorFilter>("Filter", ["HA5f38d62", "H549767fd"]),
+        [BehaviorExternalBehavior.Class] = Layout<BehaviorExternalBehavior>("External behavior", source: "SourceText"),
+        [BehaviorDefer.Class] = Layout<BehaviorDefer>("Defer", ["Behaviors"]),
+        [BehaviorCounter.Class] = Layout<BehaviorCounter>("Counter", source: "SourceText",
+            expression: "Expression"),
+        [BehaviorAddHopOn.Class] = Layout<BehaviorAddHopOn>("Add hop on", source: "SourceText"),
+        [BehaviorExitSeat.Class] = Layout<BehaviorExitSeat>("Exit seat"),
+        [BehaviorStorageChannel.Class] = Layout<BehaviorStorageChannel>("Storage channel", source: "SourceText",
+            expression: "Expression"),
+        [BehaviorSpawnRandom.Class] = Layout<BehaviorSpawnRandom>("Spawn random", source: "SourceText"),
+        [BehaviorChannelComparison.Class] = Layout<BehaviorChannelComparison>("Channel comparison", source: "SourceText")
     };
 
     /** Cyclic pointers and excessive nesting are reported instead of followed. */
     public AssetInspection Inspect(AssetInspectionContext context)
     {
-        var r = new TagReader(context.Data);
         HashSet<int> visited = [];
-        List<AssetReference> references = [];
         List<string> diagnostics = [];
         Dictionary<string, AssetGraphNode> graphNodes = [];
         List<AssetGraphEdge> graphEdges = [];
         Dictionary<uint, string?> channelNames = [];
-        Dictionary<int, string> sourceTexts = [];
+        HashSet<int> sourceTexts = [];
+        List<AssetNode> expressions = [];
         int sourceBytes = 0;
         int total = 0;
         void Count(int count)
@@ -87,101 +106,92 @@ public sealed class BehaviorInspector : IAssetInspector
             if (count > MaximumEntries - total) throw new InvalidDataException("Behavior graph exceeds the view limit.");
             total += count;
         }
-        AssetNode Root(int offset, int depth)
+        void Root(int offset, int depth)
         {
             if (depth > 64)
                 throw new InvalidDataException("Behavior graph exceeds the view limit.");
             Count(1);
-            var array = r.Array(offset + 8, 0x80809420, 16);
+            var tag = context.Data.Span;
+            int stride = Unsafe.SizeOf<SBehaviorGraphElement>();
+            var array = TagArray.Checked(tag, offset + TagView.FieldOffset<ObjectBehaviorRoot>("Behaviors"),
+                SBehaviorGraphElement.Class, stride);
             Count(array.Count);
             string rootId = $"root:{offset}";
             graphNodes.TryAdd(rootId, new(rootId, "Graph", offset));
-            List<AssetNode> children = [];
             for (int i = 0; i < array.Count; i++)
             {
-                int p = array.Data + i * 16;
-                int node = r.Relative(p + 8);
-                if (node >= 0) graphEdges.Add(new(rootId, $"node:{node}", $"Element {i}"));
-                children.Add(new($"Element {i}", [r.UInt("Name hash", p, hex: true)],
-                    node < 0 ? [] : [ReadNode(node, depth + 1)]));
+                ref readonly var element = ref TagView.At<SBehaviorGraphElement>(tag, array.Data + i * stride);
+                int node = TagPointer.Checked(tag, TagView.OffsetOf(tag, in element.Behavior));
+                if (node < 0) continue;
+                graphEdges.Add(new(rootId, $"node:{node}", $"Element {i}"));
+                ReadNode(node, depth + 1);
             }
-            return new($"Graph {offset:X}", [], children);
         }
-        AssetNode ReadNode(int offset, int depth)
+        void ReadNode(int offset, int depth)
         {
-            if (!visited.Add(offset)) return new($"Shared node {offset:X}", []);
+            if (!visited.Add(offset)) return;
             if (depth > 64) throw new InvalidDataException("Behavior graph exceeds the view limit.");
             Count(1);
-            if (!r.Has(offset - 4, 4)) throw new InvalidDataException("Truncated behavior node.");
-            uint type = r.U32(offset - 4);
+            var data = context.Data.Span;
+            if (TagView.ClassAt(data, offset) is not { } type) throw new InvalidDataException("Truncated behavior node.");
             string nodeId = $"node:{offset}";
-            List<AssetProperty> properties = [r.UInt("Class", offset - 4, hex: true)];
             if (!Layouts.TryGetValue(type, out var layout))
             {
                 diagnostics.Add($"Unknown behavior class {type:X8}.");
                 graphNodes.TryAdd(nodeId, new(nodeId, $"Unknown {type:X8}", offset));
-                return new($"Unknown node {offset:X}", properties);
+                return;
             }
             graphNodes.TryAdd(nodeId, new(nodeId, layout.Name, offset));
             foreach (int child in layout.Roots)
                 graphEdges.Add(new(nodeId, $"root:{offset + child}", "Graph"));
-            if (!r.Has(offset, layout.Size)) throw new InvalidDataException("Truncated behavior record.");
-            properties.Add(new("Coverage", layout.Known ? "Known structure" : "Partial"));
-            if (layout.Source >= 0)
+            if (offset > data.Length - layout.Size) throw new InvalidDataException("Truncated behavior record.");
+            // Source text names expression inputs, so it is read before the children and expressions below.
+            if (layout.Source >= 0 && TagPointer.Checked(data, offset + layout.Source) is var text && text >= 0)
+                SourceText(text);
+            string label = $"{layout.Name} {offset:X}";
+            foreach (int child in layout.Roots) Root(offset + child, depth + 1);
+            // Each layout size is its view size, so the views below fit the checked record.
+            if (type == BehaviorFilter.Class)
+                Conditions(nodeId, TagView.OffsetOf(data, in TagView.At<BehaviorFilter>(data, offset).Filters.FiltersInline.Filters), depth + 1);
+            if (type == BehaviorConditionGroup.Class)
+                Conditions(nodeId, TagView.OffsetOf(data, in TagView.At<BehaviorConditionGroup>(data, offset).Filters.Filters), depth + 1);
+            if (type == BehaviorTarget.Class
+                && TagPointer.Checked(data, TagView.OffsetOf(data, in TagView.At<BehaviorTarget>(data, offset).Action)) is var action
+                && action >= 0)
             {
-                int text = r.Relative(offset + layout.Source);
-                if (text >= 0)
-                {
-                    string source = SourceText(text);
-                    properties.Add(new("Source", source, text));
-                }
+                graphEdges.Add(new(nodeId, $"node:{action}", "Operation"));
+                ReadNode(action, depth + 1);
             }
-            if (layout.Link)
+            if (layout.Expression >= 0) Expression(nodeId, label, offset + layout.Expression, "Value");
+            if (type == BehaviorChannelComparison.Class)
             {
-                uint tag = r.U32(offset + 8);
-                references.Add(new(offset + 8, tag, context.ResolveName?.Invoke(tag) ?? $"{tag:X8}"));
-                properties.Add(r.UInt("Target", offset + 8, true, true));
+                ref readonly var comparison = ref TagView.At<BehaviorChannelComparison>(data, offset);
+                Expression(nodeId, label, TagView.OffsetOf(data, in comparison.H70b1574d), "Left");
+                Expression(nodeId, label, TagView.OffsetOf(data, in comparison.H8c8ef163), "Right");
             }
-            if (type is 0x80804E40 or 0x80802A6F)
-                properties.Add(r.UInt("Target hash", offset, true, true));
-            List<AssetNode> children = layout.Roots.Select(x => Root(offset + x, depth + 1)).ToList();
-            if (type == 0x80804E3D) children.Add(Conditions(nodeId, offset + 0x18, depth + 1));
-            if (type == 0x80809310) children.Add(Conditions(nodeId, offset + 8, depth + 1));
-            if (type == 0x80804E10 && r.Relative(offset + 8) is int resource && resource >= 0)
-            {
-                graphEdges.Add(new(nodeId, $"node:{resource}", "Operation"));
-                children.Add(ReadNode(resource, depth + 1));
-            }
-            if (layout.Expression >= 0) children.Add(Expression(nodeId, offset + layout.Expression, "Value"));
-            if (type == 0x80804D7D)
-            {
-                properties.Add(r.Byte("Comparison mode", offset + 0x88, true));
-                children.Add(Expression(nodeId, offset + 8, "Left"));
-                children.Add(Expression(nodeId, offset + 0x48, "Right"));
-            }
-            return new($"{layout.Name} {offset:X}", properties, children);
         }
 
-        AssetNode Conditions(string owner, int field, int depth)
+        void Conditions(string owner, int field, int depth)
         {
-            var array = r.Array(field, stride: 16);
-            if (array.Count != 0 && array.Class is not (0x80809311 or 0x80809316))
+            var tag = context.Data.Span;
+            int stride = Unsafe.SizeOf<C80809316>();
+            var array = TagArray.Checked(tag, field, stride: stride);
+            if (array.Count != 0 && array.Class != C80809316.Class)
                 throw new InvalidDataException("Invalid behavior condition array.");
             Count(array.Count);
-            List<AssetNode> children = [];
             for (int i = 0; i < array.Count; i++)
             {
-                int target = r.Relative(array.Data + i * 16 + 8);
+                int target = TagPointer.Checked(tag, TagView.OffsetOf(tag, in TagView.At<C80809316>(tag, array.Data + i * stride).Filter));
                 if (target < 0) continue;
                 graphEdges.Add(new(owner, $"node:{target}", $"Condition {i}"));
-                children.Add(ReadNode(target, depth));
+                ReadNode(target, depth);
             }
-            return new("Conditions", [], children);
         }
 
-        AssetNode Expression(string owner, int offset, string name)
+        void Expression(string owner, string node, int offset, string name)
         {
             Count(1);
+            string title = $"{node} / {name}";
             BehaviorExpression expression;
             try
             {
@@ -190,29 +200,28 @@ public sealed class BehaviorInspector : IAssetInspector
             catch (Exception error) when (error is InvalidDataException or ArgumentException or OverflowException)
             {
                 diagnostics.Add($"Expression {offset:X}: {error.Message}");
-                return new(name, [new("Status", error.Message)]);
+                expressions.Add(new(title, [new("Status", error.Message, offset)]));
+                return;
             }
             Count(expression.Constants.Count + expression.Inputs.Count);
             string id = $"expression:{offset}";
             string label = expression.Output ?? expression.Diagnostic ?? "Empty expression";
             graphNodes.TryAdd(id, new(id, label.Length > 120 ? label[..117] + "..." : label, offset));
             graphEdges.Add(new(owner, id, name));
-            List<AssetProperty> properties = [new("Value", expression.Output ?? ""),
-                new("Native evaluator", expression.NativeOverride.ToString())];
+            List<AssetProperty> properties = [new("Value", expression.Output ?? "", offset)];
             if (expression.Diagnostic is { } diagnostic)
-            { diagnostics.Add($"Expression {offset:X}: {diagnostic}."); properties.Add(new("Status", diagnostic)); }
-            var constants = expression.Constants.Select(value => new AssetNode($"Constant {value.Index}",
-                [r.Float("X", value.Offset), r.Float("Y", value.Offset + 4),
-                    r.Float("Z", value.Offset + 8), r.Float("W", value.Offset + 12)])).ToArray();
-            var inputs = expression.Inputs.Select((value, index) => new AssetNode($"Input {index}",
-                [new("Name", channelNames.GetValueOrDefault(value.Hash) ?? ""), r.Byte("Object selector", value.Offset),
-                    r.UInt("Channel", value.Offset + 4, hex: true)])).ToArray();
-            return new(name, properties, [new("Constants", [], constants), new("Inputs", [], inputs)]);
+            { diagnostics.Add($"Expression {offset:X}: {diagnostic}."); properties.Add(new("Status", diagnostic, offset)); }
+            for (int index = 0; index < expression.Inputs.Count; index++)
+            {
+                var input = expression.Inputs[index];
+                properties.Add(new($"Input {index}", channelNames.GetValueOrDefault(input.Hash) ?? "", input.Offset));
+            }
+            expressions.Add(new(title, properties));
         }
 
-        string SourceText(int offset)
+        void SourceText(int offset)
         {
-            if (sourceTexts.TryGetValue(offset, out string? found)) return found;
+            if (!sourceTexts.Add(offset)) return;
             var remaining = context.Data.Span[offset..];
             int allowance = MaximumSourceBytes - sourceBytes;
             int end = remaining[..Math.Min(remaining.Length, allowance + 1)].IndexOf((byte)0);
@@ -220,10 +229,7 @@ public sealed class BehaviorInspector : IAssetInspector
                 throw new InvalidDataException(remaining.Length > allowance
                     ? "Behavior source text exceeds the view limit." : "Unterminated behavior source string.");
             sourceBytes += end;
-            string text = Encoding.UTF8.GetString(remaining[..end]);
-            sourceTexts.Add(offset, text);
-            RememberChannels(text);
-            return text;
+            RememberChannels(Encoding.UTF8.GetString(remaining[..end]));
         }
 
         void RememberChannels(string source)
@@ -243,8 +249,8 @@ public sealed class BehaviorInspector : IAssetInspector
                 else channelNames.Add(hash, name);
             }
         }
-        var root = Root(0, 0);
-        return new("Behavior", context.Name, [root], references, diagnostics)
+        Root(0, 0);
+        return new("Behavior", context.Name, expressions.Count == 0 ? [] : [new("Expressions", [], expressions)], [], diagnostics)
         { Graph = new(graphNodes.Values.ToArray(), graphEdges) };
     }
 }

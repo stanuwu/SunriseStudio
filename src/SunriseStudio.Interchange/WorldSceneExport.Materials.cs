@@ -1,5 +1,6 @@
-using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Rendering;
@@ -134,8 +135,8 @@ public static partial class WorldSceneExport
         if (!catalog.TryGetEntry(tag, out var entry) || entry.Type != 32 || entry.SubType != 1)
             throw new InvalidDataException($"Texture binding 0x{tag:X8} does not reference a 2D texture.");
         byte[] header = catalog.Read(tag);
-        if (header.Length != 40) throw new InvalidDataException($"Texture 0x{tag:X8} has an invalid header.");
-        formats.Add(tag, format = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(4))));
+        if (header.Length != Unsafe.SizeOf<TextureHeader>()) throw new InvalidDataException($"Texture 0x{tag:X8} has an invalid header.");
+        formats.Add(tag, format = checked((int)MemoryMarshal.Read<TextureHeader>(header).Format));
         return format;
     }
 

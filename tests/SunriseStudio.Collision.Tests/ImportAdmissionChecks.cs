@@ -117,7 +117,7 @@ internal static class ImportAdmissionChecks
     {
         var builder = new HavokPackfileBuilder();
         byte[] root = new byte[0xA0]; root[0x30] = 1;
-        NativeRows.Write(root, 0x80, -10, -10, -10); NativeRows.Write(root, 0x90, 10, 10, 10);
+        CollisionCompoundWriter.WriteFloats(root, 0x80, -10, -10, -10); CollisionCompoundWriter.WriteFloats(root, 0x90, 10, 10, 10);
         builder.PlaceObject(root, StaticCompoundShape.ClassName);
         var instance = new CompoundInstanceRow(new byte[StaticCompoundShape.InstanceSize], "i0", null);
         instance.SetTransform(QsTransform.Identity, true);

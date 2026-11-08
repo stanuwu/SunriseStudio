@@ -167,6 +167,27 @@ public sealed record ProjectBuildResult(string OutputDirectory, IReadOnlyList<st
     public IReadOnlyList<ModConfigSite> ConfigBindings { get; init; } = [];
     /** Derived data the build left unchanged, and why. */
     public IReadOnlyList<string> Notes { get; init; } = [];
+    /** Tags compiled from `content/`; Id is the tag name. */
+    public IReadOnlyList<BuiltProjectAsset> TagFiles { get; init; } = [];
+    /** The entry bytes the build wrote; a live update compares them with what the game was given. */
+    public ProjectBuildContents Contents { get; init; } = ProjectBuildContents.Empty;
+    /** Every location holding an own tag, without the Lua rows the install adds. */
+    public ReferenceMap ReferenceMap { get; init; } = new("", [], [], []);
+    /** The activity SDK rows of the project's destinations; null without a destination. */
+    public string? ActivitySdkPack { get; init; }
+}
+
+/** One entry of a new package a build wrote. */
+public sealed record BuiltEntry(ushort PackageId, int EntryIndex, uint Reference, uint TypeInfo, byte[] Data);
+
+/**
+ * What a build wrote, by entry: installed tags it patched, entries of new packages, and changed
+ * dependency records by package file name.
+ */
+public sealed record ProjectBuildContents(IReadOnlyDictionary<uint, byte[]> InstalledEdits, IReadOnlyList<BuiltEntry> NewEntries,
+    IReadOnlyDictionary<string, byte[]> Misc)
+{
+    public static ProjectBuildContents Empty { get; } = new(new Dictionary<uint, byte[]>(), [], new Dictionary<string, byte[]>());
 }
 
 internal static class ProjectJson

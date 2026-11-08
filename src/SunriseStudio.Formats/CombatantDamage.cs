@@ -1,15 +1,15 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Scene.Collision;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
 /** One per-damage-type scale row of a part; Offset is the float's byte offset in the config. */
 public readonly record struct CombatantDamageTypeScale(int Index, int Offset, float Scale);
 
-/**
- * One 312-byte damage part row. Health is the float at +0x14; its meaning is assumed.
- * Kind is the signed byte at +0x18; Pool indexes the payload's pool rows.
- */
+/** One damage part row. The meaning of Health is assumed; Pool indexes the payload's pool rows. */
 public sealed record CombatantDamagePart(int Index, int Offset, uint NameHash, float Health, sbyte Kind, int Pool,
     float Scale, IReadOnlyList<CombatantDamageTypeScale> TypeScales)
 {
@@ -17,17 +17,14 @@ public sealed record CombatantDamagePart(int Index, int Offset, uint NameHash, f
     public string Name => CollisionRegions.Name(NameHash) is { Length: > 0 } name ? name : "(none)";
 }
 
-/** One 80-byte damage pool row; Fraction is the initial fraction at +24. */
+/** One damage pool row; Fraction is its initial fraction. */
 public readonly record struct CombatantDamagePool(int Index, int Offset, float Fraction);
 
-/** The damage component payload (class 0x80804B8A) behind a damage config's +0x18 link. */
+/** The damage component payload behind a damage config's Definition link. */
 public sealed record CombatantDamage(uint ConfigTag, int Payload, IReadOnlyList<CombatantDamagePart> Parts,
     IReadOnlyList<CombatantDamagePool> Pools)
 {
-    public const uint PayloadClass = 0x80804B8A;
-    private const uint PartClass = 0x80804C11, TypeScaleClass = 0x80804BBB, PoolClass = 0x80804C5F;
-    private const int PartStride = 312, TypeScaleStride = 40, PoolStride = 80;
-    private const int PartsField = 0x1B0, PoolsField = 0x368;
+    public const uint PayloadClass = SCombatantDamagePayload.Class;
 
     /**
      * Reads the damage payload of one config.
@@ -37,35 +34,42 @@ public sealed record CombatantDamage(uint ConfigTag, int Payload, IReadOnlyList<
     {
         try
         {
-            var reader = new TagReader(config);
-            if (reader.Length < 0x20) return null;
-            int payload = reader.Relative(0x18);
+            var tag = config.Span;
+            if (!TagView.FitsThrough<SEntityConfig>(tag, 0, "Definition")) return null;
+            int payload = TagPointer.Checked(tag, TagView.FieldOffset<SEntityConfig>("Definition"));
             // The payload is typed by the marker before it and names its own config first.
-            if (payload < 4 || !reader.Has(payload, PoolsField + 16) || reader.U32(payload - 4) != PayloadClass
-                || reader.U32(payload) != configTag) return null;
-            var pools = reader.Array(payload + PoolsField, PoolClass, PoolStride);
+            // It needs to hold only the bytes through Pools.
+            if (payload < TagView.ClassWordSize || !TagView.FitsThrough<SCombatantDamagePayload>(tag, payload, "Pools")
+                || TagView.ClassAt(tag, payload) != PayloadClass
+                || TagRead.U32(tag, payload + TagView.FieldOffset<SCombatantDamagePayload>("OwnerConfig.Tag")) != configTag) return null;
+            int poolStride = Unsafe.SizeOf<SCombatantDamagePool>(), partStride = Unsafe.SizeOf<SCombatantDamagePart>();
+            int typeStride = Unsafe.SizeOf<SCombatantDamageTypeScale>();
+            var pools = TagArray.Checked(tag, payload + TagView.FieldOffset<SCombatantDamagePayload>("Pools"),
+                SCombatantDamagePool.Class, poolStride);
             var poolRows = new CombatantDamagePool[pools.Count];
             for (int index = 0; index < pools.Count; index++)
             {
-                int row = pools.Data + index * PoolStride;
-                poolRows[index] = new(index, row + 24, Float(config, row + 24));
+                ref readonly float fraction = ref TagView.At<SCombatantDamagePool>(tag, pools.Data + index * poolStride).InitialFraction;
+                poolRows[index] = new(index, TagView.OffsetOf(tag, in fraction), fraction);
             }
-            var parts = reader.Array(payload + PartsField, PartClass, PartStride);
+            var parts = TagArray.Checked(tag, payload + TagView.FieldOffset<SCombatantDamagePayload>("Parts"),
+                SCombatantDamagePart.Class, partStride);
             var partRows = new CombatantDamagePart[parts.Count];
             for (int index = 0; index < parts.Count; index++)
             {
-                int row = parts.Data + index * PartStride;
-                int pool = reader.I32(row + 0xD0);
+                int row = parts.Data + index * partStride;
+                ref readonly var part = ref TagView.At<SCombatantDamagePart>(tag, row);
+                int pool = part.PoolIndex;
                 if (pool < 0 || pool >= pools.Count) return null;
-                var types = reader.Array(row + 0xE8, TypeScaleClass, TypeScaleStride);
+                var types = TagArray.Checked(tag, TagView.OffsetOf(tag, in part.ScaleOptions), SCombatantDamageTypeScale.Class, typeStride);
                 var typeRows = new CombatantDamageTypeScale[types.Count];
                 for (int type = 0; type < types.Count; type++)
                 {
-                    int at = types.Data + type * TypeScaleStride + 0x24;
-                    typeRows[type] = new(type, at, Float(config, at));
+                    ref readonly float scale = ref TagView.At<SCombatantDamageTypeScale>(tag, types.Data + type * typeStride).Scale;
+                    typeRows[type] = new(type, TagView.OffsetOf(tag, in scale), scale);
                 }
-                partRows[index] = new(index, row, reader.U32(row + 0x10), Float(config, row + 0x14),
-                    (sbyte)reader.U8(row + 0x18), pool, Float(config, row + 0xE4), typeRows);
+                partRows[index] = new(index, row, part.RegionNameHash, part.Health,
+                    (sbyte)part.Kind, pool, part.DamageScale, typeRows);
             }
             return new(configTag, payload, partRows, poolRows);
         }
@@ -76,27 +80,29 @@ public sealed record CombatantDamage(uint ConfigTag, int Payload, IReadOnlyList<
         }
     }
 
-    /** True when the config's +0x18 link is typed as a damage payload, readable or not. */
+    /** True when the config's definition link is typed as a damage payload, readable or not. */
     public static bool IsDamageConfig(ReadOnlyMemory<byte> config)
     {
-        var reader = new TagReader(config);
-        if (reader.Length < 0x20) return false;
-        long delta = reader.I64(0x18);
+        var tag = config.Span;
+        if (!TagView.FitsThrough<SEntityConfig>(tag, 0, "Definition")) return false;
+        int definition = TagView.FieldOffset<SEntityConfig>("Definition");
+        long delta = TagView.At<RelativePointer<Unknown>>(tag, definition).Relative;
         if (delta == 0 || delta < int.MinValue || delta > int.MaxValue) return false;
-        long payload = 0x18 + delta;
-        return payload >= 4 && payload <= reader.Length - 4 && reader.U32((int)payload - 4) == PayloadClass;
+        long payload = definition + delta;
+        return payload >= TagView.ClassWordSize && payload <= tag.Length - TagView.ClassWordSize && TagView.ClassAt(tag, (int)payload) == PayloadClass;
     }
 
-    /** Sets a part's damage scale at +0xE4. */
+    /** Sets a part's damage scale. */
     public static byte[] SetPartScale(uint configTag, ReadOnlyMemory<byte> config, int part, float value) =>
-        Write(config, value, Require(configTag, config).Parts.ElementAtOrDefault(part)?.Offset + 0xE4);
+        Write(config, value, Require(configTag, config).Parts.ElementAtOrDefault(part) is { } row
+            ? TagView.OffsetOf(config.Span, in TagView.At<SCombatantDamagePart>(config.Span, row.Offset).DamageScale) : null);
 
-    /** Sets one per-damage-type scale float at +0x24 of a part's override row. */
+    /** Sets one per-damage-type scale of a part's override row. */
     public static byte[] SetTypeScale(uint configTag, ReadOnlyMemory<byte> config, int part, int row, float value) =>
         Write(config, value, Require(configTag, config).Parts.ElementAtOrDefault(part)?.TypeScales
             .Where(scale => scale.Index == row).Select(scale => (int?)scale.Offset).FirstOrDefault());
 
-    /** Sets a pool's initial fraction at +24. */
+    /** Sets a pool's initial fraction. */
     public static byte[] SetPoolFraction(uint configTag, ReadOnlyMemory<byte> config, int pool, float value) =>
         Write(config, value, Require(configTag, config).Pools
             .Where(row => row.Index == pool).Select(row => (int?)row.Offset).FirstOrDefault());
@@ -112,7 +118,4 @@ public sealed record CombatantDamage(uint ConfigTag, int Payload, IReadOnlyList<
         BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(at), value);
         return bytes;
     }
-
-    private static float Float(ReadOnlyMemory<byte> bytes, int offset) =>
-        BinaryPrimitives.ReadSingleLittleEndian(bytes.Span[offset..]);
 }

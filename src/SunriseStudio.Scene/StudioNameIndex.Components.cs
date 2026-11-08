@@ -1,4 +1,5 @@
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Scene;
 
@@ -46,7 +47,7 @@ public sealed partial class StudioNameIndex
                     if (retained.Length == 0) owners.TryRemove(model, out _);
                     else owners[model] = retained;
                 }
-            foreach (uint model in next.Components?.Models(tag) ?? []) Link(model, tag, "Model", 0, 0x808073A5);
+            foreach (uint model in next.Components?.Models(tag) ?? []) Link(model, tag, "Model", 0, SEntityModel.Class);
         }
         Interlocked.Increment(ref revision);
         return affected;

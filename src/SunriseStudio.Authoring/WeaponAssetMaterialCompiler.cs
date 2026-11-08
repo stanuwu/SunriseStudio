@@ -1,8 +1,9 @@
-using System.Buffers.Binary;
 using System.Security.Cryptography;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -36,8 +37,8 @@ public static class WeaponAssetMaterialCompiler
             var prepared = OriginalAssetMaterials.Prepare(catalog, document.RootElement,
                 index < 0 ? null : index, images, name + ".material" + tags.Count,
                 packageId, cursor, false, CancellationToken.None);
-            var material = prepared.Assets.Single(asset => asset.Native?.Reference == 0x808071E8);
-            BinaryPrimitives.WriteUInt32LittleEndian(material.Data.AsSpan(0x48), vertexShaderTag);
+            var material = prepared.Assets.Single(asset => asset.Native?.Reference == STechnique.Class);
+            TagView.Edit<uint>(material.Data, TagView.FieldOffset<STechnique>("VertexShader.Shader")) = vertexShaderTag;
             tags.Add(index, prepared.MaterialTag);
             assets.AddRange(prepared.Assets);
             cursor = checked(cursor + prepared.Assets.Count);

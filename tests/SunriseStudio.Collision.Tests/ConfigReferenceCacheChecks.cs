@@ -2,6 +2,8 @@ using System.Buffers.Binary;
 using SunriseStudio.Authoring;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using static Checks;
 using static StaticIsolationFixture;
 
@@ -177,12 +179,16 @@ internal static class ConfigReferenceCacheChecks
 
     private static byte[] OddAuxiliary(byte[] source)
     {
-        var data = new NativeRows(source);
-        int row = data.Rows(32 + 0x58, 0x808099D8, 144).Single();
-        int oldAuxiliary = checked(row + 0x78 + (int)data.I64(row + 0x78));
+        // The fixture's one type-4 slot descriptor starts at 32.
+        int row = TagRows.Offsets<ObjectSlotDefinitionType4, AuthoredPlacementEntry>(source,
+            nameof(ObjectSlotDefinitionType4.EmbeddedPlacements), AuthoredPlacementEntry.Class, start: 32).Single();
+        int payload = TagView.FieldOffset<AuthoredPlacementEntry>(nameof(AuthoredPlacementEntry.Payload));
+        long relative = ObjectRows.Field<AuthoredPlacementEntry, RelativePointer<Unknown>>(source, row,
+            nameof(AuthoredPlacementEntry.Payload)).Relative;
+        int oldAuxiliary = checked(row + payload + (int)relative);
         byte[] result = new byte[source.Length + 1]; source.CopyTo(result, 0);
         source.AsSpan(oldAuxiliary - 8, 32).CopyTo(result.AsSpan(oldAuxiliary - 7));
-        BinaryPrimitives.WriteInt64LittleEndian(result.AsSpan(row + 0x78), data.I64(row + 0x78) + 1);
+        BinaryPrimitives.WriteInt64LittleEndian(result.AsSpan(row + payload), relative + 1);
         BinaryPrimitives.WriteInt64LittleEndian(result, result.Length);
         return result;
     }

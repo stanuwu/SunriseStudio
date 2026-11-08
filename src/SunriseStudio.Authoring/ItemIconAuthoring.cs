@@ -1,6 +1,8 @@
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
@@ -23,7 +25,7 @@ public static class ItemIconAuthoring
     {
         Require(catalog, item.DisplayTag, InvestmentCatalog.DisplayClass);
         var sources = new InvestmentSources();
-        Require(catalog, sources.Icons, 0x80802951);
+        Require(catalog, sources.Icons, IconMap.Class);
         ushort index = InvestmentItemClone.ReadDisplayIcon(catalog.Read(item.DisplayTag));
         var rows = InvestmentItemClone.ReadIndexRows(catalog.Read(sources.Icons));
         if (index == ushort.MaxValue || index >= rows.Count)
@@ -41,11 +43,11 @@ public static class ItemIconAuthoring
 
     private static ItemIconProfile ReadContainerProfile(PackageCatalog catalog, uint container)
     {
-        Require(catalog, container, 0x80804A53);
+        Require(catalog, container, SIconContainer.Class);
         byte[] containerBytes = catalog.Read(container);
-        if (containerBytes.Length < 128) throw new InvalidDataException("The icon container is truncated.");
-        uint bitmap = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(containerBytes.AsSpan(20));
-        Require(catalog, bitmap, 0x80804A69);
+        if (!TagView.Fits<SIconContainer>(containerBytes, 0)) throw new InvalidDataException("The icon container is truncated.");
+        uint bitmap = TagView.At<SIconContainer>(containerBytes).IconBitmap0PrimaryBitmap;
+        Require(catalog, bitmap, SIconBitmap.Class);
         byte[] bitmapBytes = catalog.Read(bitmap);
         var groups = CuiBitmap.ReadGroups(bitmapBytes);
         if (groups.Count == 0 || groups.Any(group => group.Count != 1))
@@ -57,11 +59,12 @@ public static class ItemIconAuthoring
         return new(container, bitmap, textures[0]) { Groups = textures };
     }
 
-    /** A catalyst background is the container's second bitmap at `+28`, one texture per group. */
+    /** A catalyst background is the container's IconBitmap2, one texture per group. */
     private static RgbaImage? ReadPanel(PackageCatalog catalog, ItemIconProfile profile, int group)
     {
-        uint bitmap = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
-            catalog.Read(profile.ContainerTag).AsSpan(28));
+        // Only the bytes through this slot must exist.
+        uint bitmap = TagView.At<uint>(catalog.Read(profile.ContainerTag),
+            TagView.FieldOffset<SIconContainer>(nameof(SIconContainer.IconBitmap2)));
         if (bitmap is 0 or uint.MaxValue || !catalog.ContainsTag(bitmap)) return null;
         var groups = CuiBitmap.ReadGroups(catalog.Read(bitmap));
         if (groups.Count == 0 || groups[0].Count == 0) return null;
@@ -104,14 +107,14 @@ public static class ItemIconAuthoring
     {
         image.Validate();
         int groups = profile.Groups.Count, entries = 2 * groups + 2;
-        if (firstEntry < 0 || firstEntry > 8192 - entries)
+        if (firstEntry < 0 || firstEntry > TagHashes.EntriesPerPackage - entries)
             throw new InvalidDataException($"The package needs {entries} free entries for a custom icon.");
         if (style == ItemIconStyle.Image && (image.Width != profile.Texture.Width || image.Height != profile.Texture.Height))
             throw new InvalidDataException($"The custom icon must be {profile.Texture.Width} x {profile.Texture.Height} pixels.");
         if (profile.Groups.Any(texture => texture.Format is not (28 or 29) || texture.Kind != TextureKind.Texture2D
             || texture.ArraySize != 1 || texture.MipCount != 1))
             throw new NotSupportedException("Custom icons need a single-mip RGBA8 icon profile.");
-        uint Tag(int index) => checked(0x80800000U + ((uint)packageId << 13) + (uint)index);
+        uint Tag(int index) => TagHashes.Make(packageId, index);
         if (Enumerable.Range(firstEntry, entries).Any(index => catalog.ContainsTag(Tag(index))
             || plannedAssets?.Any(asset => asset.Native is { } native && TagOf(native) == Tag(index)) == true))
             throw new InvalidDataException("A custom icon entry is already allocated.");
@@ -129,8 +132,8 @@ public static class ItemIconAuthoring
             headers.Add(texture.HeaderTag);
         }
         uint bitmap = Tag(firstEntry + 2 * groups), container = Tag(firstEntry + 2 * groups + 1);
-        var bitmapEntry = Require(catalog, profile.BitmapTag, 0x80804A69);
-        var containerEntry = Require(catalog, profile.ContainerTag, 0x80804A53);
+        var bitmapEntry = Require(catalog, profile.BitmapTag, SIconBitmap.Class);
+        var containerEntry = Require(catalog, profile.ContainerTag, SIconContainer.Class);
         assets.Add(new(name + ".icon.bitmap",
             InvestmentIconEdits.SetGroupTextures(catalog.Read(profile.BitmapTag), headers),
             new(packageId, bitmapEntry.Reference, bitmapEntry.TypeInfo, null, firstEntry + 2 * groups),
@@ -217,5 +220,5 @@ public static class ItemIconAuthoring
         catalog.TryGetEntry(tag, out var entry) && entry.Reference == expected ? entry
             : throw new InvalidDataException("An icon asset has an unsupported native class.");
     private static uint TagOf(NativeAssetMetadata native) =>
-        checked(0x80800000U + ((uint)native.PackageId << 13) + (uint)native.EntryIndex!.Value);
+        TagHashes.Make(native.PackageId, native.EntryIndex!.Value);
 }

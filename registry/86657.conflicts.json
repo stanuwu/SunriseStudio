@@ -1,0 +1,2507 @@
+{
+  "build": "86657",
+  "conflicts": [
+    {
+      "class": "0x80800070",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/client/content/activity/activity_sdk_actor_ability_inventory.cpp:23",
+        "S/middleware/content/packages/tables/activity_display_name_reader.cpp:29",
+        "St/SunriseStudio.Animation/AnimationControlReader.cs:49",
+        "St/SunriseStudio.Animation/AnimationRigReader.cs:101",
+        "St/SunriseStudio.Authoring/WeaponAssetAnimationCompiler.cs:164",
+        "St/SunriseStudio.Scene/EffectReader.cs:143"
+      ]
+    },
+    {
+      "class": "0x8080010A",
+      "detail": "seed u32, game schema_handle",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "S/client/content/activity/activity_sdk_decode_plans_internal.h:28",
+        "S/client/content/activity/activity_sdk_decode_plans_metadata.cpp:266"
+      ]
+    },
+    {
+      "class": "0x80802980",
+      "detail": "seed relptr use_condition_pointer ends at 32, class size 16",
+      "kind": "past_class_size",
+      "offset": 24,
+      "refs": [
+        "S/client/content/items/packages/package_reward_build.cpp:86"
+      ]
+    },
+    {
+      "class": "0x80802F5F",
+      "detail": "seed i64 (inferred), game relptr",
+      "kind": "type_disagrees",
+      "offset": 200,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:174",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:271"
+      ]
+    },
+    {
+      "class": "0x80803475",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 40,
+      "refs": [
+        "S/middleware/content/packages/tables/definition_index_table.h:157",
+        "St/SunriseStudio.Formats/InvestmentCollections.cs:13",
+        "St/SunriseStudio.Formats/InvestmentCollections.cs:152",
+        "St/SunriseStudio.Formats/InvestmentCollections.cs:99",
+        "St/SunriseStudio.Formats/InvestmentIconEdits.cs:82"
+      ]
+    },
+    {
+      "class": "0x80803ACF",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 16,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponFiringRow.cs:17",
+        "St/SunriseStudio.Authoring/WeaponFiringRow.cs:52",
+        "St/SunriseStudio.Editor/WeaponSoundAuthoring.cs:106"
+      ]
+    },
+    {
+      "class": "0x80803E2E",
+      "detail": "state_flag starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 1,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:196",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:449",
+        "St/SunriseStudio.Formats/NativePerkBehavior.SpecNodes.cs:40"
+      ]
+    },
+    {
+      "class": "0x80803E3C",
+      "detail": "seed u32 self_class_2 inside game tagptr at 168",
+      "kind": "overlaps_game_field",
+      "offset": 172,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.SpecNodes.cs:453"
+      ]
+    },
+    {
+      "class": "0x80803E3C",
+      "detail": "seed u64 self_payload_offset inside game tagptr at 168",
+      "kind": "overlaps_game_field",
+      "offset": 176,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.SpecNodes.cs:454"
+      ]
+    },
+    {
+      "class": "0x80803E72",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponPresentationReader.cs:32",
+        "St/SunriseStudio.Editor/WeaponSoundAuthoring.cs:102",
+        "St/SunriseStudio.Scene/GuardianArt.cs:49"
+      ]
+    },
+    {
+      "class": "0x80803E72",
+      "detail": "seed unknown, game strhash",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponPresentationAuthoring.cs:95",
+        "St/SunriseStudio.Authoring/WeaponPresentationReader.cs:11",
+        "St/SunriseStudio.Authoring/WeaponPresentationReader.cs:34",
+        "St/SunriseStudio.Scene/GuardianArt.cs:20",
+        "St/SunriseStudio.Scene/GuardianArt.cs:49"
+      ]
+    },
+    {
+      "class": "0x80803E72",
+      "detail": "seed tagref (inferred), game strhash",
+      "kind": "type_disagrees",
+      "offset": 108,
+      "refs": [
+        "St/SunriseStudio.Scene/GuardianArt.cs:20",
+        "St/SunriseStudio.Scene/GuardianArt.cs:50"
+      ]
+    },
+    {
+      "class": "0x80803EBB",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:187"
+      ]
+    },
+    {
+      "class": "0x80803EBB",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:187"
+      ]
+    },
+    {
+      "class": "0x80803EBB",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:188"
+      ]
+    },
+    {
+      "class": "0x80803EBC",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:189"
+      ]
+    },
+    {
+      "class": "0x80803EBC",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:189"
+      ]
+    },
+    {
+      "class": "0x80803EBC",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:190"
+      ]
+    },
+    {
+      "class": "0x808046D8",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Formats/CuiBindings.cs:50",
+        "St/SunriseStudio.Formats/CuiPropertyOverrides.cs:122"
+      ]
+    },
+    {
+      "class": "0x808046D8",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 32,
+      "refs": [
+        "St/SunriseStudio.Formats/CuiBindings.cs:36",
+        "St/SunriseStudio.Formats/CuiPropertyOverrides.cs:122"
+      ]
+    },
+    {
+      "class": "0x80804825",
+      "detail": "seed array components_root inside game array at 24",
+      "kind": "overlaps_game_field",
+      "offset": 32,
+      "refs": [
+        "S/middleware/content/cui/cui_config_scalar.cpp:26"
+      ]
+    },
+    {
+      "class": "0x80804858",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/middleware/content/cui/cui_config_scalar.cpp:49",
+        "St/SunriseStudio.Formats/CuiDocument.cs:139",
+        "St/SunriseStudio.Formats/CuiDocument.cs:144",
+        "St/SunriseStudio.Formats/CuiPropertyOverrides.cs:100",
+        "St/SunriseStudio.Formats/CuiPropertyOverrides.cs:105"
+      ]
+    },
+    {
+      "class": "0x80804858",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 16,
+      "refs": [
+        "S/middleware/content/cui/cui_config_scalar.cpp:29",
+        "S/middleware/content/cui/cui_config_scalar.cpp:31",
+        "St/SunriseStudio.Formats/CuiDocument.cs:139",
+        "St/SunriseStudio.Formats/CuiPropertyEdits.cs:57",
+        "St/SunriseStudio.Formats/CuiPropertyEdits.cs:65",
+        "St/SunriseStudio.Formats/CuiPropertyOverrides.cs:105",
+        "St/SunriseStudio.Formats/CuiPropertyOverrides.cs:70"
+      ]
+    },
+    {
+      "class": "0x80804B8A",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/CombatantDamage.cs:45"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "types starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.SpecNodes.cs:375",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:151",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:155",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:175",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:182",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:292",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:296",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:305",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:309"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "unknown_120 starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:271"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "unknown_288 starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:267"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "unknown_124 starts inside the field at 4",
+      "kind": "overlap",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:271"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "unknown_292 starts inside the field at 4",
+      "kind": "overlap",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:267"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "any_damage_type starts inside the field at 24",
+      "kind": "overlap",
+      "offset": 24,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:265",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:478"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "any_type starts inside the field at 24",
+      "kind": "overlap",
+      "offset": 24,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:153",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:177",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:294",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:307"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "unknown_144 starts inside the field at 24",
+      "kind": "overlap",
+      "offset": 24,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:268",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:483"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "skip_exclude_mask starts inside the field at 25",
+      "kind": "overlap",
+      "offset": 25,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:265",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:478"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "unknown_145 starts inside the field at 25",
+      "kind": "overlap",
+      "offset": 25,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:268",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:483",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:154",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:308"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "unknown_153 starts inside the field at 25",
+      "kind": "overlap",
+      "offset": 25,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:296"
+      ]
+    },
+    {
+      "class": "0x80804C81",
+      "detail": "unknown_337 starts inside the field at 25",
+      "kind": "overlap",
+      "offset": 25,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:181"
+      ]
+    },
+    {
+      "class": "0x80804F46",
+      "detail": "seed u32, game handle32",
+      "kind": "refined",
+      "offset": 68,
+      "refs": [
+        "St/SunriseStudio.Packages/ComponentSlots.Reader.cs:102",
+        "S/middleware/content/packages/tables/slot_descriptor_reader.h:49"
+      ]
+    },
+    {
+      "class": "0x80804F46",
+      "detail": "seed u32, game handle32",
+      "kind": "refined",
+      "offset": 72,
+      "refs": [
+        "St/SunriseStudio.Packages/ComponentSlots.Reader.cs:102",
+        "S/middleware/content/packages/tables/slot_descriptor_reader.h:50"
+      ]
+    },
+    {
+      "class": "0x80804F74",
+      "detail": "seed array elements inside game array at 16",
+      "kind": "overlaps_game_field",
+      "offset": 24,
+      "refs": [
+        "S/state/activity_sdk/format.h:123"
+      ]
+    },
+    {
+      "class": "0x808058EE",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentVendorAuthoring.cs:159",
+        "St/SunriseStudio.Formats/InvestmentVendorAuthoring.cs:86"
+      ]
+    },
+    {
+      "class": "0x80805B7C",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 16,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponArchetypeAuthoring.cs:85",
+        "St/SunriseStudio.Authoring/WeaponOwnershipAuthoring.cs:143-148",
+        "St/SunriseStudio.Authoring/WeaponOwnershipAuthoring.cs:25",
+        "St/SunriseStudio.Scene/GuardianArt.cs:16",
+        "St/SunriseStudio.Scene/GuardianArt.cs:39"
+      ]
+    },
+    {
+      "class": "0x80805B7C",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 20,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponArchetypeAuthoring.cs:114",
+        "St/SunriseStudio.Authoring/WeaponArchetypeAuthoring.cs:95"
+      ]
+    },
+    {
+      "class": "0x80805C9D",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:224",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:42",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:68",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:81",
+        "St/SunriseStudio.Scene/SandboxPerkDisplays.cs:39"
+      ]
+    },
+    {
+      "class": "0x80805C9D",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:101",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:157",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:238",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:310",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:89",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:92",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:98",
+        "St/SunriseStudio.Scene/SandboxPerkDisplays.cs:40",
+        "St/SunriseStudio.Scene/SandboxPerkDisplays.cs:45"
+      ]
+    },
+    {
+      "class": "0x80805C9F",
+      "detail": "seed locstring (verified), game strhash",
+      "kind": "type_disagrees",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:208",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:255",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:76",
+        "St/SunriseStudio.Scene/SandboxPerkDisplays.cs:48"
+      ]
+    },
+    {
+      "class": "0x80805C9F",
+      "detail": "seed locstring (verified), game strhash",
+      "kind": "type_disagrees",
+      "offset": 12,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:209",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:256",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:77",
+        "St/SunriseStudio.Scene/SandboxPerkDisplays.cs:49"
+      ]
+    },
+    {
+      "class": "0x80805D02",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentStatDisplay.cs:80",
+        "St/SunriseStudio.Formats/InvestmentStatGroups.cs:146",
+        "St/SunriseStudio.Formats/InvestmentStatGroups.cs:22",
+        "St/SunriseStudio.Formats/InvestmentStatGroups.cs:61",
+        "St/SunriseStudio.Formats/InvestmentStatGroups.cs:65"
+      ]
+    },
+    {
+      "class": "0x80805DFE",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponArchetypeAuthoring.cs:199",
+        "St/SunriseStudio.Authoring/WeaponArchetypeAuthoring.cs:62",
+        "St/SunriseStudio.Scene/GuardianArt.cs:116",
+        "St/SunriseStudio.Scene/GuardianArt.cs:117"
+      ]
+    },
+    {
+      "class": "0x80805E18",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/middleware/content/packages/tables/activity_presentation_table.h:13",
+        "S/middleware/content/packages/tables/activity_presentation_table.h:89",
+        "S/middleware/content/packages/tables/activity_display_name_reader.cpp:278",
+        "S/middleware/content/packages/tables/activity_display_name_reader.cpp:279",
+        "St/SunriseStudio.World/ActivityRows.cs:138",
+        "St/SunriseStudio.World/ActivityRows.cs:149",
+        "St/SunriseStudio.Projects/TableMergeRecipes.cs:211"
+      ]
+    },
+    {
+      "class": "0x80806359",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/client/content/activity/activity_sdk_authored_scene_inventory.cpp:169"
+      ]
+    },
+    {
+      "class": "0x80806359",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 16,
+      "refs": [
+        "S/client/content/activity/activity_sdk_authored_scene_event_keys.cpp:30"
+      ]
+    },
+    {
+      "class": "0x8080635A",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/client/content/activity/activity_sdk_authored_scene_event_keys.cpp:179",
+        "S/client/content/activity/activity_sdk_authored_scene_event_keys.cpp:29"
+      ]
+    },
+    {
+      "class": "0x8080637D",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/client/content/activity/activity_sdk_authored_scene_event_keys.cpp:36",
+        "S/client/content/activity/activity_sdk_authored_scene_event_keys.cpp:37"
+      ]
+    },
+    {
+      "class": "0x8080638A",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/client/content/activity/activity_sdk_authored_scene_event_keys.cpp:39"
+      ]
+    },
+    {
+      "class": "0x8080638A",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 16,
+      "refs": [
+        "S/state/activity_sdk/format.h:329"
+      ]
+    },
+    {
+      "class": "0x808063B0",
+      "detail": "seed u32 resource_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentVendorAuthoring.cs:129"
+      ]
+    },
+    {
+      "class": "0x808063B0",
+      "detail": "seed u64 resource_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentVendorAuthoring.cs:130"
+      ]
+    },
+    {
+      "class": "0x808063B1",
+      "detail": "seed u32 primary_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentVendorAuthoring.cs:131"
+      ]
+    },
+    {
+      "class": "0x808063B1",
+      "detail": "seed u64 primary_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentVendorAuthoring.cs:131"
+      ]
+    },
+    {
+      "class": "0x80806CC6",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponParticleBinding.cs:134-135",
+        "St/SunriseStudio.Interchange/BundleNativeReferences.cs:75-77",
+        "St/SunriseStudio.Scene/EffectReader.cs:78"
+      ]
+    },
+    {
+      "class": "0x80806E2C",
+      "detail": "seed relptr constants_ptr inside game array at 8",
+      "kind": "overlaps_game_field",
+      "offset": 16,
+      "refs": [
+        "St/SunriseStudio.Interchange/BundleParticlesCodec.cs:21"
+      ]
+    },
+    {
+      "class": "0x80806E2C",
+      "detail": "seed vec4 trail_start_colour__constant_c10__emitter_0x81a6b498_ ends at 960, class size 336",
+      "kind": "past_class_size",
+      "offset": 944,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponTracerAuthoring.cs:156",
+        "St/SunriseStudio.Authoring/WeaponTracerAuthoring.cs:21",
+        "St/SunriseStudio.Authoring/WeaponTracerAuthoring.cs:38"
+      ]
+    },
+    {
+      "class": "0x80806E2C",
+      "detail": "seed vec4 trail_end_colour__constant_c11_ ends at 976, class size 336",
+      "kind": "past_class_size",
+      "offset": 960,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponTracerAuthoring.cs:157",
+        "St/SunriseStudio.Authoring/WeaponTracerAuthoring.cs:21"
+      ]
+    },
+    {
+      "class": "0x80806F38",
+      "detail": "seed 20, game 24",
+      "kind": "size_disagrees",
+      "offset": 0,
+      "refs": []
+    },
+    {
+      "class": "0x80806F5A",
+      "detail": "seed 20, game 24",
+      "kind": "size_disagrees",
+      "offset": 0,
+      "refs": []
+    },
+    {
+      "class": "0x80806F61",
+      "detail": "seed 28, game 40",
+      "kind": "size_disagrees",
+      "offset": 0,
+      "refs": []
+    },
+    {
+      "class": "0x8080714F",
+      "detail": "position_buffer@104, second_vertex_buffer@108 read element 0x7F0005FA \u002B0 differently",
+      "kind": "group_fields_disagree",
+      "offset": 104,
+      "refs": [
+        "St/SunriseStudio.Scene/TerrainDecoder.cs:14",
+        "St/SunriseStudio.Scene/TerrainDecoder.cs:46"
+      ]
+    },
+    {
+      "class": "0x8080714F",
+      "detail": "seed tagref (inferred), game inline_array",
+      "kind": "type_disagrees",
+      "offset": 104,
+      "refs": [
+        "St/SunriseStudio.Scene/TerrainDecoder.cs:14",
+        "St/SunriseStudio.Scene/TerrainDecoder.cs:46"
+      ]
+    },
+    {
+      "class": "0x8080714F",
+      "detail": "seed tagref second_vertex_buffer inside game inline_array at 104",
+      "kind": "overlaps_game_field",
+      "offset": 108,
+      "refs": [
+        "St/SunriseStudio.Scene/TerrainDecoder.cs:46"
+      ]
+    },
+    {
+      "class": "0x80807199",
+      "detail": "position_buffer@4, texcoord_buffer@8 read element 0x7F000600 \u002B0 differently",
+      "kind": "group_fields_disagree",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Authoring/MeshAssetImporter.cs:108",
+        "St/SunriseStudio.Authoring/MeshAssetImporter.cs:193",
+        "St/SunriseStudio.Authoring/MeshAssetImporter.cs:194",
+        "St/SunriseStudio.Formats/AssetConnections.cs:293",
+        "St/SunriseStudio.Formats/AssetConnections.cs:294",
+        "St/SunriseStudio.Scene/StaticMeshDecoder.cs:49",
+        "St/SunriseStudio.Scene/StaticMeshDecoder.cs:52",
+        "St/SunriseStudio.Scene/StudioNameIndex.Owners.cs:65",
+        "St/SunriseStudio.Scene/StudioNameIndex.Owners.cs:66"
+      ]
+    },
+    {
+      "class": "0x80807199",
+      "detail": "seed tagref (verified), game inline_array",
+      "kind": "type_disagrees",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Authoring/MeshAssetImporter.cs:108",
+        "St/SunriseStudio.Authoring/MeshAssetImporter.cs:193",
+        "St/SunriseStudio.Formats/AssetConnections.cs:293",
+        "St/SunriseStudio.Scene/StaticMeshDecoder.cs:49",
+        "St/SunriseStudio.Scene/StudioNameIndex.Owners.cs:65"
+      ]
+    },
+    {
+      "class": "0x80807199",
+      "detail": "seed tagref texcoord_buffer inside game inline_array at 4",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Authoring/MeshAssetImporter.cs:108",
+        "St/SunriseStudio.Authoring/MeshAssetImporter.cs:194",
+        "St/SunriseStudio.Formats/AssetConnections.cs:294",
+        "St/SunriseStudio.Scene/StaticMeshDecoder.cs:52",
+        "St/SunriseStudio.Scene/StudioNameIndex.Owners.cs:66"
+      ]
+    },
+    {
+      "class": "0x808071AD",
+      "detail": "seed 20, game 24",
+      "kind": "size_disagrees",
+      "offset": 0,
+      "refs": []
+    },
+    {
+      "class": "0x808071B3",
+      "detail": "seed i64 (verified), game relptr",
+      "kind": "type_disagrees",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/InstanceIsolationScope.cs:109",
+        "St/SunriseStudio.Authoring/InstanceIsolationScope.cs:194-199",
+        "St/SunriseStudio.Authoring/InstanceIsolationWriter.cs:89"
+      ]
+    },
+    {
+      "class": "0x808071FA",
+      "detail": "seed relptr, game string_ptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Rendering/ScopeExecutionData.cs:21"
+      ]
+    },
+    {
+      "class": "0x80807286",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/AssetConnections.cs:216",
+        "St/SunriseStudio.Packages/EntityComponents.cs:265",
+        "St/SunriseStudio.Scene/EntityMeshDecoder.cs:270"
+      ]
+    },
+    {
+      "class": "0x808072B8",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:122-125"
+      ]
+    },
+    {
+      "class": "0x808072BD",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:122-125",
+        "St/SunriseStudio.Formats/AssetConnections.cs:216",
+        "St/SunriseStudio.Packages/EntityComponents.cs:265",
+        "St/SunriseStudio.Scene/EntityMeshDecoder.cs:270",
+        "St/SunriseStudio.Scene/StudioNameIndex.Owners.cs:43"
+      ]
+    },
+    {
+      "class": "0x808072C0",
+      "detail": "seed unknown, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:89"
+      ]
+    },
+    {
+      "class": "0x808072C1",
+      "detail": "seed unknown, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:89"
+      ]
+    },
+    {
+      "class": "0x808072C7",
+      "detail": "seed unknown, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:88"
+      ]
+    },
+    {
+      "class": "0x808072CB",
+      "detail": "seed unknown, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:88"
+      ]
+    },
+    {
+      "class": "0x808072D2",
+      "detail": "plate_descriptor_0@36, plate_descriptor_1@40, plate_descriptor_2@44 read element 0x7F00061D \u002B0 differently",
+      "kind": "group_fields_disagree",
+      "offset": 36,
+      "refs": [
+        "St/SunriseStudio.Viewport/NativePlateAtlases.cs:100",
+        "St/SunriseStudio.Viewport/NativePlateAtlases.cs:67"
+      ]
+    },
+    {
+      "class": "0x808072D2",
+      "detail": "seed tagref (verified), game inline_array",
+      "kind": "type_disagrees",
+      "offset": 36,
+      "refs": [
+        "St/SunriseStudio.Viewport/NativePlateAtlases.cs:100",
+        "St/SunriseStudio.Viewport/NativePlateAtlases.cs:67"
+      ]
+    },
+    {
+      "class": "0x808072D2",
+      "detail": "seed tagref plate_descriptor_1 inside game inline_array at 36",
+      "kind": "overlaps_game_field",
+      "offset": 40,
+      "refs": [
+        "St/SunriseStudio.Viewport/NativePlateAtlases.cs:100",
+        "St/SunriseStudio.Viewport/NativePlateAtlases.cs:67"
+      ]
+    },
+    {
+      "class": "0x808072D2",
+      "detail": "seed tagref plate_descriptor_2 inside game inline_array at 36",
+      "kind": "overlaps_game_field",
+      "offset": 44,
+      "refs": [
+        "St/SunriseStudio.Viewport/NativePlateAtlases.cs:100",
+        "St/SunriseStudio.Viewport/NativePlateAtlases.cs:67"
+      ]
+    },
+    {
+      "class": "0x80807314",
+      "detail": "seed unknown, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:90"
+      ]
+    },
+    {
+      "class": "0x80807315",
+      "detail": "seed unknown, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:90"
+      ]
+    },
+    {
+      "class": "0x80807335",
+      "detail": "seed array, game relptr at 16",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Authoring/InstanceCullRule.cs:117",
+        "St/SunriseStudio.Authoring/InstanceVisibilityMap.cs:13"
+      ]
+    },
+    {
+      "class": "0x80807335",
+      "detail": "seed array, game relptr at 32",
+      "kind": "refined",
+      "offset": 24,
+      "refs": [
+        "St/SunriseStudio.Authoring/InstanceVisibilityMap.cs:14"
+      ]
+    },
+    {
+      "class": "0x80807378",
+      "detail": "vertex_buffer_0@0, vertex_buffer_1@4, vertex_buffer_2@8 read element 0x7F000623 \u002B0 differently",
+      "kind": "group_fields_disagree",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Animation/ClothSkinReader.cs:36",
+        "St/SunriseStudio.Animation/ModelSkinReader.cs:50",
+        "St/SunriseStudio.Animation/ModelSkinReader.cs:57",
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.cs:195",
+        "St/SunriseStudio.Authoring/WeaponAssetModelCompiler.cs:112",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:121",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:126",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:127",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:141",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:217",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:218",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:90",
+        "St/SunriseStudio.Formats/AssetConnections.cs:300",
+        "St/SunriseStudio.Formats/AssetConnections.cs:301",
+        "St/SunriseStudio.Packages/PackageNativeDependencies.cs:111",
+        "St/SunriseStudio.Scene/EntityMeshDecoder.cs:107",
+        "St/SunriseStudio.Scene/EntityMeshDecoder.cs:125",
+        "St/SunriseStudio.Scene/EntityMeshDecoder.cs:165",
+        "St/SunriseStudio.Scene/EntityMeshDecoder.cs:166"
+      ]
+    },
+    {
+      "class": "0x80807378",
+      "detail": "seed tagref (verified), game inline_array",
+      "kind": "type_disagrees",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Animation/ClothSkinReader.cs:36",
+        "St/SunriseStudio.Animation/ModelSkinReader.cs:50",
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.cs:195",
+        "St/SunriseStudio.Authoring/WeaponAssetModelCompiler.cs:112",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:126",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:217",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:90",
+        "St/SunriseStudio.Formats/AssetConnections.cs:300",
+        "St/SunriseStudio.Formats/AssetConnections.cs:301",
+        "St/SunriseStudio.Packages/PackageNativeDependencies.cs:111",
+        "St/SunriseStudio.Scene/EntityMeshDecoder.cs:107",
+        "St/SunriseStudio.Scene/EntityMeshDecoder.cs:165"
+      ]
+    },
+    {
+      "class": "0x80807378",
+      "detail": "seed tagref vertex_buffer_1 inside game inline_array at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.cs:195",
+        "St/SunriseStudio.Authoring/WeaponAssetModelCompiler.cs:112",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:127",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:218",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:90",
+        "St/SunriseStudio.Formats/AssetConnections.cs:300",
+        "St/SunriseStudio.Formats/AssetConnections.cs:301",
+        "St/SunriseStudio.Packages/PackageNativeDependencies.cs:111",
+        "St/SunriseStudio.Scene/EntityMeshDecoder.cs:125"
+      ]
+    },
+    {
+      "class": "0x80807378",
+      "detail": "seed tagref vertex_buffer_2 inside game inline_array at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Animation/ClothSkinReader.cs:36",
+        "St/SunriseStudio.Animation/ModelSkinReader.cs:57",
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.cs:195",
+        "St/SunriseStudio.Authoring/WeaponAssetModelCompiler.cs:112",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:121",
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:141",
+        "St/SunriseStudio.Formats/AssetConnections.cs:300",
+        "St/SunriseStudio.Formats/AssetConnections.cs:301",
+        "St/SunriseStudio.Packages/PackageNativeDependencies.cs:111",
+        "St/SunriseStudio.Scene/EntityMeshDecoder.cs:166"
+      ]
+    },
+    {
+      "class": "0x80807378",
+      "detail": "seed i64 parts_relptr__rebased_on_copy_ inside game array at 24",
+      "kind": "overlaps_game_field",
+      "offset": 32,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponReticleAuthoring.cs:206-208"
+      ]
+    },
+    {
+      "class": "0x8080748E",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 20,
+      "refs": [
+        "S/client/content/items/packages/package_reward_build.cpp:61"
+      ]
+    },
+    {
+      "class": "0x80807711",
+      "detail": "seed relptr, game string_ptr",
+      "kind": "refined",
+      "offset": 104,
+      "refs": [
+        "S/middleware/content/packages/tables/activity_definition_reader.cpp:46",
+        "S/middleware/content/packages/tables/activity_definition_reader.cpp:206-209",
+        "S/middleware/content/packages/tables/activity_table.h:19",
+        "St/SunriseStudio.World/ActivityRows.cs:43",
+        "St/SunriseStudio.World/ActivityRows.cs:125"
+      ]
+    },
+    {
+      "class": "0x808077AF",
+      "detail": "gear_index starts inside the field at 88",
+      "kind": "overlap",
+      "offset": 88,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponArchetypeAuthoring.cs:41",
+        "St/SunriseStudio.Authoring/WeaponArchetypeAuthoring.cs:105",
+        "St/SunriseStudio.Authoring/WeaponArchetypeAuthoring.cs:220"
+      ]
+    },
+    {
+      "class": "0x80807850",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentVendorAuthoring.cs:151",
+        "St/SunriseStudio.Formats/InvestmentVendorAuthoring.cs:85"
+      ]
+    },
+    {
+      "class": "0x80807AAE",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:103",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:304",
+        "St/SunriseStudio.Formats/InvestmentSandboxPerkAuthoring.cs:69"
+      ]
+    },
+    {
+      "class": "0x80807AD4",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "S/middleware/content/packages/tables/definition_index_table.h:171"
+      ]
+    },
+    {
+      "class": "0x80807D31",
+      "detail": "seed u32 condition_record_class ends at 16, class size 8",
+      "kind": "past_class_size",
+      "offset": 12,
+      "refs": [
+        "S/client/hooks/network/investment/socket_row_relocation.h:37"
+      ]
+    },
+    {
+      "class": "0x80807D31",
+      "detail": "seed u64 condition_reserved ends at 24, class size 8",
+      "kind": "past_class_size",
+      "offset": 16,
+      "refs": [
+        "S/client/hooks/network/investment/socket_row_relocation.h:38"
+      ]
+    },
+    {
+      "class": "0x80807EBE",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:74"
+      ]
+    },
+    {
+      "class": "0x80807EBE",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:75"
+      ]
+    },
+    {
+      "class": "0x80807EBE",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:76"
+      ]
+    },
+    {
+      "class": "0x80807EBF",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:74"
+      ]
+    },
+    {
+      "class": "0x80807EBF",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:75"
+      ]
+    },
+    {
+      "class": "0x80807EBF",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:76"
+      ]
+    },
+    {
+      "class": "0x80807EE1",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/client/content/activity/activity_sdk_actor_sequences.h:180"
+      ]
+    },
+    {
+      "class": "0x80807EE1",
+      "detail": "seed u32 source_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "S/client/content/activity/activity_sdk_actor_sequences.h:181",
+        "S/state/activity_sdk/format.h:379"
+      ]
+    },
+    {
+      "class": "0x80807EE1",
+      "detail": "seed u64 source_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "S/client/content/activity/activity_sdk_actor_sequences.h:183"
+      ]
+    },
+    {
+      "class": "0x8080815F",
+      "detail": "seed locstring (inferred), game strhash",
+      "kind": "type_disagrees",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Packages/ComponentIndex.Refresh.cs:144",
+        "St/SunriseStudio.Packages/EntityComponents.cs:120"
+      ]
+    },
+    {
+      "class": "0x808081AE",
+      "detail": "seed relptr, game string_ptr",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "S/client/content/activity/activity_sdk_actor_sequences.h:20"
+      ]
+    },
+    {
+      "class": "0x80808356",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/middleware/content/packages/tables/authored_squad_reader.cpp:279"
+      ]
+    },
+    {
+      "class": "0x808084E9",
+      "detail": "seed tagref trail_system__tommy_tracer_sequence_config__absolute_ ends at 4004, class size 744",
+      "kind": "past_class_size",
+      "offset": 4000,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponTracerAuthoring.cs:111",
+        "St/SunriseStudio.Authoring/WeaponTracerAuthoring.cs:134",
+        "St/SunriseStudio.Authoring/WeaponTracerAuthoring.cs:19",
+        "St/SunriseStudio.Authoring/WeaponTracerAuthoring.cs:36"
+      ]
+    },
+    {
+      "class": "0x80808568",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/EffectPlacements.cs:197"
+      ]
+    },
+    {
+      "class": "0x80808568",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/EffectPlacements.cs:198"
+      ]
+    },
+    {
+      "class": "0x80808568",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/EffectPlacements.cs:198"
+      ]
+    },
+    {
+      "class": "0x80808569",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/EffectPlacements.cs:195"
+      ]
+    },
+    {
+      "class": "0x80808569",
+      "detail": "seed 16, game 176",
+      "kind": "size_disagrees",
+      "offset": 0,
+      "refs": []
+    },
+    {
+      "class": "0x80808569",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/EffectPlacements.cs:195"
+      ]
+    },
+    {
+      "class": "0x80808569",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/EffectPlacements.cs:196",
+        "St/SunriseStudio.Scene/EntityAttachments.cs:161"
+      ]
+    },
+    {
+      "class": "0x8080860D",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/EffectReader.cs:165",
+        "St/SunriseStudio.Scene/EffectReader.cs:167"
+      ]
+    },
+    {
+      "class": "0x8080860D",
+      "detail": "seed u32 location_table_pair_word inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/EffectReader.cs:167"
+      ]
+    },
+    {
+      "class": "0x80808852",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/state/activity_sdk/format.h:518"
+      ]
+    },
+    {
+      "class": "0x80808852",
+      "detail": "seed u32, game handle32",
+      "kind": "refined",
+      "offset": 16,
+      "refs": [
+        "S/client/content/activity/activity_sdk_actor_rsat_read.cpp:273",
+        "S/client/content/activity/activity_sdk_decode_plans_compiler.cpp:216"
+      ]
+    },
+    {
+      "class": "0x80809002",
+      "detail": "seed i64 (verified), game array",
+      "kind": "type_disagrees",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponPresentationAuthoring.cs:145"
+      ]
+    },
+    {
+      "class": "0x80809002",
+      "detail": "seed i64 undecoded_link_b__must_be_0_ inside game array at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponPresentationAuthoring.cs:145"
+      ]
+    },
+    {
+      "class": "0x80809033",
+      "detail": "seed relptr, game string_ptr",
+      "kind": "refined",
+      "offset": 16,
+      "refs": [
+        "St/SunriseStudio.Animation/AnimationClipNames.cs:81-82"
+      ]
+    },
+    {
+      "class": "0x808091A4",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/middleware/content/packages/tables/container_placement_reader.cpp:137",
+        "S/middleware/content/packages/tables/trigger_volume_reader.cpp:203",
+        "St/SunriseStudio.Authoring/ObjectRows.cs:124",
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:234",
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:246",
+        "St/SunriseStudio.Scene/VolumeDecoder.cs:26"
+      ]
+    },
+    {
+      "class": "0x808091A4",
+      "detail": "seed u32, game handle32",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "S/middleware/content/packages/tables/container_placement_reader.cpp:138",
+        "St/SunriseStudio.Authoring/ObjectRows.cs:123",
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:247",
+        "St/SunriseStudio.Scene/VolumeDecoder.cs:25"
+      ]
+    },
+    {
+      "class": "0x8080929B",
+      "detail": "seed u32, game tagref",
+      "kind": "refined",
+      "offset": 20,
+      "refs": [
+        "S/middleware/content/packages/tables/trigger_volume_reader.cpp:42"
+      ]
+    },
+    {
+      "class": "0x8080929B",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 28,
+      "refs": [
+        "S/middleware/content/packages/tables/trigger_volume_reader.cpp:44"
+      ]
+    },
+    {
+      "class": "0x808092A1",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/Collision/CollisionSceneLoader.Inline.cs:28"
+      ]
+    },
+    {
+      "class": "0x808092F3",
+      "detail": "seed unknown health_block_1 ends at 496, class size 80",
+      "kind": "past_class_size",
+      "offset": 64,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityInitialState.cs:250"
+      ]
+    },
+    {
+      "class": "0x80809311",
+      "detail": "relation_filter_0x20 starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:258",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:290",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:493"
+      ]
+    },
+    {
+      "class": "0x80809311",
+      "detail": "unknown_112 starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:108",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:220"
+      ]
+    },
+    {
+      "class": "0x80809311",
+      "detail": "unknown_16 starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:219"
+      ]
+    },
+    {
+      "class": "0x80809311",
+      "detail": "unknown_48 starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:219"
+      ]
+    },
+    {
+      "class": "0x80809311",
+      "detail": "unknown_80 starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:219"
+      ]
+    },
+    {
+      "class": "0x80809312",
+      "detail": "seed u64 (inferred), game array",
+      "kind": "type_disagrees",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:270"
+      ]
+    },
+    {
+      "class": "0x80809312",
+      "detail": "seed u64 (verified), game array",
+      "kind": "type_disagrees",
+      "offset": 8,
+      "refs": [
+        "S/client/content/activity/activity_sdk_behavior_inventory.cpp:27",
+        "S/client/content/activity/activity_sdk_behavior_inventory.cpp:29",
+        "St/SunriseStudio.Formats/BehaviorInspector.cs:148",
+        "St/SunriseStudio.Formats/BehaviorInspector.cs:149",
+        "St/SunriseStudio.Formats/BehaviorInspector.cs:167",
+        "St/SunriseStudio.Formats/BehaviorInspector.cs:168"
+      ]
+    },
+    {
+      "class": "0x80809312",
+      "detail": "seed array children ends at 32, class size 24",
+      "kind": "past_class_size",
+      "offset": 16,
+      "refs": [
+        "S/client/content/activity/activity_sdk_behavior_inventory.cpp:309",
+        "S/client/content/activity/activity_sdk_behavior_inventory.cpp:312"
+      ]
+    },
+    {
+      "class": "0x80809462",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 12,
+      "refs": [
+        "S/middleware/content/packages/tables/scenario_reader.h:54",
+        "St/SunriseStudio.Packages/ComponentSlots.Reader.cs:48",
+        "St/SunriseStudio.Scene/ScenarioReader.cs:112"
+      ]
+    },
+    {
+      "class": "0x8080948F",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:55"
+      ]
+    },
+    {
+      "class": "0x8080948F",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:56"
+      ]
+    },
+    {
+      "class": "0x8080948F",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:57"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "damage_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:15",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:497"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "first_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:141"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "killer_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:180"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "label_filter_kind_item_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:472",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:80"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "label_filter_kind_slot_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:418"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "message_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:111"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "second_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:141"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "slot_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:286"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "source_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:15",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:476",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:482",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:497",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:154",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:181",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:295",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:308"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "victim_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:475",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:180"
+      ]
+    },
+    {
+      "class": "0x808094A8",
+      "detail": "weapon_filter_kind starts inside the field at 0",
+      "kind": "overlap",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:123",
+        "St/SunriseStudio.Formats/NativePerkBehavior.LabelFilters.cs:54",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Specs.cs:108"
+      ]
+    },
+    {
+      "class": "0x808094CF",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:55"
+      ]
+    },
+    {
+      "class": "0x808094CF",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:56"
+      ]
+    },
+    {
+      "class": "0x808094CF",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:57"
+      ]
+    },
+    {
+      "class": "0x808094D0",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/middleware/content/packages/tables/authored_squad_reader.h:37",
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:55"
+      ]
+    },
+    {
+      "class": "0x808094D0",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:56"
+      ]
+    },
+    {
+      "class": "0x808094D0",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:57"
+      ]
+    },
+    {
+      "class": "0x80809663",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:187"
+      ]
+    },
+    {
+      "class": "0x80809663",
+      "detail": "seed 16, game 128",
+      "kind": "size_disagrees",
+      "offset": 0,
+      "refs": []
+    },
+    {
+      "class": "0x80809663",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:187"
+      ]
+    },
+    {
+      "class": "0x80809663",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:161"
+      ]
+    },
+    {
+      "class": "0x80809664",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:189"
+      ]
+    },
+    {
+      "class": "0x80809664",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:189"
+      ]
+    },
+    {
+      "class": "0x80809664",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/EntityAttachments.cs:190"
+      ]
+    },
+    {
+      "class": "0x8080966D",
+      "detail": "seed i64 (inferred), game array",
+      "kind": "type_disagrees",
+      "offset": 32,
+      "refs": [
+        "St/SunriseStudio.Authoring/InstanceIsolationWriter.cs:18"
+      ]
+    },
+    {
+      "class": "0x80809788",
+      "detail": "seed unknown, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:96"
+      ]
+    },
+    {
+      "class": "0x80809789",
+      "detail": "seed unknown, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:96"
+      ]
+    },
+    {
+      "class": "0x80809789",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 32,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponReloadEffectAuthoring.cs:85",
+        "St/SunriseStudio.Scene/ObjectChannelRest.cs:118",
+        "St/SunriseStudio.Scene/ObjectChannelRest.cs:125",
+        "St/SunriseStudio.Scene/SequenceResource.cs:25",
+        "St/SunriseStudio.Scene/SequenceResource.cs:42"
+      ]
+    },
+    {
+      "class": "0x80809928",
+      "detail": "seed u32, game handle32",
+      "kind": "refined",
+      "offset": 68,
+      "refs": [
+        "St/SunriseStudio.Packages/ComponentSlots.Reader.cs:102",
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:37",
+        "S/middleware/content/packages/tables/slot_descriptor_reader.h:49"
+      ]
+    },
+    {
+      "class": "0x80809928",
+      "detail": "seed u32, game handle32",
+      "kind": "refined",
+      "offset": 72,
+      "refs": [
+        "St/SunriseStudio.Packages/ComponentSlots.Reader.cs:102",
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:38",
+        "S/middleware/content/packages/tables/slot_descriptor_reader.h:50"
+      ]
+    },
+    {
+      "class": "0x80809994",
+      "detail": "seed locstring (inferred), game strhash",
+      "kind": "type_disagrees",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Packages/GameNames.cs:204"
+      ]
+    },
+    {
+      "class": "0x80809994",
+      "detail": "seed locstring (inferred), game strhash",
+      "kind": "type_disagrees",
+      "offset": 32,
+      "refs": [
+        "St/SunriseStudio.Packages/GameNames.cs:205"
+      ]
+    },
+    {
+      "class": "0x808099C8",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/middleware/content/packages/tables/trigger_volume_reader.cpp:203",
+        "St/SunriseStudio.Authoring/ObjectRows.cs:125",
+        "St/SunriseStudio.Scene/VolumeDecoder.cs:27"
+      ]
+    },
+    {
+      "class": "0x808099C8",
+      "detail": "seed 16, game 2384",
+      "kind": "size_disagrees",
+      "offset": 0,
+      "refs": []
+    },
+    {
+      "class": "0x808099C8",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Authoring/ObjectRows.cs:125",
+        "St/SunriseStudio.Scene/VolumeDecoder.cs:27"
+      ]
+    },
+    {
+      "class": "0x808099C8",
+      "detail": "seed u64 root_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "S/middleware/content/packages/tables/trigger_volume_reader.cpp:203",
+        "St/SunriseStudio.Authoring/ObjectRows.cs:126",
+        "St/SunriseStudio.Scene/VolumeDecoder.cs:29"
+      ]
+    },
+    {
+      "class": "0x808099C9",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/middleware/content/packages/tables/trigger_volume_reader.cpp:14"
+      ]
+    },
+    {
+      "class": "0x808099D0",
+      "detail": "seed u32, game strhash",
+      "kind": "refined",
+      "offset": 12,
+      "refs": [
+        "S/middleware/content/packages/tables/trigger_volume_reader.cpp:20",
+        "St/SunriseStudio.Scene/VolumeDecoder.cs:50"
+      ]
+    },
+    {
+      "class": "0x808099D8",
+      "detail": "placement_rotation__must_be_identity_ starts inside the field at 16",
+      "kind": "overlap",
+      "offset": 16,
+      "refs": [
+        "St/SunriseStudio.Authoring/ObjectRows.cs:128",
+        "St/SunriseStudio.Scene/VolumeDecoder.cs:34"
+      ]
+    },
+    {
+      "class": "0x808099D8",
+      "detail": "placement_translation__must_be_zero_ starts inside the field at 32",
+      "kind": "overlap",
+      "offset": 32,
+      "refs": [
+        "St/SunriseStudio.Authoring/ObjectRows.cs:129",
+        "St/SunriseStudio.Scene/VolumeDecoder.cs:35"
+      ]
+    },
+    {
+      "class": "0x808099D8",
+      "detail": "seed i64 (verified), game relptr",
+      "kind": "type_disagrees",
+      "offset": 128,
+      "refs": [
+        "St/SunriseStudio.Authoring/InstanceIsolationScope.cs:109",
+        "St/SunriseStudio.Authoring/InstanceIsolationWriter.cs:89"
+      ]
+    },
+    {
+      "class": "0x80809A32",
+      "detail": "unknown_64_one_20 starts inside the field at 32",
+      "kind": "overlap",
+      "offset": 32,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:512"
+      ]
+    },
+    {
+      "class": "0x80809A32",
+      "detail": "unknown_64_one starts inside the field at 40",
+      "kind": "overlap",
+      "offset": 40,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:464",
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:512"
+      ]
+    },
+    {
+      "class": "0x80809A32",
+      "detail": "unknown_72_one starts inside the field at 40",
+      "kind": "overlap",
+      "offset": 40,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:512"
+      ]
+    },
+    {
+      "class": "0x80809A32",
+      "detail": "evaluator_override starts inside the field at 40",
+      "kind": "overlap",
+      "offset": 44,
+      "refs": [
+        "St/SunriseStudio.Formats/BehaviorExpression.cs:44"
+      ]
+    },
+    {
+      "class": "0x80809A32",
+      "detail": "evaluator_override_2c starts inside the field at 40",
+      "kind": "overlap",
+      "offset": 44,
+      "refs": [
+        "St/SunriseStudio.Formats/NativePerkBehavior.Nodes.cs:569"
+      ]
+    },
+    {
+      "class": "0x80809A3B",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:55"
+      ]
+    },
+    {
+      "class": "0x80809A3B",
+      "detail": "seed u32 peer_class inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:56"
+      ]
+    },
+    {
+      "class": "0x80809A3B",
+      "detail": "seed u64 peer_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Scene/AuthoredSquads.cs:57"
+      ]
+    },
+    {
+      "class": "0x80809A6F",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/middleware/content/packages/tables/slot_descriptor_reader.h:42",
+        "S/middleware/content/packages/tables/slot_descriptor_reader.h:43",
+        "S/middleware/content/packages/tables/slot_descriptor_reader.h:44",
+        "S/middleware/content/packages/tables/slot_descriptor_reader.cpp:22"
+      ]
+    },
+    {
+      "class": "0x80809A6F",
+      "detail": "seed u32, game handle32",
+      "kind": "refined",
+      "offset": 68,
+      "refs": [
+        "S/middleware/content/packages/tables/slot_descriptor_reader.h:49",
+        "S/middleware/content/packages/tables/slot_descriptor_reader.cpp:32"
+      ]
+    },
+    {
+      "class": "0x80809A6F",
+      "detail": "seed u32, game handle32",
+      "kind": "refined",
+      "offset": 72,
+      "refs": [
+        "S/middleware/content/packages/tables/slot_descriptor_reader.h:50",
+        "S/middleware/content/packages/tables/slot_descriptor_reader.cpp:33"
+      ]
+    },
+    {
+      "class": "0x80809A8E",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/middleware/content/packages/tables/activity_presentation_table.h:34",
+        "St/SunriseStudio.Packages/LocalizedStrings.cs:129",
+        "St/SunriseStudio.Packages/StringBankWriter.cs:232",
+        "St/SunriseStudio.Packages/StringBankWriter.cs:257",
+        "St/SunriseStudio.Packages/StringBankWriter.cs:92"
+      ]
+    },
+    {
+      "class": "0x80809A90",
+      "detail": "seed relptr, game blockptr",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "S/middleware/content/packages/tables/activity_display_name_reader.cpp:342",
+        "S/middleware/content/packages/tables/activity_presentation_table.h:40",
+        "St/SunriseStudio.Packages/LocalizedStrings.cs:144",
+        "St/SunriseStudio.Packages/StringBankWriter.cs:103",
+        "St/SunriseStudio.Packages/StringBankWriter.cs:17",
+        "St/SunriseStudio.Packages/StringBankWriter.cs:224",
+        "St/SunriseStudio.Packages/StringBankWriter.cs:266"
+      ]
+    },
+    {
+      "class": "0x80809A90",
+      "detail": "part_flags starts inside the field at 26",
+      "kind": "overlap",
+      "offset": 27,
+      "refs": [
+        "St/SunriseStudio.Packages/StringBankWriter.cs:119",
+        "St/SunriseStudio.Packages/StringBankWriter.cs:21"
+      ]
+    },
+    {
+      "class": "0x80809BA3",
+      "detail": "seed unknown unknown_0 inside game inline_array at 8",
+      "kind": "overlaps_game_field",
+      "offset": 0,
+      "refs": [
+        "S/client/content/activity/activity_sdk_activity_inventory.h:26"
+      ]
+    },
+    {
+      "class": "0x80809BC5",
+      "detail": "seed i64 (verified), game array",
+      "kind": "type_disagrees",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:102",
+        "St/SunriseStudio.Authoring/InstanceIsolationScope.cs:116",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:136-138",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:14",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:72",
+        "St/SunriseStudio.Formats/WeaponConfigEdits.cs:60"
+      ]
+    },
+    {
+      "class": "0x80809BC5",
+      "detail": "seed i64 unknown_0x28__must_be_0_ inside game array at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Authoring/InstanceIsolationScope.cs:116"
+      ]
+    },
+    {
+      "class": "0x80809BC5",
+      "detail": "seed i64 (verified), game array",
+      "kind": "type_disagrees",
+      "offset": 16,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:103",
+        "St/SunriseStudio.Authoring/InstanceIsolationScope.cs:117",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:136-138",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:14",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:72",
+        "St/SunriseStudio.Formats/WeaponConfigEdits.cs:60"
+      ]
+    },
+    {
+      "class": "0x80809BC9",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:102",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:72",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:90",
+        "St/SunriseStudio.Formats/WeaponConfigEdits.cs:60",
+        "St/SunriseStudio.Formats/WeaponConfigEdits.cs:68"
+      ]
+    },
+    {
+      "class": "0x80809BC9",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 40,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:102",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:72",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:90",
+        "St/SunriseStudio.Formats/WeaponConfigEdits.cs:60",
+        "St/SunriseStudio.Formats/WeaponConfigEdits.cs:68"
+      ]
+    },
+    {
+      "class": "0x80809BD8",
+      "detail": "seed unknown, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:87"
+      ]
+    },
+    {
+      "class": "0x80809BD9",
+      "detail": "seed unknown, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:87"
+      ]
+    },
+    {
+      "class": "0x80809C20",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "S/client/content/activity/activity_sdk_behavior_inventory.cpp:490",
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:105",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:59",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:67",
+        "St/SunriseStudio.Formats/WeaponConfigEdits.cs:61",
+        "St/SunriseStudio.Formats/WeaponConfigEdits.cs:68"
+      ]
+    },
+    {
+      "class": "0x80809C20",
+      "detail": "seed u32 subtype inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 4,
+      "refs": [
+        "S/client/content/activity/activity_sdk_behavior_inventory.cpp:490",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:61"
+      ]
+    },
+    {
+      "class": "0x80809C20",
+      "detail": "seed i64 interface_offset inside game tagptr at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:68"
+      ]
+    },
+    {
+      "class": "0x80809C22",
+      "detail": "seed u32, game handle32",
+      "kind": "refined",
+      "offset": 12,
+      "refs": [
+        "S/client/content/activity/activity_sdk_behavior_inventory.cpp:492",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:43",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:58"
+      ]
+    },
+    {
+      "class": "0x80809C22",
+      "detail": "seed tagref, game tagptr",
+      "kind": "refined",
+      "offset": 16,
+      "refs": [
+        "S/client/content/activity/activity_sdk_behavior_inventory.cpp:493",
+        "St/SunriseStudio.Authoring/CompatibleSkinnedMesh.Entity.cs:104",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:42",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:57",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:65",
+        "St/SunriseStudio.Formats/WeaponConfigEdits.cs:61",
+        "St/SunriseStudio.Formats/WeaponConfigEdits.cs:68",
+        "St/SunriseStudio.Scene/EntityInitialState.cs:105"
+      ]
+    },
+    {
+      "class": "0x80809C22",
+      "detail": "seed u32 ordering_field_0x14 inside game tagptr at 16",
+      "kind": "overlaps_game_field",
+      "offset": 20,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:60"
+      ]
+    },
+    {
+      "class": "0x80809C22",
+      "detail": "seed i64 interface_offset_in_config inside game tagptr at 16",
+      "kind": "overlaps_game_field",
+      "offset": 24,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:61",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:66",
+        "St/SunriseStudio.Scene/EntityInitialState.cs:105"
+      ]
+    },
+    {
+      "class": "0x80809C22",
+      "detail": "seed u32, game tagref",
+      "kind": "refined",
+      "offset": 32,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:43",
+        "St/SunriseStudio.Authoring/WeaponFiringSlotEntity.cs:58",
+        "St/SunriseStudio.Scene/EntityInitialState.cs:100"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed unknown owner_pair_primary_0x80808507__point_provider_0x80b9eac3_ ends at 144, class size 96",
+      "kind": "past_class_size",
+      "offset": 128,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:50"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed unknown bound_method_owner_slot8__0x80803e70__8__owner__0x80803e70__i64_0x80_ ends at 200, class size 96",
+      "kind": "past_class_size",
+      "offset": 176,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:51",
+        "St/SunriseStudio.Authoring/WeaponPresentationAuthoring.cs:234-240",
+        "St/SunriseStudio.Scene/WorldPlacementUpdate.cs:264"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed unknown owner_pair_primary_0x80809bd7__point_provider_ ends at 224, class size 96",
+      "kind": "past_class_size",
+      "offset": 208,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:52"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed unknown bound_method_owner_slot9 ends at 248, class size 96",
+      "kind": "past_class_size",
+      "offset": 224,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponPresentationAuthoring.cs:234-240"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed tagref animation_definition__0x8152c7cd_only_ ends at 340, class size 96",
+      "kind": "past_class_size",
+      "offset": 336,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponPresentationAuthoring.cs:98"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed unknown owner_pair_resource_0x80808506 ends at 376, class size 96",
+      "kind": "past_class_size",
+      "offset": 360,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:50"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed unknown owner_pair_resource_0x80808569 ends at 472, class size 96",
+      "kind": "past_class_size",
+      "offset": 456,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:51"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed unknown owner_pair_resource_0x80809bd6 ends at 488, class size 96",
+      "kind": "past_class_size",
+      "offset": 472,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:52"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed array attachment_points__64_byte_rows__provider_resource__536_ ends at 552, class size 96",
+      "kind": "past_class_size",
+      "offset": 536,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:240-242",
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:25",
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:53"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed array location_flags__anchored_in_config__before_sequence_resource_ ends at 560, class size 96",
+      "kind": "past_class_size",
+      "offset": 544,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponParticleBinding.cs:127",
+        "St/SunriseStudio.Authoring/WeaponParticleBinding.cs:27",
+        "St/SunriseStudio.Authoring/WeaponReloadEffectAuthoring.cs:28",
+        "St/SunriseStudio.Authoring/WeaponReloadEffectAuthoring.cs:75"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed tagref selector_definition__0x8152c7c9_only_ ends at 2076, class size 96",
+      "kind": "past_class_size",
+      "offset": 2072,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponPresentationAuthoring.cs:97"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed tagref selector_query_table__0x8152c7c9_only_ ends at 2088, class size 96",
+      "kind": "past_class_size",
+      "offset": 2084,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponPresentationAuthoring.cs:119"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed array presentation_rows__secondary_at__0x598__1416_ ends at 2864, class size 96",
+      "kind": "past_class_size",
+      "offset": 2848,
+      "refs": [
+        "St/SunriseStudio.Editor/WeaponSoundAuthoring.cs:101-102"
+      ]
+    },
+    {
+      "class": "0x80809C36",
+      "detail": "seed tagref state_definition__0x8161fa61_only_ ends at 13892, class size 96",
+      "kind": "past_class_size",
+      "offset": 13888,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponPresentationAuthoring.cs:99"
+      ]
+    },
+    {
+      "class": "0x80809D02",
+      "detail": "the game has no record for this seed class",
+      "kind": "no_game_record",
+      "offset": 0,
+      "refs": []
+    },
+    {
+      "class": "0x80809EEA",
+      "detail": "seed u64 (verified), game array",
+      "kind": "type_disagrees",
+      "offset": 0,
+      "refs": [
+        "S/middleware/content/packages/table_merge/manifest_set.cpp:16",
+        "St/SunriseStudio.Packages/PackageManifest.cs:10",
+        "St/SunriseStudio.Packages/PackageManifest.cs:129",
+        "St/SunriseStudio.Packages/PackageManifest.cs:46"
+      ]
+    },
+    {
+      "class": "0x80809EEA",
+      "detail": "seed relptr groups inside game array at 0",
+      "kind": "overlaps_game_field",
+      "offset": 8,
+      "refs": [
+        "S/middleware/content/packages/table_merge/manifest_set.cpp:17",
+        "St/SunriseStudio.Packages/PackageManifest.cs:10",
+        "St/SunriseStudio.Packages/PackageManifest.cs:117",
+        "St/SunriseStudio.Packages/PackageManifest.cs:48"
+      ]
+    },
+    {
+      "class": "0x80809EEA",
+      "detail": "seed u64 (verified), game array",
+      "kind": "type_disagrees",
+      "offset": 16,
+      "refs": [
+        "S/middleware/content/packages/table_merge/manifest_set.cpp:18",
+        "St/SunriseStudio.Packages/PackageManifest.cs:10",
+        "St/SunriseStudio.Packages/PackageManifest.cs:101"
+      ]
+    },
+    {
+      "class": "0x80809EEA",
+      "detail": "seed relptr keys inside game array at 16",
+      "kind": "overlaps_game_field",
+      "offset": 24,
+      "refs": [
+        "S/middleware/content/packages/table_merge/manifest_set.cpp:19",
+        "S/middleware/content/packages/table_merge/manifest_set.cpp:48",
+        "St/SunriseStudio.Packages/PackageManifest.cs:10",
+        "St/SunriseStudio.Packages/PackageManifest.cs:102"
+      ]
+    },
+    {
+      "class": "0x80809EEC",
+      "detail": "the game has no record for this seed class",
+      "kind": "no_game_record",
+      "offset": 0,
+      "refs": []
+    },
+    {
+      "class": "0x80809EEE",
+      "detail": "the game has no record for this seed class",
+      "kind": "no_game_record",
+      "offset": 0,
+      "refs": []
+    },
+    {
+      "class": "0x80809F2A",
+      "detail": "seed array, game relptr at 8",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Formats/WeaponTranslationEdits.cs:106"
+      ]
+    },
+    {
+      "class": "0x80809FBB",
+      "detail": "seed array, game relptr at 8",
+      "kind": "refined",
+      "offset": 0,
+      "refs": [
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:21",
+        "St/SunriseStudio.Authoring/WeaponAttachmentAuthoring.cs:25",
+        "St/SunriseStudio.Scene/EntityAttachments.cs:163"
+      ]
+    },
+    {
+      "class": "0x80809FBD",
+      "detail": "seed u32, game schema_handle",
+      "kind": "refined",
+      "offset": 8,
+      "refs": [
+        "S/client/hooks/network/investment/investment_lore_visibility.cpp:49",
+        "S/middleware/content/packages/reader/layout.h:62"
+      ]
+    }
+  ]
+}

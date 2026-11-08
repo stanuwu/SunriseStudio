@@ -23,7 +23,7 @@ internal static class OriginalMaterialGpuChecks
             OriginalAssetImporter.Import(project, catalog, new(input, package, "custom:panels", null, false));
             var metadata = project.AddedAssets.Select(asset =>
             {
-                var native = asset.Native!; uint tag = 0x80800000u + ((uint)package << 13) + (uint)native.EntryIndex!.Value;
+                var native = asset.Native!; uint tag = TagHashes.Make(package, native.EntryIndex!.Value);
                 return new PackageOverlayEntry(new PackageEntry(tag, native.Reference, (int)(native.TypeInfo >> 9 & 127),
                     (int)(native.TypeInfo >> 6 & 7), checked((int)asset.Size), $"w64_original_{package:X4}_0", package, native.EntryIndex.Value)
                     { TypeInfo = native.TypeInfo }, native.Name);

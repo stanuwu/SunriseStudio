@@ -1,6 +1,7 @@
-using System.Buffers.Binary;
-using System.Text;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Audio;
 
@@ -14,7 +15,7 @@ public sealed record AudioDocument(uint Tag, string Name, string Kind, uint? Eve
 /** Package event links and Wwise chunk boundaries are checked before exporting any media. */
 public sealed class AudioCatalog(PackageCatalog catalog, Func<uint, string?>? names = null)
 {
-    public const uint EventClass = 0x80809802;
+    public const uint EventClass = SWwiseEvent.Class;
     public static bool Supports(PackageEntry entry) => entry.Reference == EventClass
         || entry.Type == 26 && entry.SubType is 4 or 5 or 6;
 
@@ -33,18 +34,17 @@ public sealed class AudioCatalog(PackageCatalog catalog, Func<uint, string?>? na
         uint bankTag = tag;
         if (entry.Reference == EventClass)
         {
-            if (bytes.Length < 40 || U64(bytes, 0) != (ulong)bytes.Length)
-                throw new InvalidDataException("Audio event header is invalid.");
-            eventId = U32(bytes, 8); related = U32(bytes, 12); bankTag = U32(bytes, 20);
-            long count = (long)U64(bytes, 24), relative = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(32));
-            long header = checked(32 + relative);
-            if (!(count == 0 && relative == 0) && (count is < 0 or > 100000 || header < 4 || header > bytes.Length - 16
-                || U32(bytes, (int)header - 4) != 0x80809FBD || U64(bytes, (int)header) != (ulong)count
-                || U32(bytes, (int)header + 8) != 0x80800014 || count > (bytes.Length - header - 16) / 4))
+            if (!IsEvent(bytes)) throw new InvalidDataException("Audio event header is invalid.");
+            eventId = EventField<uint>(bytes, nameof(SWwiseEvent.WwiseEventId));
+            related = EventField<uint>(bytes, nameof(SWwiseEvent.RelatedEventId));
+            bankTag = EventField<uint>(bytes, nameof(SWwiseEvent.SoundBank));
+            var handles = EventField<TagArray<TagReferenceElement>>(bytes, nameof(SWwiseEvent.StreamHandles));
+            long count = handles.Count, header = MediaHeader(handles);
+            if (!(count == 0 && handles.Relative == 0) && !MediaFits(bytes, count, header))
                 throw new InvalidDataException("Audio event media array is invalid.");
             for (int i = 0; i < count; i++)
             {
-                uint mediaTag = U32(bytes, checked((int)header + 16 + i * 4));
+                uint mediaTag = MediaTag(bytes, header, i);
                 if (!catalog.TryGetEntry(mediaTag, out var stream) || stream.Type != 26 || stream.SubType != 6)
                     throw new InvalidDataException($"Event media {mediaTag:X8} is not an installed audio stream.");
                 media.Add(new(stream.Reference, mediaTag, names?.Invoke(mediaTag) ?? $"Media {stream.Reference}", stream.Size));
@@ -100,17 +100,16 @@ public sealed class AudioCatalog(PackageCatalog catalog, Func<uint, string?>? na
             && entry.Type is 8 or 16 && entry.Reference == EventClass))
         {
             byte[] bytes = catalog.Read(entry.TagHash);
-            if (bytes.Length < 40 || U64(bytes, 0) != (ulong)bytes.Length || U32(bytes, 20) != bankTag) continue;
-            long count = checked((long)U64(bytes, 24));
-            long header = checked(32 + BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(32)));
+            if (!IsEvent(bytes) || EventField<uint>(bytes, nameof(SWwiseEvent.SoundBank)) != bankTag) continue;
+            var handles = EventField<TagArray<TagReferenceElement>>(bytes, nameof(SWwiseEvent.StreamHandles));
+            // The count is unsigned here; a top bit overflows.
+            long count = handles.Count >= 0 ? handles.Count : throw new OverflowException();
+            long header = MediaHeader(handles);
             if (count == 0) continue;
-            if (count is < 0 or > 100000 || header < 4 || header > bytes.Length - 16
-                || U32(bytes, (int)header - 4) != 0x80809FBD || U64(bytes, (int)header) != (ulong)count
-                || U32(bytes, (int)header + 8) != 0x80800014 || count > (bytes.Length - header - 16) / 4)
-                throw new InvalidDataException("Linked event media array is invalid.");
+            if (!MediaFits(bytes, count, header)) throw new InvalidDataException("Linked event media array is invalid.");
             for (int i = 0; i < count; i++)
             {
-                uint tag = U32(bytes, checked((int)header + 16 + i * 4));
+                uint tag = MediaTag(bytes, header, i);
                 if (!catalog.TryGetEntry(tag, out var media) || media.Type != 26 || media.SubType != 6)
                     throw new InvalidDataException("Linked event media has the wrong package type.");
                 if (!result.TryGetValue(media.Reference, out var tags)) result[media.Reference] = tags = [];
@@ -120,59 +119,29 @@ public sealed class AudioCatalog(PackageCatalog catalog, Func<uint, string?>? na
         return result;
     }
 
-    /** HIRC record lengths and DIDX slices must fit their own chunks, not just the bank file. */
-    public static AudioBank ReadBank(uint tag, byte[] bytes)
+    /** Parses a Wwise bank file; the package entry it came from is `tag`. */
+    public static AudioBank ReadBank(uint tag, byte[] bytes) => WwiseSoundBank.Read(tag, bytes);
+
+    /** An event member read in place; the event only has to reach the member's end. */
+    private static T EventField<T>(byte[] bytes, string member) where T : unmanaged =>
+        TagView.Member<SWwiseEvent, T>(bytes, 0, member);
+
+    /** True when the event reaches through its media array and its length word matches the bytes. */
+    private static bool IsEvent(byte[] bytes) => TagView.FitsThrough<SWwiseEvent>(bytes, 0, nameof(SWwiseEvent.StreamHandles))
+        && EventField<ulong>(bytes, nameof(SWwiseEvent.TagByteLength)) == (ulong)bytes.Length;
+
+    /** The media array header offset; a relative word that overflows throws. */
+    private static long MediaHeader(TagArray<TagReferenceElement> handles) =>
+        checked(TagView.FieldOffset<SWwiseEvent>("StreamHandles.Relative") + handles.Relative);
+
+    /** True when `count` tag references, at most 100000, sit after a marked header that repeats the count. */
+    private static bool MediaFits(byte[] bytes, long count, long header)
     {
-        var objects = new List<AudioBankObject>(); var media = new List<AudioMedia>();
-        uint version = 0, id = 0; byte[]? index = null, data = null; bool headerSeen = false;
-        var chunks = new HashSet<string>(StringComparer.Ordinal);
-        for (int p = 0; p < bytes.Length;)
-        {
-            if (p > bytes.Length - 8) throw new InvalidDataException("Truncated Wwise chunk header.");
-            uint length = U32(bytes, p + 4);
-            if (length > bytes.Length - p - 8) throw new InvalidDataException("Wwise chunk leaves its bank.");
-            int start = p + 8, end = checked(start + (int)length);
-            string kind = Encoding.ASCII.GetString(bytes, p, 4);
-            if (kind is "BKHD" or "DIDX" or "DATA" or "HIRC" && !chunks.Add(kind))
-                throw new InvalidDataException("Duplicate Wwise data chunk.");
-            if (kind == "BKHD")
-            {
-                if (headerSeen || length < 8) throw new InvalidDataException("Wwise bank header is invalid.");
-                version = U32(bytes, start); id = U32(bytes, start + 4); headerSeen = true;
-            }
-            else if (kind == "DIDX") index = bytes.AsSpan(start, (int)length).ToArray();
-            else if (kind == "DATA") data = bytes.AsSpan(start, (int)length).ToArray();
-            else if (kind == "HIRC")
-            {
-                if (length < 4) throw new InvalidDataException("Truncated Wwise object table.");
-                uint count = U32(bytes, start); int cursor = start + 4;
-                if (count > 1000000) throw new InvalidDataException("Wwise object table is too large.");
-                for (int i = 0; i < count; i++)
-                {
-                    if (cursor > end - 9) throw new InvalidDataException("Truncated Wwise object.");
-                    uint size = U32(bytes, cursor + 1);
-                    if (size < 4 || size > end - cursor - 5) throw new InvalidDataException("Wwise object leaves its table.");
-                    objects.Add(new(bytes[cursor], U32(bytes, cursor + 5), bytes.AsSpan(cursor + 9, checked((int)size - 4)).ToArray()));
-                    cursor += checked((int)size + 5);
-                }
-                if (cursor != end) throw new InvalidDataException("Wwise object count differs from its table.");
-            }
-            p = end;
-        }
-        if (!headerSeen) throw new InvalidDataException("Audio entry is not a Wwise bank.");
-        if (index is not null)
-        {
-            if (data is null || index.Length % 12 != 0) throw new InvalidDataException("Wwise embedded media index is invalid.");
-            for (int p = 0; p < index.Length; p += 12)
-            {
-                uint mediaId = U32(index, p), offset = U32(index, p + 4), size = U32(index, p + 8);
-                if (offset > data.Length || size > data.Length - offset) throw new InvalidDataException("Embedded media leaves DATA.");
-                media.Add(new(mediaId, null, $"Media {mediaId}", (int)size, data.AsSpan((int)offset, (int)size).ToArray()));
-            }
-        }
-        return new(tag, id, version, bytes, objects, media);
+        var view = new TagArrayHeader(bytes, header);
+        return count is >= 0 and <= 100000 && header >= 4 && header <= bytes.Length - TagArray.HeaderSize && TagArray.MarkerAt(bytes, header)
+            && view.Count == count && view.ElementClass == TagReferenceElement.Class && view.RowsFit(Unsafe.SizeOf<TagReferenceElement>());
     }
 
-    private static uint U32(byte[] bytes, int p) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(p, 4));
-    private static ulong U64(byte[] bytes, int p) => BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(p, 8));
+    private static uint MediaTag(byte[] bytes, long header, int index) => TagView.At<TagReferenceElement>(bytes,
+        checked((int)new TagArrayHeader(bytes, header).DataOffset + index * Unsafe.SizeOf<TagReferenceElement>())).Tag;
 }

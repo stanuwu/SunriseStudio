@@ -1,3 +1,8 @@
+using SunriseStudio.Packages;
+using SunriseStudio.Packages.Registry;
+using SunriseStudio.Tags.Graph;
+using SunriseStudio.Tags.Query;
+
 namespace SunriseStudio.Editor;
 
 /** One row filter for the browser and the creation pickers. */
@@ -31,6 +36,22 @@ public static class BrowserRowFilter
         }
         return [.. result];
     }
+
+    /** True when the search is a path query, such as @<s_scenario>{dev_name_hash==0x1234}, rather than words. */
+    public static bool IsQuery(string search) => search.StartsWith('@') || search.StartsWith("##0x", StringComparison.Ordinal);
+
+    /**
+     * Runs a path query on a worker and keeps the rows whose tag holds a match; rows keep their order.
+     * A query that does not parse or names an unknown field ends the task with PathQueryException.
+     * @param keep Runs on the worker, so it must not read packages.
+     */
+    public static Task<BrowserAsset[]> StartQuery(IReadOnlyList<BrowserAsset> rows, string query, PackageCatalog catalog,
+        Func<BrowserAsset, bool>? keep, CancellationToken token) => Task.Run(() =>
+    {
+        var parsed = PathQuery.Parse(query);
+        var tags = parsed.Evaluate(new QueryContext(new CatalogTagSource(catalog), StudioRegistry.Index)).Select(node => node.Tag).ToHashSet();
+        return Filter(rows, [], row => tags.Contains(row.Entry.TagHash) && (keep is null || keep(row)), token);
+    }, token);
 
     /** Filters inline when cheap and returns the rows; otherwise returns the started worker. */
     public static (BrowserAsset[]? Rows, Task<BrowserAsset[]>? Work) Start(IReadOnlyList<BrowserAsset> rows, string[] words,

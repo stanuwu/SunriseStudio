@@ -279,12 +279,44 @@ internal static class ObjectEditChecks
         Reject<IOException>(() => project.CompileObjectEdits(catalog));
     }
 
+    /** Additions and removals store their kind, identity and model, and keep one entry each. */
+    public static void Structural(string parent, PackageCatalog catalog, uint tag)
+    {
+        var project = StudioProject.Create(Path.Combine(parent, "object-structural"), "Structural edits");
+        project.ObjectEditCompiler = new VectorCompiler();
+        byte[] original = catalog.ReadOriginal(tag);
+        var row = new ObjectEditTarget(tag, ObjectEditLayout.StaticInstance, 4, 8, 0, 0, BinaryDelta.Hash(original.AsSpan(4, 8)));
+        var container = new ObjectEditTarget(tag, ObjectEditLayout.Container, 0, original.Length, -1, 2, BinaryDelta.Hash(original));
+        var edits = new[]
+        {
+            new ObjectEdit(ObjectEditKind.RemoveInstance, row),
+            new ObjectEdit(ObjectEditKind.AddInstance, row with { Identity = 1 }, Position: [1, 2, 3]),
+            new ObjectEdit(ObjectEditKind.AddPlacement, container, Position: [4, 5, 6], Model: 0x80A03000),
+        };
+        foreach (var edit in edits) Check(project.RecordObjectEdit(edit, catalog), $"The {edit.Kind} edit was not saved.");
+        var stored = Manifest(project)["objectEdits"]!.AsArray();
+        Check(stored.Count == 3 && stored.Any(x => x!["kind"]!.GetValue<string>() == "AddPlacement"
+            && x["model"]!.GetValue<uint>() == 0x80A03000 && x["target"]!["layout"]!.GetValue<string>() == "Container"),
+            "The manifest did not store the added placement with its model.");
+        var reopened = StudioProject.Open(project.DirectoryPath);
+        Check(reopened.ObjectEdits.Select(x => x.Key).Order().SequenceEqual(edits.Select(x => x.Key).Order())
+            && reopened.ObjectEdits.Single(x => x.Kind == ObjectEditKind.AddPlacement).Model == 0x80A03000,
+            "Structural edits did not survive a reopen.");
+        reopened.ObjectEditCompiler = new VectorCompiler();
+        reopened.RevertObjectEdit(edits[1].Key);
+        Check(reopened.ObjectEdits.Count == 2 && reopened.FindObjectEdit(edits[0].Key) is not null,
+            "Reverting a copy removed another edit of its row.");
+        Console.WriteLine("object_edits structural=stored reopen=same revert=by_key");
+    }
+
     private sealed class VectorCompiler(Action? after = null) : IObjectEditCompiler
     {
         public int Calls { get; private set; }
         public ObjectEditCompilation Compile(IReadOnlyList<ObjectEdit> edits, Func<uint, byte[]> readRaw, PackageCatalog catalog)
         {
             Calls++;
+            // Structural edits generate data in the real compiler; this stand-in only lists them.
+            if (edits.Any(x => x.Structural)) return new(new Dictionary<uint, byte[]>(), edits.Select(x => new CompiledObjectEdit(x, [])).ToArray());
             var edit = edits.Single();
             byte[] data = readRaw(edit.Target.SourceTag).ToArray();
             BinaryPrimitives.WriteSingleLittleEndian(data.AsSpan(edit.Target.Offset), edit.Position![0]);

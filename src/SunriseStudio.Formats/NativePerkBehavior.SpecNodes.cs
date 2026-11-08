@@ -1,4 +1,7 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -8,35 +11,38 @@ public static partial class NativePerkBehavior
     private const double LabelBitScale = 4294967296.0;
     // Refill fractions: five expressions, each after an 8-byte zero member.
     private static readonly (string Key, int Offset)[] Fractions =
-        [("active_fraction", 120), ("this_fraction", 176), ("slot0_fraction", 232), ("slot1_fraction", 288), ("slot2_fraction", 344)];
+        [("active_fraction", PayloadFields.RefillFractions[0]), ("this_fraction", PayloadFields.RefillFractions[1]),
+         ("slot0_fraction", PayloadFields.RefillFractions[2]), ("slot1_fraction", PayloadFields.RefillFractions[3]),
+         ("slot2_fraction", PayloadFields.RefillFractions[4])];
 
-    // Movement block class 0x8080692C, 72 bytes: two sets of eight floats; a mode-state flag picks the set.
-    private const uint MovementBlockClass = 0x8080692C;
-    private const int MovementBlockSize = 72;
+    // Movement block: two sets of eight floats; a mode-state flag picks the set.
+    private const uint MovementBlockClass = PerkMovementBlock.Class;
     // Component scale names are a u32 array.
-    private const uint NameListClass = 0x80800070;
+    private const uint NameListClass = SU32HashElement.Class;
+    private static int NameStride => Unsafe.SizeOf<SU32HashElement>();
 
     /** Movement block inputs and their offsets inside the block; a property, so static order never matters. */
     private static (Input Input, int Offset, Width Width)[] MovementInputs =>
     [
         (new("name", "Block name hash", -1, Width.U32, EmptyHash, 0, uint.MaxValue, PerkBehaviorValueKind.Hash,
-            "Not read on the path Studio decoded."), 0, Width.U32),
-        (Flag("allow_first", "Allowed in state A", -1, 1, "Which state is A is not known."), 4, Width.U8),
-        (Flag("allow_second", "Allowed in state B", -1, 1), 5, Width.U8),
-        .. new[] { (8, "first", "First set"), (40, "second", "Second set") }.SelectMany(set => new[]
+            "Not read on the path Studio decoded."), PayloadFields.MovementName, Width.U32),
+        (Flag("allow_first", "Allowed in state A", -1, 1, "Which state is A is not known."), PayloadFields.MovementAllowFirst, Width.U8),
+        (Flag("allow_second", "Allowed in state B", -1, 1), PayloadFields.MovementAllowSecond, Width.U8),
+        .. new[] { (PayloadFields.MovementFirst, "first", "First set"), (PayloadFields.MovementSecond, "second", "Second set") }
+            .SelectMany(set => new[]
         {
-            (Number(set.Item2 + "_value0", set.Item3 + ": value 0", -1, 0, -1000000, 1000000, "Copied into the mode."), set.Item1, Width.F32),
-            (Number(set.Item2 + "_entry", set.Item3 + ": entry speed value", -1, -1, -1, 1000000, "-1 turns it off."), set.Item1 + 4, Width.F32),
-            (Number(set.Item2 + "_value8", set.Item3 + ": value 8", -1, 0, -1000000, 1000000, "Copied into the mode."), set.Item1 + 8, Width.F32),
-            (Number(set.Item2 + "_hmin", set.Item3 + ": horizontal speed minimum", -1, 0, -1000000, 1000000), set.Item1 + 12, Width.F32),
-            (Number(set.Item2 + "_hmax", set.Item3 + ": horizontal speed maximum", -1, 0, -1000000, 1000000), set.Item1 + 16, Width.F32),
-            (Number(set.Item2 + "_value20", set.Item3 + ": value 20", -1, 0, -1000000, 1000000, "Copied into the mode."), set.Item1 + 20, Width.F32),
-            (Number(set.Item2 + "_vmin", set.Item3 + ": vertical speed minimum", -1, 0, -1000000, 1000000), set.Item1 + 24, Width.F32),
-            (Number(set.Item2 + "_vmax", set.Item3 + ": vertical speed maximum", -1, 0, -1000000, 1000000), set.Item1 + 28, Width.F32)
+            (Number(set.Item2 + "_value0", set.Item3 + ": value 0", -1, 0, -1000000, 1000000, "Copied into the mode."), set.Item1[0], Width.F32),
+            (Number(set.Item2 + "_entry", set.Item3 + ": entry speed value", -1, -1, -1, 1000000, "-1 turns it off."), set.Item1[1], Width.F32),
+            (Number(set.Item2 + "_value8", set.Item3 + ": value 8", -1, 0, -1000000, 1000000, "Copied into the mode."), set.Item1[2], Width.F32),
+            (Number(set.Item2 + "_hmin", set.Item3 + ": horizontal speed minimum", -1, 0, -1000000, 1000000), set.Item1[3], Width.F32),
+            (Number(set.Item2 + "_hmax", set.Item3 + ": horizontal speed maximum", -1, 0, -1000000, 1000000), set.Item1[4], Width.F32),
+            (Number(set.Item2 + "_value20", set.Item3 + ": value 20", -1, 0, -1000000, 1000000, "Copied into the mode."), set.Item1[5], Width.F32),
+            (Number(set.Item2 + "_vmin", set.Item3 + ": vertical speed minimum", -1, 0, -1000000, 1000000), set.Item1[6], Width.F32),
+            (Number(set.Item2 + "_vmax", set.Item3 + ": vertical speed maximum", -1, 0, -1000000, 1000000), set.Item1[7], Width.F32)
         })
     ];
 
-    /** Effect byte +1 is 1 exactly for opcodes whose dispatch slot +32 allocates effect state. */
+    /** StateFlag is 1 exactly for opcodes whose dispatch slot +32 allocates effect state. */
     private static byte StateFlag(int opcode) =>
         opcode is 0 or 1 or 2 or 6 or 7 or 10 or 17 or 18 or 22 or 25 or 26 or 28 or 29 or 30 or 33 or 35 or 41 or 52
             ? (byte)1 : (byte)0;
@@ -106,16 +112,14 @@ public static partial class NativePerkBehavior
     private static bool ReadSpec(ReadOnlyMemory<byte> bytes, int at, Spec spec, PerkBehaviorNode node, string id,
         List<string> diagnostics)
     {
-        var data = new TagReader(bytes);
         try
         {
-            foreach (string part in spec.Handler.Split(';', StringSplitOptions.RemoveEmptyEntries))
+            foreach (var part in spec.Parts ?? [])
             {
-                string[] args = part.Split(':');
-                switch (args[0])
+                switch (part.Kind)
                 {
                     case "labels":
-                        ReadLabel(data, at + int.Parse(args[1]), at + int.Parse(args[2]), node);
+                        ReadLabel(bytes.Span, at + part.First, at + part.Second, node);
                         break;
                     case "fractions":
                         foreach (var (key, offset) in Fractions)
@@ -131,28 +135,29 @@ public static partial class NativePerkBehavior
                         }
                         break;
                     case "groups":
-                        var groups = data.Array(at + 8, GroupClass, 32);
+                        var groups = TagArray.Checked(bytes.Span, at + PayloadFields.AllGroupsGroups, GroupClass, PayloadFields.GroupSize);
                         for (int i = 0; i < groups.Count; i++)
                         {
-                            int row = groups.Data + i * 32;
+                            int row = groups.Data + i * PayloadFields.GroupSize;
+                            ref readonly var installed = ref TagView.At<PerkConditionGroup>(bytes.Span, row);
                             var group = CreateGroup();
                             group.Id = $"{id}/{i}";
                             group.Title = $"Group {i + 1}";
                             group.OriginalOffset = row;
-                            group.Properties[0].Value = F32(bytes, row);
-                            if (!float.IsFinite(F32(bytes, row))) return false;
-                            if (data.U32(row + 4) != 0) group.Properties.Add(Info("other", "Other native settings (kept as is)", 1));
-                            ReadList(row + 8, Role.Group, group, group.Id);
+                            group.Properties[0].Value = installed.Window;
+                            if (!float.IsFinite(installed.Window)) return false;
+                            if (installed.Unknown4 != 0) group.Properties.Add(Info("other", "Other native settings (kept as is)", 1));
+                            ReadList(row + PayloadFields.GroupMembers, Role.Group, group, group.Id);
                             node.Children.Add(group);
                         }
                         break;
                     case "timer-conditions":
-                        ReadList(at + 16, Role.Op32, node, id);
+                        ReadList(at + PayloadFields.TimerConditions, Role.Op32, node, id);
                         break;
                     case "names":
-                        var names = data.Array(at + int.Parse(args[1]), NameListClass, 4);
+                        var names = TagArray.Checked(bytes.Span, at + part.First, NameListClass, NameStride);
                         var name = node.Properties.First(row => row.Key == "name");
-                        if (names.Count == 1) name.Value = data.U32(names.Data);
+                        if (names.Count == 1) name.Value = TagView.At<SU32HashElement>(bytes.Span, names.Data).KeyHash;
                         else
                         {
                             node.Properties.Remove(name);
@@ -160,17 +165,20 @@ public static partial class NativePerkBehavior
                         }
                         break;
                     case "expression":
-                        ReadExpression(bytes, at + int.Parse(args[1]), node);
+                        ReadExpression(bytes, at + part.First, node);
                         break;
                     case "movement":
-                        int block = Target(data, at + 8);
-                        if (block >= 4 && data.Has(block, MovementBlockSize) && data.U32(block - 4) == MovementBlockClass)
+                        int block = TagPointer.TryChecked(bytes.Span, at + PayloadFields.MovementBlock);
+                        uint blockClass = block >= TagView.ClassWordSize ? TagView.ClassAt(bytes.Span, block) ?? 0 : 0;
+                        if (block >= TagView.ClassWordSize && TagView.Fits<PerkMovementBlock>(bytes.Span, block)
+                            && blockClass == MovementBlockClass)
                         {
                             foreach (var (input, offset, width) in MovementInputs)
                             {
                                 double value = width switch
                                 {
-                                    Width.U8 => (double)data.U8(block + offset), Width.U32 => (double)data.U32(block + offset),
+                                    Width.U8 => (double)TagRead.U8(bytes.Span, block + offset),
+                                    Width.U32 => (double)TagRead.U32(bytes.Span, block + offset),
                                     _ => (double)F32(bytes, block + offset)
                                 };
                                 if (!double.IsFinite(value) || input.Kind == PerkBehaviorValueKind.Boolean && value > 1) return false;
@@ -180,36 +188,41 @@ public static partial class NativePerkBehavior
                         else
                         {
                             node.Properties.Clear();
-                            node.Properties.Add(Info("block_class", "Settings block class (kept as is)",
-                                block >= 4 ? data.U32(block - 4) : 0, PerkBehaviorValueKind.Hash));
+                            node.Properties.Add(Info("block_class", "Settings block class (kept as is)", blockClass,
+                                PerkBehaviorValueKind.Hash));
                         }
                         break;
                 }
             }
         }
         catch (Exception error) when (error is InvalidDataException or OverflowException) { return false; }
-        if (spec.Key == "script" && data.U32(at + 8) != 0)
-            node.Properties.Add(Info("unread", "Value at +8 (not read by the game; kept as is)", data.U32(at + 8),
+        // The script's Unk8 is a relative pointer to its source path string.
+        if (spec.Key == "script" && TagView.At<PerkScript>(bytes.Span, at).Unk8 is { IsNull: false } path)
+            node.Properties.Add(Info("unread", "Source path pointer at +8 (kept as is)", path.Relative,
                 PerkBehaviorValueKind.Integer));
         if (OtherSettings(bytes, at, spec)) node.Properties.Add(Info("other", "Other native settings (kept as is)", 1));
         return true;
 
         void ReadList(int field, Role role, PerkBehaviorNode parent, string prefix)
         {
-            var list = data.Array(field, ConditionRowClass, 8);
+            int stride = PayloadFields.ConditionRowSize;
+            var list = TagArray.Checked(bytes.Span, field, ConditionRowClass, stride);
             for (int j = 0; j < list.Count; j++)
-                parent.Children.Add(ReadNode(bytes, data.Relative(list.Data + j * 8), PerkBehaviorNodeKind.Condition, role,
-                    $"{prefix}/{j}", diagnostics));
+                parent.Children.Add(ReadNode(bytes, TagPointer.Checked(bytes.Span, list.Data + j * stride),
+                    PerkBehaviorNodeKind.Condition, role, $"{prefix}/{j}", diagnostics));
         }
     }
 
     /** One label row with its one matching bit is editable; any other set is kept as installed. */
-    private static void ReadLabel(TagReader data, int rowsField, int maskField, PerkBehaviorNode node)
+    private static void ReadLabel(ReadOnlySpan<byte> tag, int rowsField, int maskField, PerkBehaviorNode node)
     {
-        var rows = data.Array(rowsField, LabelRowClass, 24);
-        var bits = Enumerable.Range(0, 320).Where(bit => (data.U8(maskField + bit / 8) >> (bit % 8) & 1) != 0).ToArray();
+        var rows = TagArray.Checked(tag, rowsField, LabelRowClass, PayloadFields.LabelRowSize);
+        var mask = tag.Slice(maskField, PerkLabelTable.MaskBytes);
+        var bits = new List<int>();
+        for (int bit = 0; bit < mask.Length * 8; bit++)
+            if ((mask[bit / 8] >> (bit % 8) & 1) != 0) bits.Add(bit);
         var label = node.Properties.First(row => row.Key == "label");
-        if (rows.Count == 1 && bits.Length == 1) label.Value = bits[0] * LabelBitScale + data.U32(rows.Data);
+        if (rows.Count == 1 && bits.Count == 1) label.Value = bits[0] * LabelBitScale + TagView.At<PerkLabelRow>(tag, rows.Data).LabelHash;
         else
         {
             node.Properties.Remove(label);
@@ -223,7 +236,7 @@ public static partial class NativePerkBehavior
         byte[] template = new byte[spec.Size];
         bool[] skip = new bool[spec.Size];
         foreach (var value in spec.Defaults ?? []) Put(template, value.Offset, value.Width, value.Value);
-        Cover(0, spec.Kind == PerkBehaviorNodeKind.Condition ? 8 : 2);
+        Cover(0, spec.Kind == PerkBehaviorNodeKind.Condition ? Unsafe.SizeOf<PerkAlways>() : Unsafe.SizeOf<PerkSwordGuard>());
         foreach (var input in spec.Inputs.Where(input => input.Offset >= 0)) Cover(input.Offset, WidthOf(input.Width));
         foreach (var (offset, length) in (spec.Ignore ?? []).Concat(LabelRanges(spec.Class))) Cover(offset, length);
         var span = bytes.Span.Slice(at, spec.Size);
@@ -260,63 +273,68 @@ public static partial class NativePerkBehavior
                 default: writer.U32(at + value.Offset, unchecked((uint)(long)value.Value)); break;
             }
         if (spec.LabelSet < 0) return;
-        // A label set's name at +64 and tag at +72 point at the installed label table.
+        // A label set's table path and tag name the installed label table.
         int path = writer.String(LabelGlobalsPath);
-        writer.I64(at + spec.LabelSet + 64, path - at - spec.LabelSet - 64);
-        writer.U32(at + spec.LabelSet + 72, LabelGlobalsTag);
+        int set = at + spec.LabelSet, pathField = set + PayloadFields.LabelSetPath;
+        writer.I64(pathField, path - pathField);
+        writer.U32(set + PayloadFields.LabelSetTable, LabelGlobalsTag);
     }
 
     /** Parts of a new node that are not fixed inputs: lists, labels, expressions and children. */
     private static void WriteSpecParts(PerkWriter writer, PerkBehaviorNode node, int at, Spec spec, ref int index)
     {
-        foreach (string part in spec.Handler.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var part in spec.Parts ?? [])
         {
-            string[] args = part.Split(':');
-            switch (args[0])
+            switch (part.Kind)
             {
                 case "types":
-                    WriteTypeList(writer, at + int.Parse(args[1]), (uint)Value(node, "types"));
+                    WriteTypeList(writer, at + part.First, (uint)Value(node, "types"));
                     break;
                 case "labels":
-                    WriteLabel(writer, at + int.Parse(args[1]), at + int.Parse(args[2]), Value(node, "label"));
+                    WriteLabel(writer, at + part.First, at + part.Second, Value(node, "label"));
                     break;
                 case "fractions":
                     foreach (var (key, offset) in Fractions)
                     {
                         WriteExpression(writer, at + offset, 0, (float)Value(node, key));
-                        writer.U64(at + offset + 32, 1); writer.U64(at + offset + 40, 1);
+                        writer.U64(at + offset + PayloadFields.ExpressionFirstOne, 1);
+                        writer.U64(at + offset + PayloadFields.ExpressionSecondOne, 1);
                     }
                     break;
                 case "selfref":
                     WriteSelfReference(writer, at);
                     break;
                 case "groups":
-                    int rows = writer.Array(at + 8, GroupClass, node.Children.Count, 32);
+                    int rows = writer.Array(at + PayloadFields.AllGroupsGroups, GroupClass, node.Children.Count,
+                        PayloadFields.GroupSize);
                     for (int i = 0; i < node.Children.Count; i++)
                     {
                         var group = node.Children[i];
-                        writer.F32(rows + i * 32, (float)Value(group, "window"));
-                        WriteList(writer, rows + i * 32 + 8, group.Children, Role.Group, ref index);
-                        writer.U64(rows + i * 32 + 24, group.Children.Aggregate(0UL, (mask, child) => mask | Bits(child)));
+                        int row = rows + i * PayloadFields.GroupSize;
+                        writer.Edit<PerkConditionGroup>(row).Window = (float)Value(group, "window");
+                        WriteList(writer, row + PayloadFields.GroupMembers, group.Children, Role.Group, ref index);
+                        writer.U64(row + PayloadFields.GroupMask, group.Children.Aggregate(0UL, (mask, child) => mask | Bits(child)));
                     }
                     break;
                 case "timer-conditions":
-                    WriteList(writer, at + 16, node.Children, Role.Op32, ref index);
-                    writer.U64(at + 32, node.Children.Aggregate(0UL, (mask, child) => mask | Bits(child)));
+                    WriteList(writer, at + PayloadFields.TimerConditions, node.Children, Role.Op32, ref index);
+                    writer.U64(at + PayloadFields.TimerMask, node.Children.Aggregate(0UL, (mask, child) => mask | Bits(child)));
                     break;
                 case "names":
-                    WriteNames(writer, at + int.Parse(args[1]), (uint)Value(node, "name"));
+                    WriteNames(writer, at + part.First, (uint)Value(node, "name"));
                     break;
                 case "expression":
-                    int expression = at + int.Parse(args[1]);
+                    int expression = at + part.First;
                     WriteExpression(writer, expression, (int)Value(node, "expression"), (float)Value(node, "constant"));
-                    writer.U64(expression + 32, 1); writer.U64(expression + 40, 1);
+                    writer.U64(expression + PayloadFields.ExpressionFirstOne, 1);
+                    writer.U64(expression + PayloadFields.ExpressionSecondOne, 1);
                     break;
                 case "movement":
-                    int block = writer.Node(MovementBlockClass, MovementBlockSize);
-                    writer.U32(block, EmptyHash);
+                    int block = writer.Node(MovementBlockClass, PayloadFields.MovementBlockSize);
+                    writer.U32(block + PayloadFields.MovementName, EmptyHash);
                     WriteMovement(writer, node, block);
-                    writer.I64(at + 8, block - at - 8);
+                    int blockField = at + PayloadFields.MovementBlock;
+                    writer.I64(blockField, block - blockField);
                     break;
             }
         }
@@ -324,8 +342,8 @@ public static partial class NativePerkBehavior
 
     private static void WriteNames(PerkWriter writer, int field, uint name)
     {
-        int list = writer.Array(field, NameListClass, 1, 4);
-        writer.U32(list, name);
+        int list = writer.Array(field, NameListClass, 1, NameStride);
+        writer.Edit<SU32HashElement>(list).KeyHash = name;
     }
 
     private static void WriteMovement(PerkWriter writer, PerkBehaviorNode node, int block)
@@ -353,35 +371,35 @@ public static partial class NativePerkBehavior
 
     private static void WriteList(PerkWriter writer, int field, List<PerkBehaviorNode> children, Role role, ref int index)
     {
-        int list = writer.Array(field, ConditionRowClass, children.Count, 8);
+        int stride = PayloadFields.ConditionRowSize;
+        int list = writer.Array(field, ConditionRowClass, children.Count, stride);
         for (int i = 0; i < children.Count; i++)
         {
             int child = WriteNode(writer, children[i], role, ref index);
-            writer.I64(list + i * 8, child - list - i * 8);
+            int row = list + i * stride;
+            writer.I64(row, child - row);
         }
     }
 
     /** Installed nodes keep every byte the user did not change; changed lists and labels are appended. */
     private static void PatchSpec(PerkWriter writer, ReadOnlyMemory<byte> original, PerkBehaviorNode node, int at, Spec spec)
     {
-        var data = new TagReader(original);
-        foreach (string part in spec.Handler.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var part in spec.Parts ?? [])
         {
-            string[] args = part.Split(':');
-            switch (args[0])
+            switch (part.Kind)
             {
                 case "types":
                     if (node.Properties.FirstOrDefault(row => row.Key == "types") is { Editable: true } types
-                        && (uint)types.Value != data.U32(at + int.Parse(args[2])))
-                        WriteTypeList(writer, at + int.Parse(args[1]), (uint)types.Value);
+                        && (uint)types.Value != TagRead.U32(original.Span, at + part.Second))
+                        WriteTypeList(writer, at + part.First, (uint)types.Value);
                     break;
                 case "labels":
                     if (node.Properties.FirstOrDefault(row => row.Key == "label") is { Editable: true } label)
                     {
                         var before = new PerkBehaviorNode { Properties = [new() { Key = "label" }] };
-                        ReadLabel(data, at + int.Parse(args[1]), at + int.Parse(args[2]), before);
+                        ReadLabel(original.Span, at + part.First, at + part.Second, before);
                         if (before.Properties[0].Value != label.Value)
-                            WriteLabel(writer, at + int.Parse(args[1]), at + int.Parse(args[2]), label.Value);
+                            WriteLabel(writer, at + part.First, at + part.Second, label.Value);
                     }
                     break;
                 case "fractions":
@@ -395,11 +413,11 @@ public static partial class NativePerkBehavior
                     if (writer.ProgramTag != 0) WriteSelfReference(writer, at);
                     break;
                 case "groups":
-                    var rows = data.Array(at + 8, GroupClass, 32);
+                    var rows = TagArray.Checked(original.Span, at + PayloadFields.AllGroupsGroups, GroupClass, PayloadFields.GroupSize);
                     for (int i = 0; i < rows.Count; i++)
                     {
                         var group = node.Children[i];
-                        writer.F32(rows.Data + i * 32, (float)Value(group, "window"));
+                        writer.Edit<PerkConditionGroup>(rows.Data + i * PayloadFields.GroupSize).Window = (float)Value(group, "window");
                         foreach (var child in group.Children) PatchNode(writer, original, child, child.OriginalOffset, Role.Group);
                     }
                     break;
@@ -407,16 +425,17 @@ public static partial class NativePerkBehavior
                     foreach (var child in node.Children) PatchNode(writer, original, child, child.OriginalOffset, Role.Op32);
                     break;
                 case "names":
-                    var names = data.Array(at + int.Parse(args[1]), NameListClass, 4);
+                    var names = TagArray.Checked(original.Span, at + part.First, NameListClass, NameStride);
                     if (node.Properties.FirstOrDefault(row => row.Key == "name") is { Editable: true } name
-                        && names.Count == 1 && (uint)name.Value != data.U32(names.Data))
-                        WriteNames(writer, at + int.Parse(args[1]), (uint)name.Value);
+                        && names.Count == 1 && (uint)name.Value != TagView.At<SU32HashElement>(original.Span, names.Data).KeyHash)
+                        WriteNames(writer, at + part.First, (uint)name.Value);
                     break;
                 case "expression":
-                    PatchExpression(writer, original, node, at + int.Parse(args[1]));
+                    PatchExpression(writer, original, node, at + part.First);
                     break;
                 case "movement":
-                    if (node.Properties.Any(row => row.Key == "name")) WriteMovement(writer, node, Target(data, at + 8));
+                    if (node.Properties.Any(row => row.Key == "name"))
+                        WriteMovement(writer, node, TagPointer.TryChecked(original.Span, at + PayloadFields.MovementBlock));
                     break;
             }
         }
@@ -426,56 +445,63 @@ public static partial class NativePerkBehavior
     private static void WriteTypeList(PerkWriter writer, int field, uint mask)
     {
         var types = Enumerable.Range(0, 32).Where(bit => (mask >> bit & 1) != 0).ToArray();
-        int list = writer.Array(field, TypeListClass, types.Length, 1);
-        for (int i = 0; i < types.Length; i++) writer.U8(list + i, (byte)types[i]);
+        int stride = Unsafe.SizeOf<C80806b02>();
+        int list = writer.Array(field, TypeListClass, types.Length, stride);
+        for (int i = 0; i < types.Length; i++) writer.U8(list + i * stride, (byte)types[i]);
     }
 
-    /** One label row naming the hash, and the 320-bit mask with only that hash's table index set. */
+    /** One label row naming the hash, and the label mask with only that hash's table index set. */
     private static void WriteLabel(PerkWriter writer, int rowsField, int maskField, double value)
     {
         uint hash = (uint)(value % LabelBitScale);
         int bit = (int)(value / LabelBitScale);
         int path = writer.String(LabelGlobalsPath);
-        int row = writer.Array(rowsField, LabelRowClass, 1, 24);
-        writer.U32(row, hash);
-        writer.I64(row + 8, path - row - 8);
-        writer.U32(row + 16, LabelGlobalsTag);
-        for (int i = 0; i < 40; i++) writer.U8(maskField + i, 0);
-        writer.U8(maskField + bit / 8, (byte)(1 << bit % 8));
+        int row = writer.Array(rowsField, LabelRowClass, 1, PayloadFields.LabelRowSize);
+        writer.Edit<PerkLabelRow>(row).LabelHash = hash;
+        int pathField = row + PayloadFields.LabelRowPath;
+        writer.I64(pathField, path - pathField);
+        writer.U32(row + PayloadFields.LabelRowTable, LabelGlobalsTag);
+        byte[] mask = new byte[PerkLabelTable.MaskBytes];
+        mask[bit / 8] = (byte)(1 << bit % 8);
+        writer.Copy(maskField, mask);
     }
 
-    /** Damage-resist effects name their own program tag and payload offset at +160. */
+    /** Damage-resist effects name their own program tag and payload offset. */
     private static void WriteSelfReference(PerkWriter writer, int at)
     {
-        writer.U32(at + 160, ResistClass);
-        writer.U32(at + 164, 0);
-        writer.U32(at + 168, writer.ProgramTag);
-        writer.U32(at + 172, ResistClass);
-        writer.U64(at + 176, (ulong)at);
+        ref var resist = ref writer.Edit<PerkDamageResist>(at);
+        resist.SelfClass = ResistClass;
+        resist.Unknown164 = 0;
+        resist.ProgramTag = new TagOffsetPointer(writer.ProgramTag, ResistClass, at);
     }
 
     /** The program tag from any damage-resist self reference, root or stack branch; 0 when none. */
     private static uint FindProgramTag(ReadOnlyMemory<byte> bytes)
     {
-        var data = new TagReader(bytes);
         try
         {
+            var span = bytes.Span;
             var effects = new List<int>();
-            var main = data.Array(56, EffectRowClass, 8);
-            for (int i = 0; i < main.Count; i++) effects.Add(data.Relative(main.Data + i * 8));
-            // Stack branch rows are 72 bytes; their effect array is at row +24.
-            if (data.U64(StackField) != 0)
+            int stride = PayloadFields.EffectRowSize;
+            var main = TagArray.Checked(span, PayloadFields.Effects, EffectRowClass, stride);
+            for (int i = 0; i < main.Count; i++) effects.Add(TagPointer.Checked(span, main.Data + i * stride));
+            // Stack branch rows hold their own effect arrays.
+            if (TagRead.U64(span, PayloadFields.Stack) != 0)
             {
-                var stacks = data.Array(StackField, 0, 72);
+                var stacks = TagArray.Checked(span, PayloadFields.Stack, 0, PayloadFields.BranchSize);
                 for (int s = 0; s < stacks.Count; s++)
                 {
-                    var list = data.Array(stacks.Data + s * 72 + 24, 0, 8);
-                    for (int i = 0; i < list.Count; i++) effects.Add(data.Relative(list.Data + i * 8));
+                    var list = TagArray.Checked(span, stacks.Data + s * PayloadFields.BranchSize + PayloadFields.BranchEffects, 0, stride);
+                    for (int i = 0; i < list.Count; i++) effects.Add(TagPointer.Checked(span, list.Data + i * stride));
                 }
             }
             foreach (int at in effects)
-                if (at >= 4 && data.Has(at, 184) && data.U32(at - 4) == ResistClass && data.U32(at + 160) == ResistClass)
-                    return data.U32(at + 168);
+            {
+                if (at < TagView.ClassWordSize || !TagView.Fits<PerkDamageResist>(span, at) || TagView.ClassAt(span, at) != ResistClass)
+                    continue;
+                ref readonly var resist = ref TagView.At<PerkDamageResist>(span, at);
+                if (resist.SelfClass == ResistClass) return resist.ProgramTag.Tag;
+            }
         }
         catch (Exception error) when (error is InvalidDataException or OverflowException) { }
         return 0;

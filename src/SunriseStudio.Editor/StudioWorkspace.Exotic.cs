@@ -1,8 +1,9 @@
-using System.Buffers.Binary;
 using SunriseStudio.Authoring;
 using SunriseStudio.Editor.Creation;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 using System.Text.Json;
 
 namespace SunriseStudio.Editor;
@@ -112,8 +113,8 @@ public sealed partial class StudioWorkspace
         {
             var row = WeaponFiringRow.Find(project, catalog, catalog.Read, weaponTag);
             byte[] hud = catalog.Read(row.Hud);
-            return new[] { WeaponFiringRow.MuzzleSlot, WeaponFiringRow.ReloadSlot }
-                .Any(slot => owned.Contains(BinaryPrimitives.ReadUInt32LittleEndian(hud.AsSpan(row.Row + slot))));
+            ref readonly var firing = ref TagView.At<SWeaponFiringRow>(hud, row.Row);
+            return owned.Contains(firing.MuzzleSlotEntityRestartsEachShot) || owned.Contains(firing.ReloadSlotEntityNeverPaused);
         }
         // A weapon that still shares its firing row has no effects of its own.
         catch (InvalidDataException) { return false; }

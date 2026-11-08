@@ -80,6 +80,7 @@ public static class MaterialPreviewAnalyzer
             }
         Vector4[]? constants = null;
         IReadOnlyDictionary<int, TfxTerm>? terms = null;
+        IReadOnlySet<int>? writtenRows = null;
         IReadOnlyDictionary<uint, BundleMaterialSampler>? samplers = null;
         IReadOnlyList<string> missing = [];
         (int Scale, int Offset)? decoratorRows = null;
@@ -108,6 +109,8 @@ public static class MaterialPreviewAnalyzer
                         value.AddressW.ToString(), value.MipLODBias, value.MinLOD, value.MaxLOD, value.MaxAnisotropy);
                 });
             constants = evaluated.Constants; terms = evaluated.Terms;
+            // A constant-buffer tag replaces the inline template, so no cb0 lane is an editable field.
+            if (execution.Pixel.ConstantSourceTag == 0) writtenRows = evaluated.WrittenRows;
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or ArgumentException
             or IndexOutOfRangeException or OverflowException) { }
@@ -152,7 +155,7 @@ public static class MaterialPreviewAnalyzer
         {
             var preview = Analyze(shader.Disassembly, shader.HeaderTag, shaderHash, inputs, constants, blendMode,
                 vertexHash == NativeBasisVertexShader, terms, constantBuffers: constantBuffers, varyings: varyings, standIns: standIns, water: water,
-                volumes: volumes);
+                volumes: volumes, writtenRows: writtenRows);
             preview = preview with { TextureFormats = inputs.ToDictionary(value => value.Slot, value => value.Format)
                     .Concat((preview.VolumeTextures ?? new Dictionary<uint, BundleVolumeTexture>()).Select(pair => KeyValuePair.Create(pair.Key, pair.Value.Format)))
                     .ToDictionary(), Samplers = samplers, ReadsFrameTextures = runtimeSlots.Count != 0 || constants is null };
@@ -367,13 +370,14 @@ public static class MaterialPreviewAnalyzer
      * @param standIns Fixed sample values for runtime-bound texture slots.
      * @param water A water surface: the compiler keeps its reflect() normal.
      * @param volumes 3D textures by slot; the program samples them as "volume" nodes.
+     * @param writtenRows cb0 rows TFX writes; null when no cb0 lane is a constant template copy.
      */
     public static BundleMaterialPreview Analyze(string text, uint shaderTag, string shaderHash,
         IReadOnlyList<TextureInput> textures, IReadOnlyList<Vector4>? constants = null, string blendMode = "Opaque",
         bool nativeTangentInputs = false, IReadOnlyDictionary<int, TfxTerm>? timeTerms = null, bool worldVaryings = false,
         bool uvPairs = false, IReadOnlyDictionary<uint, Vector4[]>? constantBuffers = null, bool detailUv = false,
         ShaderVaryings? varyings = null, IReadOnlyDictionary<uint, Vector4>? standIns = null, bool water = false,
-        IReadOnlyDictionary<uint, BundleVolumeTexture>? volumes = null)
+        IReadOnlyDictionary<uint, BundleVolumeTexture>? volumes = null, IReadOnlySet<int>? writtenRows = null)
     {
         var registers = new Dictionary<string, Value[]>(StringComparer.Ordinal);
         var branchStarts = new Stack<Dictionary<string, Value[]>>();
@@ -558,7 +562,7 @@ public static class MaterialPreviewAnalyzer
         var unresolved = new SortedSet<string>(StringComparer.Ordinal);
         var program = MaterialExpressionCompiler.Compile(text, constants, blendMode,
             textures.Select(texture => texture.Slot).ToHashSet(), out bool approximateLoop, nativeTangentInputs, timeTerms, worldVaryings,
-            uvPairs, detailUv, constantBuffers, varyings, standIns, water, unresolved, volumes?.Keys.ToHashSet());
+            uvPairs, detailUv, constantBuffers, varyings, standIns, water, unresolved, volumes?.Keys.ToHashSet(), writtenRows);
         if (program?.Outputs.ContainsKey("BaseColor") != true && unresolved.Count != 0)
             notes.Add("Shader expressions stop at unresolved inputs or operations: " + string.Join(", ", unresolved) + ".");
         if (program is not null && approximateLoop) notes.Add(ApproximateLoopNote);

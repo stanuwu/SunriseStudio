@@ -12,7 +12,8 @@ internal static class SharedShapeChecks
     /** Owner replacements, removals and package changes must not leave stale reverse links. */
     internal static void Synthetic()
     {
-        const uint first = 0x80A00000, shapeA = first + 4, shapeB = first + 5, added = 0x80800000u + (0xAA0u << 13);
+        const uint first = 0x80A00000, shapeA = first + 4, shapeB = first + 5;
+        uint added = TagHashes.Make(0xAA0, 0);
         string root = Path.Combine(Path.GetTempPath(), "sunrise-collision-index-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "packages"));
         string path = Path.Combine(root, "packages", "w64_collision_index_0100_0.pkg");
@@ -116,7 +117,7 @@ internal static class SharedShapeChecks
     {
         var builder = new HavokPackfileBuilder();
         byte[] root = new byte[0xA0]; root[0x30] = 1;
-        NativeRows.Write(root, 0x80, -10, -10, -10); NativeRows.Write(root, 0x90, 10, 10, 10);
+        CollisionCompoundWriter.WriteFloats(root, 0x80, -10, -10, -10); CollisionCompoundWriter.WriteFloats(root, 0x90, 10, 10, 10);
         builder.PlaceObject(root, StaticCompoundShape.ClassName);
         var instance = new CompoundInstanceRow(new byte[StaticCompoundShape.InstanceSize], "i0", null);
         instance.SetTransform(QsTransform.Identity, false);

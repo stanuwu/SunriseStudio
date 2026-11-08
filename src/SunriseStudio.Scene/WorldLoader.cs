@@ -1,4 +1,6 @@
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
@@ -18,7 +20,7 @@ public sealed class WorldLoader(PackageCatalog catalog, StudioNameIndex? names =
             .ToDictionary(x => x.Key, x => x.ToArray());
         var missions = new List<WorldMissionEntry>();
         var diagnostics = maps.Errors.ToList();
-        foreach (var entry in catalog.Entries.Where(x => x.Reference == 0x80809994))
+        foreach (var entry in catalog.EntriesWithAdded().Where(x => x.Reference == SScenario.Class))
         {
             token.ThrowIfCancellationRequested();
             if (matches.TryGetValue(entry.TagHash, out var owned))
@@ -28,9 +30,13 @@ public sealed class WorldLoader(PackageCatalog catalog, StudioNameIndex? names =
             {
                 try
                 {
-                    var data = new TagData(catalog.Read(entry.TagHash));
-                    missions.Add(new(entry.TagHash, Describe(entry.TagHash),
-                        data.Rows(0x50, 0x8080924D, 24).Select(data.U32).ToArray(), []));
+                    byte[] data = catalog.Read(entry.TagHash);
+                    string name = Describe(entry.TagHash);
+                    ref readonly var scenario = ref TagView.Checked<SScenario>(data, 0);
+                    var bubbles = TagView.Rows(data, in scenario.Bubbles, ScenarioBubble.Class);
+                    var hashes = new uint[bubbles.Length];
+                    for (int i = 0; i < bubbles.Length; i++) hashes[i] = bubbles[i].NameHash;
+                    missions.Add(new(entry.TagHash, name, hashes, []));
                 }
                 catch (Exception error) when (error is InvalidDataException or ArgumentException or IOException)
                 { diagnostics.Add($"Mission {entry.TagHash:X8}: {error.Message}"); }
@@ -182,7 +188,7 @@ public sealed class WorldLoader(PackageCatalog catalog, StudioNameIndex? names =
     private Dictionary<uint, IReadOnlyList<WorldStateKey>> ReadOwners(ScenarioInfo scenario, CancellationToken token)
     {
         var result = new Dictionary<uint, HashSet<WorldStateKey>>();
-        var cached = new Dictionary<uint, TagData>();
+        var cached = new Dictionary<uint, byte[]>();
         foreach (var state in scenario.Bubbles.SelectMany(x => x.States))
         {
             var pending = new Stack<uint>();
@@ -194,27 +200,38 @@ public sealed class WorldLoader(PackageCatalog catalog, StudioNameIndex? names =
                 if (!visited.Add(tag) || !catalog.TryGetEntry(tag, out var entry)) continue;
                 if (!result.TryGetValue(tag, out var owners)) result[tag] = owners = [];
                 owners.Add(new(scenario.TagHash, state.BubbleNameHash, state.Ordinal));
-                if (entry.Reference is not (0x8080925E or 0x80809468 or 0x80809B14 or 0x80809462 or 0x8080925B)) continue;
-                if (!cached.TryGetValue(tag, out var data)) cached[tag] = data = new(catalog.Read(tag));
+                if (entry.Reference is not (SScenarioTagSet.Class or SAuthoredObjectSet.Class or SEntityLink.Class
+                    or SAuthoredObject.Class or SScenarioStateEntry.Class)) continue;
+                if (!cached.TryGetValue(tag, out var data)) cached[tag] = data = catalog.Read(tag);
                 switch (entry.Reference)
                 {
-                    case 0x8080925E:
-                        foreach (int descriptor in new[] { 8, 24, 40 })
-                            foreach (int row in data.Rows(descriptor, 0x80809260, 4)) pending.Push(data.U32(row));
+                    case SScenarioTagSet.Class:
+                    {
+                        ref readonly var set = ref TagView.Checked<SScenarioTagSet>(data, 0);
+                        foreach (ref readonly var row in TagView.Rows(data, in set.TagSetA, RegistryObjectRef.Class)) pending.Push(row.Tag);
+                        foreach (ref readonly var row in TagView.Rows(data, in set.TagSetB, RegistryObjectRef.Class)) pending.Push(row.Tag);
+                        foreach (ref readonly var row in TagView.Rows(data, in set.TagSetC, RegistryObjectRef.Class)) pending.Push(row.Tag);
                         break;
-                    case 0x80809468:
-                        if (data.U32(8) != uint.MaxValue) pending.Push(data.U32(8));
-                        else foreach (int row in data.Rows(16, 0x80809B13, 4)) pending.Push(data.U32(row));
+                    }
+                    case SAuthoredObjectSet.Class:
+                    {
+                        ref readonly var set = ref TagView.Checked<SAuthoredObjectSet>(data, 0);
+                        if (set.DirectTarget != uint.MaxValue) pending.Push(set.DirectTarget);
+                        else foreach (ref readonly var row in TagView.Rows(data, in set.Objects, SAuthoredObjectSetTarget.Class)) pending.Push(row.Redirect);
                         break;
-                    case 0x80809B14: pending.Push(data.U32(12)); break;
-                    case 0x8080925B: pending.Push(data.U32(20)); break;
-                    case 0x80809462:
-                        foreach (int row in data.Rows(56, 0x80809464, 24))
+                    }
+                    case SEntityLink.Class: pending.Push(TagView.Checked<SEntityLink>(data, 0).Next); break;
+                    case SScenarioStateEntry.Class: pending.Push(TagView.Checked<SScenarioStateEntry>(data, 0).Link); break;
+                    case SAuthoredObject.Class:
+                    {
+                        ref readonly var authored = ref TagView.Checked<SAuthoredObject>(data, 0);
+                        foreach (ref readonly var row in TagView.Rows(data, in authored.EntryFilters, ObjectBubbleBlock.Class))
                         {
-                            if (data.I32(row) != -1 && data.I32(row) != state.EntryIndex) continue;
-                            foreach (int handle in data.Rows(row + 8, 0x80809466, 4)) pending.Push(data.U32(handle));
+                            if (row.BubbleIndex != -1 && row.BubbleIndex != state.EntryIndex) continue;
+                            foreach (ref readonly var handle in TagView.Rows(data, in row.Handles, PlacedHandle.Class)) pending.Push(handle.Handle);
                         }
                         break;
+                    }
                 }
             }
         }

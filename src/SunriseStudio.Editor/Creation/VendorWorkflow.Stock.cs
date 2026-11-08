@@ -79,7 +79,7 @@ public sealed partial class VendorWorkflow
             if (expanded)
             {
                 CreationWidgets.Picker("sale-item", ref row.Item, ref row.Label, SearchItems, workspace.InvestmentRevision, 90);
-                int count = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(definition.AsSpan(32)));
+                int count = BaseCategoryCount();
                 var categories = new List<CreationChoice> { new(uint.MaxValue, "No category") };
                 categories.AddRange(Enumerable.Range(0, count).Select(i => new CreationChoice((uint)i, $"Base category {i + 1}")));
                 uint category = unchecked((uint)row.Category);

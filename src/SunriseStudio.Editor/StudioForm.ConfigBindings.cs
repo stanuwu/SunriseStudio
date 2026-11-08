@@ -1,4 +1,5 @@
 using ImGuiNET;
+using SunriseStudio.Formats;
 using SunriseStudio.Projects;
 
 namespace SunriseStudio.Editor;
@@ -109,7 +110,7 @@ public sealed partial class StudioForm
                 if (settings.FirstOrDefault(value => value.Key == configSettingKey) is { } chosenSetting)
                     ImGui.TextDisabled($"Default: {chosenSetting.Default}");
                 if (site.Site.Profile == ConfigBindingLimits.PropertyProfile && site.Type == ModConfigType.Float)
-                    ImGui.TextDisabled(site.Site.PoolOffset == 200 ? "Units: fraction of screen height" : "Units: unscaled native value");
+                    ImGui.TextDisabled(site.Site.PoolOffset == CuiDocument.FloatsB ? "Units: fraction of screen height" : "Units: unscaled native value");
             }
             var boundRows = draft.Bindings.Where(value => value.TagHash == draft.Tag).ToArray();
             if (boundRows.Length != 0 && ImGui.BeginChild("Bound settings", new(600 * scale, Math.Clamp(boundRows.Length * 26, 40, 150) * scale)))

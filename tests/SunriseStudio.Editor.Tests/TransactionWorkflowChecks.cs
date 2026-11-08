@@ -37,7 +37,7 @@ internal static class TransactionWorkflowChecks
             new(0x301, 0x80800001, 8 << 9), tag), new("owned-labels", [4])], allocated =>
         {
             var metadata = allocated[0].Native!;
-            addedTag = 0x80800000u + ((uint)metadata.PackageId << 13) + (uint)metadata.EntryIndex!.Value;
+            addedTag = TagHashes.Make(metadata.PackageId, metadata.EntryIndex!.Value);
             BinaryPrimitives.WriteUInt32LittleEndian(linked, addedTag);
             return new(new Dictionary<uint, byte[]> { [tag] = linked }, new Dictionary<string, byte[]> { [label.Id] = [2, 3] });
         });
@@ -90,7 +90,7 @@ internal static class TransactionWorkflowChecks
         workspace.Catalog.TryGetEntry(source, out var entry);
         var created = workspace.ApplyAssetTransaction([new("private-spawn", original,
             new(0x301, entry.Reference, entry.TypeInfo), source)], _ => new(new Dictionary<uint, byte[]>())); Wait(workspace);
-        uint addedTag = 0x80800000u + ((uint)created[0].Native!.PackageId << 13) + (uint)created[0].Native!.EntryIndex!.Value;
+        uint addedTag = TagHashes.Make(created[0].Native!.PackageId, created[0].Native!.EntryIndex!.Value);
         var owner = new AssetOpenContext(EntityTag: WorldFixture.Base + 5, PlacementTag: WorldFixture.Base + 6, PlacementOffset: 32);
         workspace.Select(addedTag, context: owner); Wait(workspace);
         byte[] changed = original.ToArray(); changed[^1] ^= 1;

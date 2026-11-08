@@ -949,7 +949,7 @@ public sealed partial class NativeSceneRenderer : IDisposable
     {
         if (atmosphereSettings is null || atmosphereSettingsIndex != AtmosphereIndex)
         {
-            atmosphereSettings = NativeAtmosphereSettings.Parse(Plan.Atmospheres[AtmosphereIndex].Settings);
+            atmosphereSettings = NativeAtmosphereSettings.Parse(Plan.Atmospheres[AtmosphereIndex].Payload);
             atmosphereSettingsIndex = AtmosphereIndex;
         }
         return atmosphereSettings;
@@ -1403,7 +1403,7 @@ public sealed partial class NativeSceneRenderer : IDisposable
         int best = -1, bestParts = -1;
         for (int i = 0; i < plan.Atmospheres.Count; i++)
         {
-            if (!NativeAtmosphereSettings.Parse(plan.Atmospheres[i].Settings).HasMode0Lookups) continue;
+            if (!NativeAtmosphereSettings.Parse(plan.Atmospheres[i].Payload).HasMode0Lookups) continue;
             int count = parts.GetValueOrDefault(plan.Atmospheres[i].BubbleHash);
             if (count > bestParts) { best = i; bestParts = count; }
         }

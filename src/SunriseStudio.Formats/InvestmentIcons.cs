@@ -1,4 +1,7 @@
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
@@ -12,9 +15,10 @@ public sealed partial class InvestmentCatalog
         token.ThrowIfCancellationRequested();
         if (item.DisplayTag == 0 || !catalog.ContainsTag(sources.Icons)) return null;
         RequireClass(catalog, item.DisplayTag, DisplayClass);
-        var display = new TagReader(catalog.Read(item.DisplayTag));
-        if (!display.Has(128, 2)) throw new InvalidDataException("Item icon index is truncated.");
-        ushort index = display.U16(128);
+        byte[] display = catalog.Read(item.DisplayTag);
+        const string iconIndex = "DisplayProperties.IconIndex";
+        if (!TagView.FitsThrough<ItemDisplayStrings>(display, 0, iconIndex)) throw new InvalidDataException("Item icon index is truncated.");
+        ushort index = TagView.At<ushort>(display, TagView.FieldOffset<ItemDisplayStrings>(iconIndex));
         return index == ushort.MaxValue ? null : ReadIcon(index, token);
     }
 
@@ -26,17 +30,17 @@ public sealed partial class InvestmentCatalog
     private InvestmentIcon? ReadIcon(int index, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        RequireClass(catalog, sources.Icons, 0x80802951);
-        var icons = new TagReader(catalog.Read(sources.Icons));
-        var rows = icons.Array(8, stride: 24);
+        RequireClass(catalog, sources.Icons, IconMap.Class);
+        byte[] icons = catalog.Read(sources.Icons);
+        var rows = TagArray.Checked(icons, TagView.FieldOffset<IconMap>("Table"), stride: Unsafe.SizeOf<C80802957>());
         if (index >= rows.Count) throw new InvalidDataException("Icon index is outside its table.");
-        uint containerTag = icons.U32(rows.Data + index * 24 + 16);
-        RequireClass(catalog, containerTag, 0x80804A53);
-        var container = new TagReader(catalog.Read(containerTag));
-        if (!container.Has(0, 128)) throw new InvalidDataException("Icon container is truncated.");
-        uint bitmapTag = container.U32(20);
+        uint containerTag = TagView.At<C80802957>(icons, rows.Data + index * Unsafe.SizeOf<C80802957>()).Unk10;
+        RequireClass(catalog, containerTag, SIconContainer.Class);
+        byte[] container = catalog.Read(containerTag);
+        if (!TagView.Fits<SIconContainer>(container, 0)) throw new InvalidDataException("Icon container is truncated.");
+        uint bitmapTag = TagView.At<SIconContainer>(container).IconBitmap0PrimaryBitmap;
         if (bitmapTag is 0 or uint.MaxValue) return null;
-        RequireClass(catalog, bitmapTag, 0x80804A69);
+        RequireClass(catalog, bitmapTag, SIconBitmap.Class);
         uint textureTag = CuiBitmap.ReadTexture(catalog.Read(bitmapTag));
         token.ThrowIfCancellationRequested();
         return new(containerTag, bitmapTag, new TextureDataReader(catalog).Read(textureTag));

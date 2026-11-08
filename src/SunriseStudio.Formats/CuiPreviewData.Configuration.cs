@@ -1,4 +1,5 @@
 using System.Numerics;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Formats;
 
@@ -16,7 +17,7 @@ public sealed partial class CuiPreviewData
         Dictionary<CuiComponent, Vector4> rectangles = [];
         Dictionary<int, CuiWidgetContent> content = new(LocalContent);
         Dictionary<(uint Tag, int Row), CuiBindingTransform> comparisons = [];
-        if (Document.ClassHash == 0x80804825)
+        if (Document.ClassHash == CuiResource.Class)
         {
             for (int owner = 0; owner < Document.Objects.Count; owner++)
                 for (int component = 0; component < Document.Objects[owner].Components.Count; component++)

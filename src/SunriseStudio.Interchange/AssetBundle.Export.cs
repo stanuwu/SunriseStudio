@@ -8,6 +8,7 @@ using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
+using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Interchange;
 
@@ -134,7 +135,7 @@ public static partial class AssetBundle
             .Read(connections.AnimationEntityTag, resolveNames: true, cancellationToken: token)
             .GroupBy(clip => clip.ClipTag).Select(group => group.First() with
             { Name = EntityAnimationCatalog.UniqueName(group) }).ToArray();
-        if (selected?.Reference == 0x80808F49 && linkedClips.Length == 0)
+        if (selected?.Reference == SAnimationClip.Class && linkedClips.Length == 0)
             linkedClips = [new(0, 0, 0, rootTag)];
         foreach (var reference in linkedClips)
         {
@@ -311,7 +312,7 @@ public static partial class AssetBundle
         string? skinHash = joints is null ? null : BundlePaths.Hash(JsonSerializer.SerializeToUtf8Bytes(new { joints, weights }));
         string skinning = "Linear";
         if (joints is not null && mesh.Native?.Kind == NativeMeshKind.Entity
-            && catalog.TryGetEntry(mesh.MaterialTag, out var materialEntry) && materialEntry.Reference == 0x808071E8)
+            && catalog.TryGetEntry(mesh.MaterialTag, out var materialEntry) && materialEntry.Reference == STechnique.Class)
         {
             var material = reader.Read(mesh.MaterialTag);
             if (material.VertexShader is { } vertexShader && NativeShaderContracts.ClassifyEntityPalette(
@@ -347,7 +348,7 @@ public static partial class AssetBundle
         {
             token.ThrowIfCancellationRequested();
             progress?.Invoke($"Exporting {asset.Name}");
-            if (asset.Type is 8 or 16 && asset.Reference == 0x808071E8)
+            if (asset.Type is 8 or 16 && asset.Reference == STechnique.Class)
                 try
                 {
                     string folder = $"materials/{asset.TagHash:X8}";

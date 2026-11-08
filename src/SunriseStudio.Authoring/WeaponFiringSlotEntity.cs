@@ -1,18 +1,14 @@
-using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
 /** A firing row slot entity is the stock slot entity with only its particle sequence replaced. */
 public static class WeaponFiringSlotEntity
 {
-    public const uint EntityClass = 0x80809C0F, VariableStoreClass = 0x80809790;
-    private const uint ConstructionRow = 0x80809C04, JoinRow = 0x80809BC9,
-        InterfaceRow = 0x80809C22, InterfaceConfigRow = 0x80809C20;
-    // Entity tables: construction +0x10, variable joins +0x20 and +0x30, interface rows +0x58, their configs +0x68.
-    private const int Construction = 0x10, Interfaces = 0x58, InterfaceConfigs = 0x68;
-    private static readonly int[] Joins = [0x20, 0x30];
-    private const int ConstructionStride = 12, JoinStride = 72, InterfaceStride = 40, InterfaceConfigStride = 24;
+    public const uint EntityClass = SEntity.Class, VariableStoreClass = SVariableStore.Class;
 
     /**
      * Copies the stock entity onto the authored sequence. Its variable joins into the stock sequence
@@ -35,43 +31,49 @@ public static class WeaponFiringSlotEntity
         uint profileConfig = WeaponParticleBinding.ConfigTemplateFor(bursts);
         byte[] profile = catalog.Read(WeaponParticleBinding.EntityTemplateFor(bursts));
         int profileResource = WeaponParticleBinding.SequenceResource(catalog.Read(profileConfig));
-        int[] profileRows = NativeRows.Rows(profile, Interfaces, InterfaceRow, InterfaceStride);
-        int[] profileConfigs = NativeRows.Rows(profile, InterfaceConfigs, InterfaceConfigRow, InterfaceConfigStride);
+        int[] profileRows = InterfaceRows(profile);
+        int[] profileConfigs = InterfaceConfigs(profile);
         var layout = new Dictionary<(uint Component, uint Map), (int Row, int Config)>();
         for (int index = 0; index < profileRows.Length; index++)
-            if (U32(profile, profileRows[index] + 16) == profileConfig
-                && !layout.TryAdd((U32(profile, profileRows[index] + 12), U32(profile, profileRows[index] + 32)),
-                    (profileRows[index], profileConfigs[index])))
+        {
+            ref readonly var profileRow = ref Interface(profile, profileRows[index]);
+            if (profileRow.Config.Tag == profileConfig
+                && !layout.TryAdd((profileRow.ComponentKey, profileRow.InterfaceMapHash), (profileRows[index], profileConfigs[index])))
                 throw new InvalidDataException("The particle profile names one sequence interface twice.");
+        }
 
         byte[] result = stock.ToArray();
-        foreach (int row in NativeRows.Rows(result, Construction, ConstructionRow, ConstructionStride))
-            if (U32(result, row) == stockSequence) Put32(result, row, sequenceTag);
-        int[] rows = NativeRows.Rows(result, Interfaces, InterfaceRow, InterfaceStride);
-        int[] configs = NativeRows.Rows(result, InterfaceConfigs, InterfaceConfigRow, InterfaceConfigStride);
+        foreach (int row in ConstructionRows(result))
+        {
+            ref var component = ref TagView.Edit<SPatternComponent>(result, row);
+            if (component.Config == stockSequence) component.Config = sequenceTag;
+        }
+        int[] rows = InterfaceRows(result);
+        int[] configs = InterfaceConfigs(result);
         if (rows.Length != configs.Length) throw new InvalidDataException("Entity interface tables differ in length.");
         var matched = new HashSet<(uint, uint)>();
         for (int index = 0; index < rows.Length; index++)
         {
-            int row = rows[index], config = configs[index];
-            if (U32(result, row + 16) != stockSequence) continue;
-            var key = (U32(result, row + 12), U32(result, row + 32));
-            if (!layout.TryGetValue(key, out var source) || !matched.Add(key) || U32(result, config) != stockSequence
-                || !SameFields(result, row, profile, source.Row, [12, 20, 32])
-                || U32(result, config + 4) != U32(profile, source.Config + 4) || I64(result, row + 24) - stockResource
-                    != I64(profile, source.Row + 24) - profileResource)
+            ref var row = ref TagView.Edit<ActorDescriptorRow>(result, rows[index]);
+            ref var config = ref TagView.Edit<ActorDescriptorMetadata>(result, configs[index]);
+            if (row.Config.Tag != stockSequence) continue;
+            var key = (row.ComponentKey, row.InterfaceMapHash);
+            if (!layout.TryGetValue(key, out var source) || !matched.Add(key) || config.Config.Tag != stockSequence
+                || !SameFields(in row, in Interface(profile, source.Row))
+                || config.Config.Word != TagView.At<ActorDescriptorMetadata>(profile, source.Config).Config.Word
+                || row.Config.Offset - stockResource != Interface(profile, source.Row).Config.Offset - profileResource)
                 throw new InvalidDataException($"Stock sequence interface {key.Item2:X8} has no matching authored row.");
             // The stock row keeps its ordering fields; only the config and its interface offset change.
-            Put32(result, row + 16, sequenceTag);
-            Put64(result, row + 24, I64(profile, source.Row + 24) - profileResource + resource);
-            Put32(result, config, sequenceTag);
-            Put64(result, config + 8, I64(profile, source.Config + 8));
+            row.Config = row.Config with { Tag = sequenceTag };
+            row.Config = row.Config with { Offset = Interface(profile, source.Row).Config.Offset - profileResource + resource };
+            config.Config = config.Config with { Tag = sequenceTag };
+            config.Config = config.Config with { Offset = TagView.At<ActorDescriptorMetadata>(profile, source.Config).Config.Offset };
         }
         if (matched.Count != layout.Count) throw new InvalidDataException("The stock sequence lacks an authored interface.");
-        foreach (int field in Joins)
-            DropRows(result, field, JoinStride, row => U32(result, row + 8) == stockSequence || U32(result, row + 40) == stockSequence);
+        foreach (int field in JoinFields)
+            DropRows(result, field, row => FeedsSequence(result, row, stockSequence));
         for (int at = 0; at + 4 <= result.Length; at += 4)
-            if (U32(result, at) == stockSequence)
+            if (TagRead.U32(result, at) == stockSequence)
                 throw new InvalidDataException("The stock firing entity names its sequence outside its typed tables.");
         return result;
     }
@@ -84,11 +86,11 @@ public static class WeaponFiringSlotEntity
     {
         byte[] stock = catalog.Read(stockEntity), profile = catalog.Read(WeaponParticleBinding.EntityTemplate);
         uint sequence = RequirePerShot(catalog.Read, stock, $"The stock entity {stockEntity:X8}");
-        var common = NativeRows.Rows(profile, Construction, ConstructionRow, ConstructionStride).Select(row => U32(profile, row))
+        var common = ConstructionRows(profile).Select(row => TagView.At<SPatternComponent>(profile, row).Config)
             .Where(tag => tag != WeaponParticleBinding.ConfigTemplate).ToHashSet();
-        bool joinsFeedSequence = Joins.SelectMany(field => NativeRows.Rows(stock, field, JoinRow, JoinStride))
-            .All(row => U32(stock, row + 8) == sequence || U32(stock, row + 40) == sequence);
-        bool otherConfigs = NativeRows.Rows(stock, Construction, ConstructionRow, ConstructionStride).Select(row => U32(stock, row))
+        bool joinsFeedSequence = JoinFields.SelectMany(field => JoinRows(stock, field))
+            .All(row => FeedsSequence(stock, row, sequence));
+        bool otherConfigs = ConstructionRows(stock).Select(row => TagView.At<SPatternComponent>(stock, row).Config)
             .Where(tag => tag != sequence).All(tag => common.Contains(tag) || ResourceClass(catalog.Read(tag)) == VariableStoreClass);
         return joinsFeedSequence && otherConfigs;
     }
@@ -101,7 +103,7 @@ public static class WeaponFiringSlotEntity
      */
     public static uint RequirePerShot(Func<uint, byte[]> read, byte[] entity, string subject)
     {
-        var configs = NativeRows.Rows(entity, Construction, ConstructionRow, ConstructionStride).Select(row => U32(entity, row)).ToArray();
+        var configs = ConstructionRows(entity).Select(row => TagView.At<SPatternComponent>(entity, row).Config).ToArray();
         var sequences = configs.Where(tag => WeaponParticleBinding.SequenceResource(read(tag)) >= 0).ToArray();
         if (sequences.Length != 1)
             throw new InvalidDataException($"{subject} needs exactly one particle sequence; it has {sequences.Length}.");
@@ -115,32 +117,61 @@ public static class WeaponFiringSlotEntity
 
     private static uint ResourceClass(byte[] config)
     {
-        if (config.Length < 32) return 0;
-        long resource = 24 + I64(config, 24);
-        return resource >= 4 && resource <= config.Length ? U32(config, (int)resource - 4) : 0;
+        if (!TagView.FitsThrough<SEntityConfig>(config, 0, nameof(SEntityConfig.Definition))) return 0;
+        ref readonly var definition = ref TagView.At<RelativePointer<Unknown>>(config,
+            TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.Definition)));
+        if (definition.IsNull) return 0;
+        long resource = TagView.OffsetOf(config, in definition) + definition.Relative;
+        return resource >= TagView.ClassWordSize && resource <= config.Length ? TagView.ClassAt(config, (int)resource) ?? 0 : 0;
     }
 
-    private static bool SameFields(byte[] left, int leftRow, byte[] right, int rightRow, int[] fields) =>
-        fields.All(field => U32(left, leftRow + field) == U32(right, rightRow + field));
-
-    /** Keeps the rows the predicate does not select, in order; an emptied table has no array. */
-    private static void DropRows(byte[] bytes, int field, int stride, Func<int, bool> drop)
+    /** True when a join row reads from or writes to the sequence. */
+    private static bool FeedsSequence(byte[] entity, int row, uint sequence)
     {
-        int[] rows = NativeRows.Rows(bytes, field, JoinRow, stride);
+        ref readonly var join = ref TagView.At<SEntityBindingRow>(entity, row);
+        return join.ConfigA.Tag == sequence || join.ConfigB.Tag == sequence;
+    }
+
+    /** Compares the ordering fields an authored interface row must share with its stock row. */
+    private static bool SameFields(ref readonly ActorDescriptorRow left, ref readonly ActorDescriptorRow right) =>
+        left.ComponentKey == right.ComponentKey && left.Config.Word == right.Config.Word
+        && left.InterfaceMapHash == right.InterfaceMapHash;
+
+    private static ref readonly ActorDescriptorRow Interface(byte[] entity, int row) =>
+        ref TagView.At<ActorDescriptorRow>(entity, row);
+
+    private static int[] ConstructionRows(byte[] entity) =>
+        WeaponTagRows.Starts<SPatternComponent>(entity, TagView.FieldOffset<SEntity>(nameof(SEntity.Components)),
+            SPatternComponent.Class);
+
+    private static int[] InterfaceRows(byte[] entity) =>
+        WeaponTagRows.Starts<ActorDescriptorRow>(entity, TagView.FieldOffset<SEntity>("H83bfb495.InterfaceDescriptors"),
+            ActorDescriptorRow.Class);
+
+    private static int[] InterfaceConfigs(byte[] entity) =>
+        WeaponTagRows.Starts<ActorDescriptorMetadata>(entity, TagView.FieldOffset<SEntity>("H83bfb495.LinksD24ByteRowsConfigAt0"),
+            ActorDescriptorMetadata.Class);
+
+    private static int[] JoinRows(byte[] entity, int field) =>
+        WeaponTagRows.Starts<SEntityBindingRow>(entity, field, SEntityBindingRow.Class);
+
+    /** The two variable join tables, in table order. */
+    private static readonly int[] JoinFields =
+        [TagView.FieldOffset<SEntity>("HE3929a53.ConnectionList"), TagView.FieldOffset<SEntity>("HE3929a53.Unknown0x30MustBe0")];
+
+    /** Keeps the join rows the predicate does not select, in order; an emptied table has no array. */
+    private static void DropRows(byte[] bytes, int field, Func<int, bool> drop)
+    {
+        int stride = Unsafe.SizeOf<SEntityBindingRow>();
+        int[] rows = JoinRows(bytes, field);
         int[] kept = rows.Where(row => !drop(row)).ToArray();
         if (kept.Length == rows.Length) return;
         byte[][] copies = kept.Select(row => bytes.AsSpan(row, stride).ToArray()).ToArray();
         for (int index = 0; index < rows.Length; index++)
             if (index < copies.Length) copies[index].CopyTo(bytes, rows[index]);
             else bytes.AsSpan(rows[index], stride).Clear();
-        Put64(bytes, Pointer(bytes, field + 8), kept.Length);
-        Put64(bytes, field, kept.Length);
-        if (kept.Length == 0) Put64(bytes, field + 8, 0);
+        int header = new TagArray(bytes, field).HeaderOffset;
+        TagView.Edit<STypedArrayMarker>(bytes, header).Count = (ulong)kept.Length;
+        TagView.SetArray(bytes, in TagView.At<TagArray<SEntityBindingRow>>(bytes, field), kept.Length, kept.Length == 0 ? null : header);
     }
-
-    private static int Pointer(byte[] bytes, int at) => checked(at + (int)I64(bytes, at));
-    private static uint U32(byte[] bytes, int at) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
-    private static long I64(byte[] bytes, int at) => BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(at));
-    private static void Put32(byte[] bytes, int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), value);
-    private static void Put64(byte[] bytes, int at, long value) => BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at), value);
 }
