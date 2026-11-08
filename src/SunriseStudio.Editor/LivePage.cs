@@ -7,15 +7,21 @@ using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
-/** The live connection only reads diagnostic frames; updates to the game go through the command link. */
-public sealed partial class LivePage : IDisposable
+/**
+ * Live's World section. The live connection only reads diagnostic frames; updates to the game go through the command link.
+ * It connects the first time World is drawn after Attach, so a game attached only for other sections publishes no world.
+ */
+public sealed partial class LivePage : IDisposable, ILiveSection
 {
     private LiveConnection? connection;
-    private IReadOnlyList<LiveProcess> processes = [];
+    // The game the Live tab attached. World connects to it when it is first drawn.
+    private LiveProcess? pending;
+    // The world view failed to connect or lost its connection. World waits for Retry before it connects again.
+    private bool worldFailed;
     private LiveSnapshot? snapshot;
-    private string status = "", root = "";
+    private string status = "";
     private string syncStatus = "";
-    private int selected, follow;
+    private int follow;
     private AssetViewport? followedViewport;
     private AssetViewport? filteredViewport;
     private WorldDocument? scene;
@@ -50,8 +56,27 @@ public sealed partial class LivePage : IDisposable
     public LivePlacements? MatchedPlacements => MatchesWorld() ? connection?.Placements : null;
     public IReadOnlyCollection<LivePlacement> RuntimePlacements => dynamic.Owners;
     public long RuntimeRevision => dynamic.Revision;
-    /** True while a game is attached; Studio then shares the GPU with it. */
+    /** True while the world view is connected to the game. */
     public bool IsAttached => connection is not null;
+
+    string ILiveSection.Id => "world";
+    string ILiveSection.Title => "World";
+    void ILiveSection.Poll(LiveSectionContext context) => Poll(context.Workspace, context.Viewport);
+    void ILiveSection.Draw(LiveSectionContext context) => Draw(context.Workspace, context.Viewport, context.DrawScene);
+
+    /** Remembers the game. Nothing is mapped until World is drawn. */
+    public void Attach(LiveProcess process)
+    {
+        Disconnect();
+        pending = process; worldFailed = false;
+    }
+
+    public void Detach(bool gameClosed)
+    {
+        Disconnect();
+        pending = null; worldFailed = false;
+        if (gameClosed) status = "Game closed";
+    }
     public Vector3? Player => snapshot?.Player;
 
     /** The live row paired with an authored mesh or marker, if the game has spawned it. */
@@ -97,8 +122,7 @@ public sealed partial class LivePage : IDisposable
         if (connection is null) return;
         try
         {
-            if (workspace.Catalog?.GameRoot != root || connection.HasExited)
-            { Disconnect(); status = "Game closed"; return; }
+            if (connection.HasExited) { Disconnect(); worldFailed = true; status = "Game closed"; return; }
             snapshot = connection.Poll();
             var nextWorld = connection.World;
             var identity = nextWorld is null ? ((uint, uint, uint, bool)?)null
@@ -165,7 +189,7 @@ public sealed partial class LivePage : IDisposable
         }
         catch (Exception error) when (error is IOException or InvalidOperationException or NotSupportedException
             or ArgumentException or InvalidDataException or System.ComponentModel.Win32Exception)
-        { Disconnect(); status = error.Message; }
+        { Disconnect(); worldFailed = true; status = error.Message; }
     }
 
     /** Rows by full handle and by slot; a new snapshot rebuilds them once. */
@@ -184,20 +208,14 @@ public sealed partial class LivePage : IDisposable
         }
     }
 
-    /** Refresh is explicit so process enumeration never runs on each UI frame. */
+    /** Draws the toolbar, then the summary, the scene and the panel once the world view is connected. */
     public void Draw(StudioWorkspace workspace, AssetViewport viewport, Action? drawScene = null)
     {
-        if (workspace.Catalog is not { } catalog) { ImGui.TextDisabled("Open a Sunrise installation"); return; }
-        if (root != catalog.GameRoot)
-        { Disconnect(); root = catalog.GameRoot; Refresh(); }
+        if (workspace.Catalog is null) { ImGui.TextDisabled("Open a Sunrise installation"); return; }
+        if (pending is { } process && connection is null && !worldFailed) ConnectWorld(process);
         DrawToolbar(workspace, viewport);
         DrawUpdates(workspace);
-        if (connection is null)
-        {
-            ImGui.TextDisabled("Attach needs studio_attach");
-            StudioUi.Tip("Set core.studio_attach to true in bin\\x64\\Sunrise\\settings.json.");
-            return;
-        }
+        if (connection is null) return;
         if (connection.WorldBridgeDiagnostic is { Length: > 0 } bridgeDiagnostic)
             ImGui.TextColored(new Vector4(1, .6f, .35f, 1), bridgeDiagnostic);
         // The Screens tab sets this again while it is drawn.
@@ -227,32 +245,32 @@ public sealed partial class LivePage : IDisposable
         ImGui.EndChild();
     }
 
-    /** Detached: the process picker and Attach. Attached: Detach, status, camera follow, Sync and report. */
+    /** Connects the world view the first time World is drawn after Attach. After a failure, World waits for Retry. */
+    private void ConnectWorld(LiveProcess process)
+    {
+        try { connection = LiveConnection.Attach(process); status = "Connecting the world view"; }
+        catch (Exception error) when (error is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        { worldFailed = true; status = error.Message; }
+    }
+
+    /**
+     * Detached or not connected: why, with Retry after a failure. Connected: status, camera follow, Sync and report. The
+     * Live tab's toolbar attaches and detaches.
+     */
     private void DrawToolbar(StudioWorkspace workspace, AssetViewport viewport)
     {
         if (connection is null)
         {
-            ImGui.SetNextItemWidth(200);
-            if (ImGui.BeginCombo("##liveProcess", processes.Count == 0 ? "No running game" : $"Destiny 2 ({processes[selected].Id})"))
-            {
-                for (int i = 0; i < processes.Count; i++)
-                    if (ImGui.Selectable($"Destiny 2 ({processes[i].Id})##{processes[i].Id}", selected == i)) selected = i;
-                ImGui.EndCombo();
-            }
-            ImGui.SameLine();
-            if (ImGui.Button("Refresh")) Refresh();
-            ImGui.SameLine(); ImGui.BeginDisabled(processes.Count == 0);
-            if (ImGui.Button("Attach"))
-                try { connection = LiveConnection.Attach(processes[selected]); status = "Waiting for the game"; }
-                catch (Exception error) when (error is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
-                { status = error.Message; }
+            ImGui.BeginDisabled(!worldFailed);
+            if (ImGui.Button("Retry")) worldFailed = false;
             ImGui.EndDisabled();
-            if (status.Length > 0) { ImGui.SameLine(); ImGui.TextDisabled(status); }
+            StudioUi.Tip(worldFailed ? "Connect the world view again." : LiveGate.AttachSentence);
+            ImGui.SameLine();
+            ImGui.TextDisabled(status.Length != 0 ? status : LiveGate.AttachSentence);
             return;
         }
-        if (ImGui.Button("Detach")) { Disconnect(); return; }
-        ImGui.SameLine();
         bool connected = snapshot?.InWorld == true && syncStatus.Length == 0 && cuiStatus.Length == 0;
+        ImGui.AlignTextToFramePadding();
         ImGui.TextColored(connected ? new Vector4(.45f, .85f, .5f, 1) : new Vector4(1, .75f, .35f, 1), status);
         ImGui.SameLine(); ImGui.TextDisabled("|"); ImGui.SameLine();
         ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted("Camera"); ImGui.SameLine();
@@ -319,8 +337,6 @@ public sealed partial class LivePage : IDisposable
         forward = forward.LengthSquared() > 1e-4f ? Vector3.Normalize(forward) : Vector3.UnitX;
         viewport.Camera.LookFrom(player - forward * 5 + Vector3.UnitZ * 1.5f, player);
     }
-
-    private void Refresh() { processes = LiveConnection.FindProcesses(root); selected = 0; }
 
     private void ReleaseCamera()
     {

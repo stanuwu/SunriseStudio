@@ -21,6 +21,8 @@ public sealed class StudioSettings
     public float SceneTreeWidth { get; set; } = 280;
     public bool ShowSceneCursor { get; set; } = true;
     public bool ShowAssetCursor { get; set; } = true;
+    /** True when browser lists draw as an icon grid, false for two-line rows. */
+    public bool BrowserGrid { get; set; }
     public bool DiskCacheEnabled { get; set; } = true;
     public int DiskCacheLimitMiB { get; set; } = 512;
     public NativeLightingMode LightingMode { get; set; } = NativeLightingMode.Studio;

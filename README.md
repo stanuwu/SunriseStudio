@@ -11,12 +11,15 @@ Mod Editor for Sunrise
 
 ## Features
 - View assets, maps, missions and investment data
+- Browse reward pools, the season pass and quest chains, and edit their weights and amounts
 - Move objects, copy and remove statics; edit properties, tag fields and collision
 - create weapons, items, vendors, static props, textures, materials,
   perk behaviors, destinations and more
 - Edit mission scripts as graphs
 - Export to Blender, Import from Blender, Rebuild from Blender edits
 - Attach to Sunrise with live cui or inworld view
+- Attach to a running game in Live to see its inventory, pursuits and season pass, grant items and set quantities, XP,
+  claims and pursuit objective progress
 - Build and install projects as Sunrise mods
 
 ## Alpha

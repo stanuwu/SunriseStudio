@@ -19,6 +19,8 @@ try
     InvestmentArrayChecks.SocketTypes();
     InvestmentArrayChecks.PerkDisplays();
     InvestmentSocketChecks.Run(root);
+    InvestmentTableChecks.Run(root);
+    LiveInvestmentSessionChecks.Run();
     const uint first = 0x80A00000;
     var text = Strings(first + 8, ["Fixture rifle", "Auto Rifle", "Owned flavor", "Fixture plug", "Damage", "Quartermaster", "Range"]);
     int bucketAt = TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.InventoryBucket");
@@ -76,6 +78,7 @@ try
     using (var catalog = PackageCatalog.Open(Path.Combine(root, "install"), cacheOptions: new() { Enabled = false }))
     {
         var data = InvestmentCatalog.Load(catalog, sources: source);
+        InvestmentTableChecks.NoRoot(data, first + 2, item);
         InvestmentVendorNameChecks.Run(catalog, source, first + 13);
         VendorAuthoringChecks.Run(catalog, data, source, first + 12, first + 13, first + 20);
         InvestmentArrayChecks.Run(data, catalog, first + 2, first + 3, root);
@@ -87,6 +90,10 @@ try
             && image.Texture.Subresources[0].Data.SequenceEqual(new byte[] { 12, 34, 56, 255 }),
             "Shared icon index did not resolve the authored image.");
         Check(data.ReadIcon(data.Items[1]) is null, "Unset icon index resolved an image.");
+        var reader = new InvestmentIconReader(data);
+        Check(reader.Read(data.Items[0])?.BitmapTag == image!.BitmapTag && reader.Read(data.Items[1]) is null
+            && reader.Read(data.Items[0])?.Texture.Subresources[0].Data.SequenceEqual(image.Texture.Subresources[0].Data) == true,
+            "The shared-table icon reader differs from a single read.");
         var detail = data.ReadItem(first + 2, catalog.Read(first + 2));
         Check(detail.Diagnostics.Count == 0 && detail.Stats.Single().Name == "Damage" && detail.Stats[0].Value == 45, "Stat decode failed.");
         Check(detail.Sockets.Single().PlugName == "Fixture plug" && detail.Sockets[0].AllowedPlugs.SequenceEqual(new ushort[] { 1 }), "Plug references failed.");

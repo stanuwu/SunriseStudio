@@ -37,5 +37,16 @@ public static partial class CreationTypes
                 _ => NoScratchItem
             }));
         }
+        // The investment root names one table of each kind, so a new or cloned table is never read. Their rows are edited in place.
+        const string rewardTableBlocker = "The game reads one table of each kind. Edit its rows instead.";
+        foreach (string table in new[] { StudioCategories.SeasonPassName, StudioCategories.RewardPoolsName })
+        {
+            Add(table, CreationMode.New, new("Reward table", "", rewardTableBlocker));
+            Add(table, CreationMode.Clone, new("Reward table copy", "", rewardTableBlocker));
+        }
+        // The root is found by its class, and a second asset of that class makes the lookup ambiguous.
+        const string rootBlocker = "The game reads one investment tables asset; a second one would make it ambiguous.";
+        Add(StudioCategories.InvestmentTablesName, CreationMode.New, new("Investment tables", "", rootBlocker));
+        Add(StudioCategories.InvestmentTablesName, CreationMode.Clone, new("Investment tables copy", "", rootBlocker));
     }
 }

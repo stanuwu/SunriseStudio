@@ -73,10 +73,10 @@ public sealed partial class StudioForm
         if (ShortcutInput.Pressed(ShortcutActions.CreateMissionScript)) NewMissionScript();
     }
 
-    /** Why creation cannot start now; null when it can. */
+    /** Why creation cannot start, or null when it can. A missing project comes first, since nothing can be made without one. */
     private string? CreationRefusal(CreationType type) =>
-        !type.Available ? type.Blocker
-        : workspace.Project is null ? "Create or open a project first."
+        workspace.Project is null ? "Create or open a project first." + (type.Available ? "" : "\n" + type.Blocker)
+        : !type.Available ? type.Blocker
         : !workspace.CanEdit ? "Working" : null;
 
     /**

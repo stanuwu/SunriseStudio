@@ -21,7 +21,7 @@ public sealed partial class StudioForm
     private readonly HashSet<uint> hiddenBubbles = [];
     private bool showMap = true, showMission = true;
 
-    private static unsafe bool BeginEditorTab(string label, bool selected = false)
+    internal static unsafe bool BeginEditorTab(string label, bool selected = false)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(label + '\0');
         fixed (byte* text = bytes)
@@ -151,7 +151,8 @@ public sealed partial class StudioForm
         DrawAssetHeader(document);
         DrawDocumentPages(document, "world:asset:", new(workspace, assetViewport!, property =>
             { selectedProperty = property; propertyValue = property.Value; inspectAsset = true; },
-            mesh => { assetViewport!.SetSelection(mesh); inspectAsset = true; }, selectedMesh, gui!.MonospaceFont));
+            mesh => { assetViewport!.SetSelection(mesh); inspectAsset = true; }, selectedMesh, gui!.MonospaceFont,
+            ShowPage: ShowAssetPage, Icons: icons));
     }
 
     /** Tree toggle, bubble and layer menus and the map and mission checks; a filter that does not fit wraps. */

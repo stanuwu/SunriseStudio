@@ -8,8 +8,21 @@ namespace SunriseStudio.Formats;
 
 public sealed partial class InvestmentCatalog
 {
-    /** Detail rows keep exact byte offsets so edits never resize native arrays. */
-    public InvestmentItemDetail ReadItem(uint tag, ReadOnlyMemory<byte> bytes)
+    /**
+     * Detail rows keep exact byte offsets so edits never resize native arrays.
+     * Reading a pursuit loads the root-slot tables once per catalog, on the caller's worker.
+     */
+    public InvestmentItemDetail ReadItem(uint tag, ReadOnlyMemory<byte> bytes, CancellationToken token = default) =>
+        ReadItem(tag, bytes, investment: true, token);
+
+    /**
+     * The item's fields, stats, sockets and perks without its reward wrapper and pursuit, so the read never loads the root-slot
+     * tables. Window-thread callers that edit those rows use it.
+     */
+    public InvestmentItemDetail ReadItemRows(uint tag, ReadOnlyMemory<byte> bytes) => ReadItem(tag,
+        bytes, investment: false, default);
+
+    private InvestmentItemDetail ReadItem(uint tag, ReadOnlyMemory<byte> bytes, bool investment, CancellationToken token)
     {
         var summary = FindItem(tag) ?? throw new InvalidDataException("Item is absent from the investment index.");
         if (tag != summary.Tag) throw new InvalidDataException("Open the gameplay definition to edit this item.");
@@ -101,8 +114,14 @@ public sealed partial class InvestmentCatalog
                     allowed.OrderBy(index => ItemName(index), StringComparer.OrdinalIgnoreCase).ToArray()));
             }
         }, "Sockets");
+        InvestmentRewardWrapper? wrapper = null; InvestmentPursuit? pursuit = null;
+        if (investment)
+        {
+            Read(() => wrapper = InvestmentRewards.ReadWrapper(bytes.Span), "Rewards");
+            Read(() => pursuit = ReadPursuit(item, bytes, token), "Objectives");
+        }
         var curves = ReadDisplayCurves(item, errors);
-        return new(item, stats, sockets, perks, fields, errors) { DisplayCurves = curves };
+        return new(item, stats, sockets, perks, fields, errors) { DisplayCurves = curves, Wrapper = wrapper, Pursuit = pursuit };
     }
 
     /** Conditional cost expressions remain visible and are never labelled a final price. */
@@ -149,7 +168,7 @@ public sealed partial class InvestmentCatalog
         List<AssetProperty> allowed = [];
         if (FindItem(tag) is not null)
         {
-            var detail = ReadItem(tag, current);
+            var detail = ReadItemRows(tag, current);
             allowed.AddRange(detail.Fields); allowed.AddRange(detail.Stats.Select(row => row.Field));
             allowed.AddRange(detail.Sockets.SelectMany(row => new[] { row.TypeField, row.PlugField }));
             allowed.AddRange(detail.Perks.Select(row => row.Field));
