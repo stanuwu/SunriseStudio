@@ -24,6 +24,7 @@ LiveAuditChecks.Run().GetAwaiter().GetResult();
 CommandChecks.Run();
 WorldScaleChecks.Run();
 CuiChecks.Run();
+InvestmentChecks.Run().GetAwaiter().GetResult();
 var frame = new byte[128];
 void U(int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(at), value);
 void F(int at, float value) => BinaryPrimitives.WriteSingleLittleEndian(frame.AsSpan(at), value);

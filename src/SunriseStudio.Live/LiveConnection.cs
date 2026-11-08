@@ -58,7 +58,9 @@ public sealed partial class LiveConnection : IDisposable
     /** CreateNew prevents one editor from replacing another editor's active request. */
     public static LiveConnection Attach(LiveProcess target)
     {
-        var process = Process.GetProcessById(target.Id);
+        Process process;
+        try { process = Process.GetProcessById(target.Id); }
+        catch (ArgumentException error) { throw new InvalidOperationException("The game is not running.", error); }
         MemoryMappedFile? mapping = null;
         MemoryMappedViewAccessor? view = null;
         try

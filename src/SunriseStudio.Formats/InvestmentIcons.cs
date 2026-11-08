@@ -12,6 +12,13 @@ public sealed partial class InvestmentCatalog
     /** Display icon indices select shared rows; their hashes need not match the item hash. */
     public InvestmentIcon? ReadIcon(InvestmentItem item, CancellationToken token = default)
     {
+        byte[]? table = null;
+        return ReadIcon(item, ref table, token);
+    }
+
+    /** Reuses the icon table bytes in table, or reads them into table on first use. */
+    internal InvestmentIcon? ReadIcon(InvestmentItem item, ref byte[]? table, CancellationToken token)
+    {
         token.ThrowIfCancellationRequested();
         if (item.DisplayTag == 0 || !catalog.ContainsTag(sources.Icons)) return null;
         RequireClass(catalog, item.DisplayTag, DisplayClass);
@@ -19,19 +26,26 @@ public sealed partial class InvestmentCatalog
         const string iconIndex = "DisplayProperties.IconIndex";
         if (!TagView.FitsThrough<ItemDisplayStrings>(display, 0, iconIndex)) throw new InvalidDataException("Item icon index is truncated.");
         ushort index = TagView.At<ushort>(display, TagView.FieldOffset<ItemDisplayStrings>(iconIndex));
-        return index == ushort.MaxValue ? null : ReadIcon(index, token);
+        return index == ushort.MaxValue ? null : ReadIcon(index, ref table, token);
     }
 
-    public InvestmentIcon? ReadPerkIcon(int perk, CancellationToken token = default) =>
-        perk >= 0 && perk < PerkDefinitions.Count && PerkDefinitions[perk].IconIndex != ushort.MaxValue
-        && catalog.ContainsTag(sources.Icons) ? ReadIcon(PerkDefinitions[perk].IconIndex, token) : null;
+    public InvestmentIcon? ReadPerkIcon(int perk, CancellationToken token = default)
+    {
+        byte[]? table = null;
+        return perk >= 0 && perk < PerkDefinitions.Count && PerkDefinitions[perk].IconIndex != ushort.MaxValue
+            && catalog.ContainsTag(sources.Icons) ? ReadIcon(PerkDefinitions[perk].IconIndex, ref table, token) : null;
+    }
 
     /** Icon rows are shared by items and perks; a row names a container, which names a bitmap. */
-    private InvestmentIcon? ReadIcon(int index, CancellationToken token)
+    private InvestmentIcon? ReadIcon(int index, ref byte[]? table, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        RequireClass(catalog, sources.Icons, IconMap.Class);
-        byte[] icons = catalog.Read(sources.Icons);
+        if (table is null)
+        {
+            RequireClass(catalog, sources.Icons, IconMap.Class);
+            table = catalog.Read(sources.Icons);
+        }
+        byte[] icons = table;
         var rows = TagArray.Checked(icons, TagView.FieldOffset<IconMap>("Table"), stride: Unsafe.SizeOf<C80802957>());
         if (index >= rows.Count) throw new InvalidDataException("Icon index is outside its table.");
         uint containerTag = TagView.At<C80802957>(icons, rows.Data + index * Unsafe.SizeOf<C80802957>()).Unk10;
@@ -45,4 +59,13 @@ public sealed partial class InvestmentCatalog
         token.ThrowIfCancellationRequested();
         return new(containerTag, bitmapTag, new TextureDataReader(catalog).Read(textureTag));
     }
+}
+
+/** Reads many item icons with one copy of the shared icon table, which ReadIcon reads again on every call. Not thread-safe. */
+public sealed class InvestmentIconReader(InvestmentCatalog catalog)
+{
+    private byte[]? table;
+
+    public InvestmentIcon? Read(InvestmentItem item,
+        CancellationToken token = default) => catalog.ReadIcon(item, ref table, token);
 }

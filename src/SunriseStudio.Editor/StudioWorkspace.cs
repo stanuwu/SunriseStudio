@@ -999,6 +999,7 @@ public sealed partial class StudioWorkspace : IDisposable
             try { pending.GetAwaiter().GetResult()(); }
             catch (Exception) { }
         }
+        LiveInvestment.Dispose();
         Catalog?.Dispose();
         operationCancellation?.Dispose();
         lifetime.Dispose();

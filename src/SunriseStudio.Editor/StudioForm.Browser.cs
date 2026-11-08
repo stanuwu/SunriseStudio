@@ -1,6 +1,7 @@
 using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Editor.Creation;
+using SunriseStudio.Formats;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Tags.Generated;
@@ -22,11 +23,20 @@ public sealed partial class StudioForm
     private string browserQueryError = "";
 
     private const string AllCategories = "All categories", AllTypes = "All types";
+    private const string AllItemsTip = "Every installed item at once";
     private const string Dot = " \u00B7 ";
     private string[] browserKinds = [];
     /** True while the browser lists the assets that have no category viewer. */
     private bool otherAssets;
     private bool focusAssetBrowser;
+    /** Item icons for every page, Live section and browser list, uploaded between frames for the last catalog read. */
+    private readonly InvestmentIconCache icons = new();
+    // Reads the item catalog for item names and icons, again after each project edit so the items a project adds are listed.
+    private readonly InvestmentTablesLoader itemCatalog = new();
+    /** The item catalog every item category lists through, with that category as its kind. */
+    private readonly ItemCatalogView itemBrowser = new(kindMenu: false);
+    /** True while the browser lists an item category, or every item, through the item catalog. */
+    private bool itemsOpen;
 
     /** The category whose list is shown; null on the home view and in All other assets. */
     private StudioCategory? OpenCategory => category == AllCategories ? null : StudioCategories.Find(category);
@@ -115,19 +125,48 @@ public sealed partial class StudioForm
         if (inline is not null) filtered = inline;
     }
 
-    /** Shows one category's list; the search text stays and now filters inside it. */
+    /**
+     * Shows one category's list, keeping the search text to filter inside it. An item category opens the item catalog with a
+     * fresh search.
+     */
     private void OpenBrowserCategory(string name)
     {
-        category = name; assetType = AllTypes; otherAssets = false;
+        if (InvestmentItemKinds.Categories.Contains(name)) { OpenItems(name); return; }
+        category = name; assetType = AllTypes; otherAssets = false; itemsOpen = false;
         RefreshAssetTypes(); FilterBrowser();
+    }
+
+    /** Shows the item catalog on one item category, or on every item for AllItems, with a fresh search. */
+    private void OpenItems(string kind)
+    {
+        CloseBrowserCategory();
+        itemsOpen = true;
+        itemBrowser.Kind = kind;
+        itemBrowser.Reset();
+    }
+
+    /** Sets the category the browser starts on. An item kind starts in the item catalog, where OpenItems shows it too. */
+    private void StartOnCategory(string name)
+    {
+        if (!InvestmentItemKinds.Categories.Contains(name)) { category = name; return; }
+        category = AllCategories;
+        itemsOpen = true;
+        itemBrowser.Kind = name;
     }
 
     /** Back to the home view of categories; the search and Changed only clear, since either one shows Results. */
     private void CloseBrowserCategory()
     {
-        category = AllCategories; assetType = AllTypes; otherAssets = false; changesOnly = false;
+        category = AllCategories; assetType = AllTypes; otherAssets = false; changesOnly = false; itemsOpen = false;
         search = ""; browserDirty = false;
         RefreshAssetTypes(); FilterBrowser();
+    }
+
+    /** Opens an asset chosen in the browser. Assets shows it, so a choice made while Live is in front brings Assets forward. */
+    private void OpenFromBrowser(uint tag, SunriseStudio.Scene.AssetOpenContext? context = null)
+    {
+        workspace.Open(tag, context);
+        if (liveInFront) focusAssets = true;
     }
 
     /** View > Items: the Assets tab on the Weapons list, or the home view when there is none. */
@@ -142,7 +181,8 @@ public sealed partial class StudioForm
     {
         BeginPanel("Asset browser", position, size);
         TrackAreaFocus();
-        if (ImGui.BeginTabBar("browser-sections"))
+        // Tabs keep their full labels. A narrow browser scrolls them, and the list button still reaches every tab.
+        if (ImGui.BeginTabBar("browser-sections", ImGuiTabBarFlags.FittingPolicyScroll | ImGuiTabBarFlags.TabListPopupButton))
         {
             if (ImGui.BeginTabItem("Maps")) { DrawMapBrowser(); ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("Missions")) { DrawMissionBrowser(); ImGui.EndTabItem(); }
@@ -161,6 +201,7 @@ public sealed partial class StudioForm
     private void DrawAssetBrowserContents()
     {
         PollAssetFilter();
+        if (itemsOpen) { DrawItemCatalog(); return; }
         ImGui.SetNextItemWidth(-1);
         if (ImGui.InputTextWithHint("##assetSearch", "Search items, enemies and assets", ref search, 256))
         { browserDirty = true; searchChanged = clock.Elapsed.TotalSeconds; }
@@ -170,13 +211,13 @@ public sealed partial class StudioForm
         if (workspace.Project is not null && ImGui.Checkbox("Changed only", ref changesOnly)) FilterBrowser();
         if (OpenCategory is { } open)
         {
-            DrawListHeader(open.Label, open.Tooltip);
+            DrawListHeader(open.Label, open.Tooltip, filtered.Length);
             if (open.Name == InvestmentItemKinds.Bounties) StudioUi.Wip("Some rows here are not bounties.");
-            DrawCategoryCreation(open.Name);
+            DrawCategoryCreation(open.Name, grid: false);
         }
         else if (otherAssets || category != AllCategories)
-        { DrawListHeader("All other assets", "Assets with no category viewer"); DrawOtherCreation(); }
-        else if (search.Length != 0 || changesOnly) DrawListHeader("Results", "Matches in every category");
+        { DrawListHeader("All other assets", "Assets with no category viewer", filtered.Length); DrawOtherCreation(); }
+        else if (search.Length != 0 || changesOnly) DrawListHeader("Results", "Matches in every category", filtered.Length);
         else { DrawCategoryHome(); return; }
         if (OpenCategory is null && (otherAssets || category != AllCategories)) DrawOtherFilters();
         else if (OpenCategory is not null) DrawTypeFilter(-1);
@@ -184,15 +225,54 @@ public sealed partial class StudioForm
         DrawAssetRows();
     }
 
+    /**
+     * Lists an item category through the item catalog: the header with Back, the grid toggle, New and Clone, then Changed only
+     * and the catalog. A row opens its item, and rows show what the game's character holds while Live reads it.
+     */
+    private void DrawItemCatalog()
+    {
+        var catalog = itemCatalog.RequestCatalog(workspace, followEdits: true);
+        var open = StudioCategories.Find(itemBrowser.Kind);
+        var options = new ItemCatalogOptions(Held: LiveGate.Held(workspace.LiveInvestment),
+            Menu: DrawItemContext, ChangedOnly: changesOnly);
+        DrawListHeader(open?.Label ?? itemBrowser.Kind, open?.Tooltip ?? AllItemsTip,
+            catalog is null ? 0 : itemBrowser.Count(workspace, catalog, options));
+        if (itemBrowser.Kind == InvestmentItemKinds.Bounties) StudioUi.Wip("Some rows here are not bounties.");
+        // All items has no kind to create, so it shows only the grid toggle.
+        if (open is null) { AlignRight(CreationIconWidth()); DrawGridToggle(); }
+        else DrawCategoryCreation(itemBrowser.Kind, grid: true);
+        if (workspace.Project is not null) ImGui.Checkbox("Changed only", ref changesOnly);
+        if (catalog is null) { itemCatalog.Waiting(workspace, "Reading items"); return; }
+        itemBrowser.DrawBar(workspace, catalog, options, 0);
+        ImGui.Separator();
+        // While no open runs, the chosen row follows the open document's item. A clicked row stays chosen while it opens, and
+        // the choice returns to the document's item when the open fails.
+        if (!workspace.IsBusy && workspace.Document is { } document && catalog.FindItem(document.Entry.TagHash) is { } shown)
+            itemBrowser.Chosen = shown.Index;
+        if (itemBrowser.DrawList("asset-items", workspace, catalog, icons, scale, settings.BrowserGrid,
+            Vector2.Zero, options) is { } item)
+            OpenCatalogItem(item);
+    }
+
+    /** What a click on an item catalog row does: opens the item, bringing Assets forward over Live. */
+    internal void OpenCatalogItem(InvestmentItem item) => OpenFromBrowser(item.Tag);
+
+    /** The context menu of a catalog item's row, the same menu its asset row has. */
+    private void DrawItemContext(InvestmentItem item)
+    {
+        if (workspace.Catalog?.TryGetEntry(item.Tag, out var entry) == true) DrawAssetMenu(entry, item.Name, inCategory: true);
+    }
+
     /** One line: a Back icon to the home view, the title and the row count. */
-    private void DrawListHeader(string title, string tooltip)
+    private void DrawListHeader(string title, string tooltip, int count)
     {
         if (StudioUi.IconButton("browser-home", StudioIcon.Back, "All categories")) CloseBrowserCategory();
         ImGui.SameLine();
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted(title);
         StudioUi.Tip(tooltip);
-        ImGui.SameLine(); ImGui.TextDisabled($"{filtered.Length:N0}");
+        ImGui.SameLine();
+        ImGui.TextDisabled($"{count:N0}");
         if (filterWork is not null) { ImGui.SameLine(); ImGui.TextDisabled("Searching"); }
         else if (browserQueryError.Length != 0) { ImGui.SameLine(); ImGui.TextColored(StudioTheme.Accent, browserQueryError); }
     }
@@ -205,12 +285,27 @@ public sealed partial class StudioForm
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + MathF.Max(0, ImGui.GetContentRegionAvail().X - width));
     }
 
-    /** New and Clone of a category, right-aligned on its header line. */
-    private void DrawCategoryCreation(string name)
+    /** The rows-or-grid toggle of an item list header. Every item list shares the setting. */
+    private void DrawGridToggle()
+    {
+        if (IconList.GridToggle("browser-grid", settings.BrowserGrid, "")) SetBrowserGrid(!settings.BrowserGrid);
+    }
+
+    /** Sets the layout all browser lists share. */
+    internal void SetBrowserGrid(bool grid)
+    {
+        if (settings.BrowserGrid == grid) return;
+        settings.BrowserGrid = grid;
+        SaveSettings();
+    }
+
+    /** New and Clone of a category, after the grid toggle of an item list, right-aligned on its header line. */
+    private void DrawCategoryCreation(string name, bool grid)
     {
         var create = CreationTypes.For(name, CreationMode.New);
         var clone = CreationTypes.For(name, CreationMode.Clone);
-        AlignRight(2 * CreationIconWidth());
+        AlignRight((grid ? 3 : 2) * CreationIconWidth());
+        if (grid) { DrawGridToggle(); ImGui.SameLine(); }
         if (CreationIcon("list-new", StudioIcon.Plus, "New", create)) StartCreation(create);
         ImGui.SameLine();
         if (CreationIcon("list-clone", StudioIcon.Copy, "Clone", clone)) StartClone(name);
@@ -276,29 +371,64 @@ public sealed partial class StudioForm
         StudioUi.Tip("Type");
     }
 
-    /** Categories with rows, grouped; counts come from the worker, so drawing scans no rows. */
+    /**
+     * The home view: the categories with rows in their groups, with the table rows in the Tables group. Counts come from the
+     * worker, so drawing scans no rows.
+     */
     private void DrawCategoryHome()
     {
         ImGui.BeginChild("category-home", Vector2.Zero, ImGuiChildFlags.None);
         string? group = null;
+        void Header(string next) { if (next != group) { group = next; ImGui.SeparatorText(next.ToUpperInvariant()); } }
         int inCategories = 0;
+        bool tables = false, allItems = false;
         foreach (var item in StudioCategories.All)
         {
             int count = workspace.CategoryCounts.GetValueOrDefault(item.Name);
             inCategories += count;
-            if (count == 0) continue;
-            if (item.Group != group) { group = item.Group; ImGui.SeparatorText(group.ToUpperInvariant()); }
-            if (CategoryRow(item.Name, item.Icon, item.Label, count, item.Tooltip)) OpenBrowserCategory(item.Name);
+            if (item.Group == StudioCategories.TablesGroup && !tables) { tables = true; DrawTableRows(Header); }
+            if (count == 0 || !item.Home) continue;
+            Header(item.Group);
+            // An All items row comes before the first item kind.
+            if (!allItems && InvestmentItemKinds.Categories.Contains(item.Name))
+            {
+                allItems = true;
+                // The catalog's own count once it is read, since the catalog also lists items no category holds.
+                int items = workspace.LoadedInvestment?.Items.Count
+                    ?? InvestmentItemKinds.Categories.Sum(kind => workspace.CategoryCounts.GetValueOrDefault(kind));
+                if (CategoryRow("all-items", StudioIcon.Grid, ItemCatalogView.AllItems, items.ToString("N0"), AllItemsTip))
+                    OpenItems(ItemCatalogView.AllItems);
+            }
+            if (CategoryRow(item.Name, item.Icon, item.Label, count.ToString("N0"), item.Tooltip)) OpenBrowserCategory(item.Name);
         }
         if (group is not null) ImGui.Separator();
-        if (CategoryRow("other-assets", StudioIcon.Folder, "All other assets", workspace.Assets.Length - inCategories,
+        if (CategoryRow("other-assets", StudioIcon.Folder, "All other assets",
+            (workspace.Assets.Length - inCategories).ToString("N0"),
             "Assets with no category viewer"))
         { otherAssets = true; FilterBrowser(); }
         ImGui.EndChild();
     }
 
-    /** A full-width row: icon, label, and the count on the right. */
-    private bool CategoryRow(string id, StudioIcon icon, string label, int count, string tooltip)
+    /** One row per table whose category has rows. A click opens that table on its page. */
+    private void DrawTableRows(Action<string> header)
+    {
+        foreach (var row in StudioCategories.Tables)
+        {
+            if (workspace.CategoryCounts.GetValueOrDefault(row.Category) == 0) continue;
+            header(StudioCategories.TablesGroup);
+            if (CategoryRow("table-" + row.Page, row.Icon, row.Label, "", row.Tooltip)) workspace.Run(() => OpenTable(row));
+        }
+    }
+
+    /** Opens a table row's table on its page. When the table cannot be found, the reason shows in the status line. */
+    internal void OpenTable(StudioTableRow row)
+    {
+        workspace.Open(row.Tag(workspace.Catalog!));
+        ShowAssetPage(row.Page);
+    }
+
+    /** A full-width row: icon, label, and the count text on the right. */
+    private bool CategoryRow(string id, StudioIcon icon, string label, string count, string tooltip)
     {
         ImGui.PushID(id);
         float width = ImGui.GetContentRegionAvail().X, height = ImGui.GetFrameHeight();
@@ -310,9 +440,8 @@ public sealed partial class StudioForm
         uint text = ImGui.GetColorU32(ImGuiCol.Text);
         ImGuiIcons.Draw(draw, icon, new(start.X + 4 * scale, textTop), line, text);
         draw.AddText(new(start.X + 12 * scale + line, textTop), text, label);
-        string number = count.ToString("N0");
-        draw.AddText(new(start.X + width - ImGui.CalcTextSize(number).X - 4 * scale, textTop),
-            ImGui.GetColorU32(ImGuiCol.TextDisabled), number);
+        draw.AddText(new(start.X + width - ImGui.CalcTextSize(count).X - 4 * scale, textTop),
+            ImGui.GetColorU32(ImGuiCol.TextDisabled), count);
         ImGui.PopID();
         return clicked;
     }
@@ -333,7 +462,7 @@ public sealed partial class StudioForm
                 var start = ImGui.GetCursorScreenPos();
                 bool active = row.Entry.TagHash == workspace.Document?.Entry.TagHash;
                 if (ImGui.Selectable("##asset", active, ImGuiSelectableFlags.None, new(0, rowHeight - 6 * scale)))
-                    workspace.Open(row.Entry.TagHash);
+                    OpenFromBrowser(row.Entry.TagHash);
                 bool hovered = ImGui.IsItemHovered();
                 var draw = ImGui.GetWindowDrawList();
                 var textStart = start + new Vector2(7 * scale, 2 * scale);
@@ -355,18 +484,24 @@ public sealed partial class StudioForm
                     ImGui.SetTooltip($"{name}\n{row.Entry.PackageName}\n{row.Entry.TagHash:X8}");
                 if (ImGui.BeginPopupContextItem("asset-context"))
                 {
-                    if (ImGui.MenuItem("Open")) workspace.Open(row.Entry.TagHash);
-                    if (row.InCategory && ImGui.MenuItem("Open as asset")) workspace.Open(row.Entry.TagHash, StudioWorkspace.PlainOpen);
-                    var clone = CreationTypes.For(CreationTypes.KeyFor(row.Entry, workspace), CreationMode.Clone);
-                    if (clone.Available && (!workspace.IsProjectTag(row.Entry.TagHash) || clone.ClonesProject))
-                        CreationMenuItem("Clone", clone, () => StartCreation(clone, row.Entry.TagHash, row.Name));
-                    if (ImGui.MenuItem("Copy tag")) ImGui.SetClipboardText($"{row.Entry.TagHash:X8}");
+                    DrawAssetMenu(row.Entry, row.Name, row.InCategory);
                     ImGui.EndPopup();
                 }
                 ImGui.PopID();
             }
         clipper.End(); clipper.Destroy();
         ImGui.EndChild();
+    }
+
+    /** Open, Open as asset for a category's asset, Clone where it can be cloned, and Copy tag. */
+    private void DrawAssetMenu(PackageEntry entry, string name, bool inCategory)
+    {
+        if (ImGui.MenuItem("Open")) OpenFromBrowser(entry.TagHash);
+        if (inCategory && ImGui.MenuItem("Open as asset")) OpenFromBrowser(entry.TagHash, StudioWorkspace.PlainOpen);
+        var clone = CreationTypes.For(CreationTypes.KeyFor(entry, workspace), CreationMode.Clone);
+        if (clone.Available && (!workspace.IsProjectTag(entry.TagHash) || clone.ClonesProject))
+            CreationMenuItem("Clone", clone, () => StartCreation(clone, entry.TagHash, name));
+        if (ImGui.MenuItem("Copy tag")) ImGui.SetClipboardText($"{entry.TagHash:X8}");
     }
 
     private void PollAssetFilter()

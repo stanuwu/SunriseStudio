@@ -10,35 +10,38 @@ using ItemKinds = SunriseStudio.Packages.InvestmentItemKinds;
 namespace SunriseStudio.Editor;
 
 /** Item and vendor pages share installed identities and the editor's delta transaction path. */
-public sealed partial class InvestmentPage : IPreparedStudioPage
+public sealed partial class InvestmentPage : IPreparedStudioPage, IFramePreparedPage
 {
     private GpuTexture? icon;
     private InvestmentIcon? preparedIcon;
     private readonly Dictionary<ushort, GpuTexture> perkIcons = [];
     private IReadOnlyDictionary<ushort, InvestmentIcon>? preparedPerkIcons;
     private string iconError = "";
-    private string editValue = "", plugSearch = "";
-    private AssetProperty? editing;
-    private IReadOnlyList<ushort>? plugChoices;
-    private bool openEditor;
+    private readonly InvestmentFieldPopup popup = new();
+    // The plug picker's list while a socket's plug is edited, and the picker that draws it.
+    private ItemCatalogOptions? plugOptions;
+    private readonly ItemCatalogView plugPicker = new();
     private SunriseStudio.Packages.PackageCatalog? requestedCatalog;
-    private long requestedOverlayRevision = -1, editingOverlayRevision = -1;
-    private StudioDocument? editingDocument;
-    private SunriseStudio.Projects.StudioProject? editingProject;
-    private StudioDocument? requestedDocument;
-    private InvestmentCatalog? requestedDetailCatalog;
-    public string Id => "sunrise.investment";
+    private long requestedOverlayRevision = -1;
+    private readonly PursuitInspector inspector = new();
+    // Icons of the item pickers' rows.
+    private readonly InvestmentTablesLoader bucketTables = new();
+    // Studio never edits the bucket table, so the descriptors read once per installation stay valid across project edits.
+    private (SunriseStudio.Packages.PackageCatalog? Source, InvestmentTables? Tables) bucketSource;
+    public const string PageId = "sunrise.investment";
+    public string Id => PageId;
     public string Title => "Investment";
-    public void Prepare(StudioDocument? document, Dx11Renderer renderer) => Dispose();
+    public void Prepare(StudioDocument? document, Dx11Renderer renderer) => ReleaseDetail();
 
     /** The window adopts detail textures between frames, before ImGui borrows their views. */
-    public void PrepareDetail(StudioWorkspace workspace, Dx11Renderer renderer)
+    public void PrepareFrame(StudioWorkspace workspace, Dx11Renderer renderer)
     {
         InvalidateDrafts(workspace);
+        inspector.PrepareFrame(workspace);
         var next = workspace.InvestmentDetailCurrent ? workspace.SelectedInvestmentIcon : null;
         var nextPerks = workspace.InvestmentDetailCurrent ? workspace.SelectedInvestmentPerkIcons : null;
         if (ReferenceEquals(next, preparedIcon) && ReferenceEquals(nextPerks, preparedPerkIcons)) return;
-        Dispose(); preparedIcon = next; preparedPerkIcons = nextPerks;
+        ReleaseDetail(); preparedIcon = next; preparedPerkIcons = nextPerks;
         if (next is not null)
             try { icon = AssetViewport.CreatePreviewTexture(renderer, next.Texture); }
             catch (Exception error) when (error is not OutOfMemoryException) { iconError = error.Message; }
@@ -47,7 +50,9 @@ public sealed partial class InvestmentPage : IPreparedStudioPage
             catch (Exception error) when (error is not OutOfMemoryException) { iconError += $"Perk {perk}: {error.Message}\n"; }
     }
 
-    public void Dispose()
+    public void Dispose() => ReleaseDetail();
+
+    private void ReleaseDetail()
     {
         icon?.Dispose(); icon = null; preparedIcon = null; iconError = "";
         foreach (var texture in perkIcons.Values) texture.Dispose();
@@ -57,7 +62,7 @@ public sealed partial class InvestmentPage : IPreparedStudioPage
     public bool CanOpen(StudioDocument document) => document.Entry.TagHash is not (InvestmentCatalog.ItemIndexTag
         or InvestmentCatalog.DisplayIndexTag)
         && document.Entry.Reference is InvestmentCatalog.ItemClass or InvestmentCatalog.DisplayClass
-            or InvestmentCatalog.VendorClass or InvestmentRoot.Class or SInvestmentVendorDisplay.Class;
+            or InvestmentCatalog.VendorClass or SInvestmentVendorDisplay.Class;
 
     /** Detail and edits of the open item or vendor; the asset browser finds them. */
     public void Draw(StudioPageContext context)
@@ -76,20 +81,14 @@ public sealed partial class InvestmentPage : IPreparedStudioPage
             ImGui.EndDisabled();
             return;
         }
-        // One request per document and catalog; a failed read waits for Retry.
-        if (!workspace.InvestmentDetailCurrent && !workspace.IsBusy && workspace.Document is { } wanted
-            && (!ReferenceEquals(requestedDocument, wanted) || !ReferenceEquals(requestedDetailCatalog, catalog)))
-        {
-            requestedDocument = wanted; requestedDetailCatalog = catalog;
-            workspace.Run(workspace.LoadInvestmentDetail);
-        }
+        workspace.RequestInvestmentDetail();
         if (!workspace.InvestmentDetailCurrent && workspace.Document is not null)
         {
             if (workspace.IsBusy) ImGui.TextDisabled("Reading item");
             else
             {
                 if (workspace.Error.Length != 0) ImGui.TextWrapped(workspace.Error);
-                if (ImGui.SmallButton("Retry")) requestedDocument = null;
+                if (ImGui.SmallButton("Retry")) workspace.RetryInvestmentDetail();
             }
         }
         else if (workspace.InvestmentDetailCurrent && workspace.SelectedInvestmentItem is { } item) DrawItem(context, catalog, item);
@@ -116,21 +115,22 @@ public sealed partial class InvestmentPage : IPreparedStudioPage
             ImGui.SameLine();
         }
         ImGui.BeginGroup();
-        ImGui.TextColored(StudioTheme.Rarity(item.Tier), item.Name);
-        StudioUi.Tip($"Item {item.Index}\n{item.Hash:X8}");
+        string name = StudioUi.Fit(item.Name, ImGui.GetContentRegionAvail().X - StudioLiveLink.Room());
+        ImGui.TextColored(StudioTheme.Rarity(item.Tier), name);
+        StudioUi.Tip((name == item.Name ? "" : item.Name + "\n") + $"Item {item.Index}\n{item.Hash:X8}");
+        StudioLiveLink.Draw(context, StudioLiveLink.ItemTarget(item));
         ImGui.TextDisabled($"{item.Rarity}  {item.TypeName}");
-        if (context.Workspace.Names?.TryGetItem(item.Tag, out var facts) == true && (facts.HasObjectives
-            || ItemKinds.Classify(facts).Category is ItemKinds.Subclasses or ItemKinds.Quests or ItemKinds.Bounties))
-        {
-            ImGui.TextDisabled("Objectives not shown");
-            StudioUi.Tip("Objectives and talent trees are not read yet.");
-        }
+        DrawHeaderNotice(context, detail);
         ImGui.EndGroup();
         if (item.Description.Length != 0) ImGui.TextWrapped(item.Description);
+        DrawPursuitRow(context, detail);
         ImGui.Spacing();
         if (item.DisplayTag != 0 && ImGui.SmallButton("Display strings")) context.Workspace.Select(item.DisplayTag);
+        DrawObjectives(context, catalog, detail);
         ImGui.SeparatorText("ITEM");
         foreach (var field in detail.Fields) Field(context, field, field.Offset == ItemFields.Tier ? item.Rarity : null);
+        DrawBucket(context, item);
+        DrawRewardsRow(context, detail);
         if (detail.Stats.Count != 0 || context.Workspace.CanEdit)
         {
             ImGui.SeparatorText("BASE STATS");
@@ -152,7 +152,12 @@ public sealed partial class InvestmentPage : IPreparedStudioPage
                 ImGui.TextDisabled($"Socket {socket.Index + 1}");
                 StudioUi.Tip($"Type {socket.Type}");
                 if (ImGui.Selectable(socket.PlugName + "##plug"))
-                { BeginEdit(context, socket.PlugField); plugChoices = socket.AllowedPlugs; }
+                {
+                    BeginEdit(context, socket.PlugField);
+                    plugOptions = PlugOptions(socket);
+                    plugPicker.Chosen = socket.InitialPlug;
+                    plugPicker.Reset();
+                }
                 if (socket.InitialPlug < catalog.Items.Count)
                 { ImGui.SameLine(); if (ImGui.SmallButton("Open")) context.Workspace.Select(catalog.Items[socket.InitialPlug].Tag); }
                 ImGui.PopID();
@@ -180,6 +185,89 @@ public sealed partial class InvestmentPage : IPreparedStudioPage
         Report("Read errors", detail.Diagnostics);
         string error = iconError.Length != 0 ? iconError : context.Workspace.InvestmentIconError;
         Report("Icon errors", error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    /** Draws a notice under the type line for an objective block that no pursuit page can classify. */
+    private static void DrawHeaderNotice(StudioPageContext context, InvestmentItemDetail detail)
+    {
+        if (context.Workspace.Names?.TryGetItem(detail.Item.Tag, out var facts) != true) return;
+        if (facts.HasObjectives && context.Workspace.Document is { } document
+            && PursuitDocuments.Of(document).Shape == InvestmentPursuitShape.None)
+        {
+            ImGui.TextDisabled("Objectives not shown");
+            StudioUi.Tip("The objective block could not be read; see Read errors.");
+        }
+    }
+
+    /** For a quest step or a pursuit in the Pursuits bucket, names the page that shows its objectives, with a link to it. */
+    private static void DrawPursuitRow(StudioPageContext context, InvestmentItemDetail detail)
+    {
+        if (context.Workspace.Document is not { } document || PursuitDocuments.Page(document) is not { } page) return;
+        var item = detail.Item;
+        var chain = detail.Pursuit?.Chain;
+        int step = chain?.Steps.ToList().FindIndex(row => row.ItemIndex == item.Index) ?? -1;
+        string text = step >= 0 ? $"Quest step {step + 1} of {chain!.Steps.Count}"
+            : item.TypeName.Length != 0 ? item.TypeName : page == QuestPage.PageId ? "Quest" : "Pursuit";
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted("Pursuit");
+        ImGui.SameLine();
+        ImGui.TextDisabled(text);
+        ImGui.SameLine();
+        if (ImGui.SmallButton(page == QuestPage.PageId ? "Open in Quest" : "Open in Pursuit")) context.ShowPage?.Invoke(page,
+            null);
+    }
+
+    /** Draws, as the inspector's sections, the objectives of an item that neither the Quest nor the Pursuit page opens. */
+    private void DrawObjectives(StudioPageContext context, InvestmentCatalog catalog, InvestmentItemDetail detail)
+    {
+        if (context.Workspace.Document is not { } document || !ShowsObjectives(document) || !catalog.TablesLoaded) return;
+        inspector.Draw(context, catalog, catalog.Tables(), detail, tabbed: false);
+    }
+
+    /** True for a single-step pursuit that neither the Quest nor the Pursuit page opens, such as one in another bucket. */
+    internal static bool ShowsObjectives(StudioDocument document) =>
+        PursuitDocuments.Of(document).Shape == InvestmentPursuitShape.Single && PursuitDocuments.Page(document) is null;
+
+    /** The item's bucket as the installed bucket table describes it, with a link to the Buckets page. */
+    private void DrawBucket(StudioPageContext context, InvestmentItem item)
+    {
+        var workspace = context.Workspace;
+        if (!ReferenceEquals(bucketSource.Source, workspace.Catalog) || bucketSource.Tables is null)
+            bucketSource = (workspace.Catalog, bucketTables.Peek(workspace));
+        var tables = bucketSource.Tables;
+        var bucket = tables?.Bucket(item.Bucket);
+        string label = ItemKinds.BucketLabel(item.Bucket);
+        string text = tables is null ? label
+            : bucket is null ? $"Bucket {item.Bucket}, no installed descriptor"
+            : $"{label}{InvestmentTableViews.Dot}{InvestmentTableViews.Scope(bucket.ArraySelector)}{InvestmentTableViews.Dot}"
+                + $"slots {bucket.FirstSlot}-{bucket.LastSlot}{InvestmentTableViews.Dot}stack {item.MaximumStack:N0}"
+                + (bucket.Fifo == 1 ? InvestmentTableViews.Dot + "FIFO" : "");
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted("Bucket");
+        ImGui.SameLine();
+        ImGui.TextDisabled(text);
+        StudioUi.Tip(tables is null ? "Reading the bucket table." : bucket?.Fifo == 1 ? $"Bucket {item.Bucket}\n{BucketsPage.FifoTip}" : $"Bucket {item.Bucket}");
+        ImGui.SameLine();
+        ImGui.BeginDisabled(tables?.Root is null || bucket is null);
+        bool open = ImGui.SmallButton("Open in Buckets");
+        ImGui.EndDisabled();
+        StudioUi.Tip(tables is null ? "Reading the bucket table." : bucket is null ? "The installed bucket table has no descriptor for this bucket." : "");
+        if (!open || tables?.Root is not { } root) return;
+        workspace.Open(root.Tag);
+        context.ShowPage?.Invoke(BucketsPage.PageId, BucketsPage.RowOf(item.Bucket));
+    }
+
+    /** A wrapper item's draw table in one line, with a link to the Rewards page that shows it. */
+    private static void DrawRewardsRow(StudioPageContext context, InvestmentItemDetail detail)
+    {
+        if (detail.Wrapper is not { } wrapper) return;
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted("Rewards");
+        ImGui.SameLine();
+        ImGui.TextDisabled((wrapper.OpensOnAcquisition ? "Opens when acquired" : "Kept as an item when acquired")
+            + InvestmentTableViews.Dot + $"Pool {wrapper.Pool}");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Open in Rewards")) context.ShowPage?.Invoke(ItemRewardsPage.PageId, null);
     }
 
     /** One base stat row; the bar shows only for values above zero. */
@@ -246,73 +334,49 @@ public sealed partial class InvestmentPage : IPreparedStudioPage
     }
 
     private void BeginEdit(StudioPageContext context, AssetProperty field)
-    {
-        editing = field; editValue = field.Value; plugChoices = null; plugSearch = ""; openEditor = true;
-        editingDocument = context.Workspace.Document; editingProject = context.Workspace.Project;
-        editingOverlayRevision = context.Workspace.Catalog?.OverlayRevision ?? -1;
-    }
+    { popup.Begin(context.Workspace, field); plugOptions = null; }
 
-    /** Read-only sessions expose the same fields while project edits use explicit save actions. */
+    /** The plug picker lists exactly the socket's allowed plugs, the pool the game picks the socket's plug from. */
+    internal static ItemCatalogOptions PlugOptions(InvestmentSocket socket) =>
+        new(Candidates: socket.AllowedPlugs.Select(index => (int)index).ToHashSet());
+
+    /** Item fields add allowed plugs, rarity names and the displayed stat value to the shared popup. */
     private void DrawEdit(StudioPageContext context, InvestmentCatalog catalog)
     {
-        if (openEditor) { ImGui.OpenPopup("Edit investment field"); openEditor = false; }
-        if (!ImGui.BeginPopupModal("Edit investment field", ImGuiWindowFlags.AlwaysAutoResize)) return;
-        if (!ReferenceEquals(editingDocument, context.Workspace.Document)
-            || !ReferenceEquals(editingProject, context.Workspace.Project)
-            || editingOverlayRevision != context.Workspace.Catalog?.OverlayRevision)
-        { ClearEdit(); ImGui.CloseCurrentPopup(); ImGui.EndPopup(); return; }
-        if (editing is { } field)
+        var detail = context.Workspace.SelectedInvestmentItem;
+        popup.Draw(context.Workspace, field =>
         {
-            ImGui.TextUnformatted(field.Name);
-            var detail = context.Workspace.SelectedInvestmentItem;
-            var stat = detail?.Stats.FirstOrDefault(row => row.Field.Offset == field.Offset);
+            if (popup.Table is not null) return false;
+            if (detail?.Stats.Any(row => row.Field.Offset == field.Offset) == true) ImGui.TextDisabled("Base value");
+            if (plugOptions is { Candidates.Count: > 0 } options
+                && plugPicker.DrawPicker("allowed-plugs", context.Workspace, catalog,
+                InvestmentIconCache.Of(context), options) is { } plug)
+                popup.Value = plug.Index.ToString(CultureInfo.InvariantCulture);
+            if (field.Offset != ItemFields.Tier || detail is null) return false;
+            ImGui.SetNextItemWidth(350);
+            if (ImGui.BeginCombo("##investmentValue",
+                byte.TryParse(popup.Value, out byte current) ? ItemKinds.TierName(current) : popup.Value))
+            {
+                foreach (byte value in new byte[] { 0, 1, 2, 3, 4, 5, 255 })
+                    if (ImGui.Selectable(ItemKinds.TierName(value))) popup.Value = value.ToString(CultureInfo.InvariantCulture);
+                ImGui.EndCombo();
+            }
+            return true;
+        }, field =>
+        {
+            var stat = popup.Table is null ? detail?.Stats.FirstOrDefault(row => row.Field.Offset == field.Offset) : null;
             var curve = stat is not null && detail is not null ? DisplayCurve(detail, stat) : null;
-            if (stat is not null) ImGui.TextDisabled("Base value");
-            if (plugChoices is { Count: > 0 })
-            {
-                ImGui.SetNextItemWidth(350); ImGui.InputTextWithHint("##plugSearch", "Find allowed plug", ref plugSearch, 256);
-                ImGui.BeginChild("allowed-plugs", new(350, 220), ImGuiChildFlags.Borders);
-                foreach (ushort index in plugChoices.Where(index => plugSearch.Length == 0 || catalog.ItemName(index).Contains(plugSearch, StringComparison.OrdinalIgnoreCase)))
-                    if (ImGui.Selectable(catalog.ItemName(index) + $"##{index}")) editValue = index.ToString(CultureInfo.InvariantCulture);
-                ImGui.EndChild();
-            }
-            if (field.Offset == ItemFields.Tier && context.Workspace.SelectedInvestmentItem is not null)
-            {
-                ImGui.SetNextItemWidth(350);
-                if (ImGui.BeginCombo("##investmentValue", byte.TryParse(editValue, out byte current) ? ItemKinds.TierName(current) : editValue))
-                {
-                    foreach (byte value in new byte[] { 0, 1, 2, 3, 4, 5, 255 })
-                        if (ImGui.Selectable(ItemKinds.TierName(value))) editValue = value.ToString(CultureInfo.InvariantCulture);
-                    ImGui.EndCombo();
-                }
-            }
-            else { ImGui.SetNextItemWidth(350); ImGui.InputText("##investmentValue", ref editValue, 64); }
-            if (curve is not null && int.TryParse(editValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out int previewValue))
+            if (curve is not null
+                && int.TryParse(popup.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int previewValue))
                 ImGui.TextDisabled(previewValue == 0 ? "Uses item-level context" : $"Display {curve.Evaluate(previewValue)}");
-            ImGui.BeginDisabled(!context.Workspace.CanEdit);
-            if (ImGui.Button("Save delta") && SaveEditDraft(context.Workspace)) ImGui.CloseCurrentPopup();
-            ImGui.EndDisabled(); ImGui.SameLine();
-            if (ImGui.Button("Cancel")) { ImGui.CloseCurrentPopup(); ClearEdit(); }
-            if (context.Workspace.Project is null) ImGui.TextDisabled("Create or open a project to edit");
-        }
-        ImGui.EndPopup();
+        });
     }
-
-    private void ClearEdit()
-    { editing = null; editingDocument = null; editingProject = null; plugChoices = null; openEditor = false; }
 
     /**
      * @param workspace Owns the selected document and project.
      * @return True after a successful save clears the draft.
      */
-    private bool SaveEditDraft(StudioWorkspace workspace)
-    {
-        if (editing is not { } field) return false;
-        workspace.Run(() => workspace.ApplyInvestmentEdit(field, editValue));
-        if (workspace.Error.Length != 0) return false;
-        ClearEdit();
-        return true;
-    }
+    private bool SaveEditDraft(StudioWorkspace workspace) => popup.Save(workspace);
 
     private static void Report(string title, IReadOnlyList<string> errors)
     {

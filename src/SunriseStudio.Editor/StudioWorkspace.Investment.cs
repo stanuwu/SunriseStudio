@@ -13,6 +13,8 @@ public sealed partial class StudioWorkspace
     private StudioDocument? investmentDocument;
     public InvestmentCatalog? Investment => ReferenceEquals(investmentSource, Catalog)
         && Catalog?.OverlayRevision == investmentOverlayRevision ? investment : null;
+    /** The last catalog read from this installation. It may lag the project overlay, which is fine for browser names and icons. */
+    public InvestmentCatalog? LoadedInvestment => ReferenceEquals(investmentSource, Catalog) ? investment : null;
     public InvestmentItemDetail? SelectedInvestmentItem { get; private set; }
     public InvestmentVendorDetail? SelectedInvestmentVendor { get; private set; }
     public InvestmentIcon? SelectedInvestmentIcon { get; private set; }
@@ -75,6 +77,24 @@ public sealed partial class StudioWorkspace
         return catalog.ContainsTag(index) ? InvestmentItemClone.ReadBankRows(catalog.Read(index)).Select(row => row.ContainerTag) : [];
     }
 
+    private StudioDocument? requestedDetailDocument;
+    private InvestmentCatalog? requestedDetailCatalog;
+
+    /**
+     * Starts the detail read of the open document once per document and catalog, for every page that shows it. Pages call it
+     * each frame. After a failed read it waits for RetryInvestmentDetail.
+     */
+    public void RequestInvestmentDetail()
+    {
+        if (InvestmentDetailCurrent || IsBusy || Investment is not { } catalog || Document is not { } wanted
+            || ReferenceEquals(requestedDetailDocument, wanted) && ReferenceEquals(requestedDetailCatalog, catalog)) return;
+        requestedDetailDocument = wanted; requestedDetailCatalog = catalog;
+        Run(LoadInvestmentDetail);
+    }
+
+    /** Lets the next RequestInvestmentDetail read the open document again. */
+    public void RetryInvestmentDetail() => requestedDetailDocument = null;
+
     /** A detail snapshot is adopted only for the document that supplied its bytes. */
     public void LoadInvestmentDetail()
     {
@@ -85,7 +105,9 @@ public sealed partial class StudioWorkspace
         {
             InvestmentItemDetail? item = null; InvestmentVendorDetail? vendor = null;
             if (data.FindItem(document.Entry.TagHash) is { } summary && summary.Tag == document.Entry.TagHash)
-                item = data.ReadItem(document.Entry.TagHash, document.Bytes);
+                item = data.ReadItem(document.Entry.TagHash, document.Bytes, OperationToken);
+            // A wrapper's pool tree comes from the root tables. Reading an item with objectives has already loaded them.
+            if (item?.Wrapper is not null) data.Tables(OperationToken);
             if (data.FindVendor(document.Entry.TagHash) is { } seller && seller.Tag == document.Entry.TagHash)
                 vendor = data.ReadVendor(document.Entry.TagHash, document.Bytes);
             InvestmentIcon? icon = null;
@@ -109,6 +131,22 @@ public sealed partial class StudioWorkspace
         }, blocking: false, keepNotice: true);
     }
 
+    /** Reads the root-slot tables in the background, like the catalog itself. Each catalog snapshot reads them once. */
+    public void LoadInvestmentTables()
+    {
+        RequireIdle();
+        var data = Investment ?? throw new InvalidOperationException("Load investment first.");
+        BeginWork("Reading reward tables", () =>
+        {
+            var tables = data.Tables(OperationToken);
+            return () =>
+            {
+                InvestmentRevision++;
+                Status = $"{tables.Pools.Count:N0} reward pools / {tables.PassCandidates.Count:N0} reward ladders";
+            };
+        }, blocking: false, keepNotice: true);
+    }
+
     private static bool IconFailure(Exception error) => error is InvalidDataException or NotSupportedException
         or ArgumentException or KeyNotFoundException or OverflowException;
 
@@ -120,6 +158,15 @@ public sealed partial class StudioWorkspace
         var document = Document ?? throw new InvalidOperationException("Choose an item or vendor.");
         byte[] edited = data.Edit(document.Entry.TagHash, document.Bytes, field, value);
         ApplyBytes(edited, "Investment delta saved");
+    }
+
+    /** Saves a table-owned field against the table's current overlay bytes. The open document stays selected. */
+    public void ApplyInvestmentTableEdit(InvestmentTableField field, string value)
+    {
+        RequireEditable();
+        var data = Investment ?? throw new InvalidOperationException("Load investment first.");
+        byte[] edited = data.EditTableField(field, Catalog!.Read(field.OwnerTag), value);
+        ApplyAssetEdits(new Dictionary<uint, byte[]> { [field.OwnerTag] = edited }, "Investment delta saved");
     }
 
     public void AddInvestmentStat(byte index, int value) => ApplyInvestmentRows((data, tag, bytes) => data.AddStat(tag, bytes, index, value));
