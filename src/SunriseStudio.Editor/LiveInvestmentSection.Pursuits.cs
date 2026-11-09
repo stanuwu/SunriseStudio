@@ -45,6 +45,9 @@ internal sealed partial class LiveInvestmentSection
     private PursuitBoardTab pursuitTab;
     // The in-game screen each tab shows, counted from zero.
     private int questScreen, bountyScreen;
+    private const string CompleteAllTitle = "Complete all bounties";
+    // The open bounties Complete all's confirmation names, or null while it is closed.
+    private LiveHeldPursuit[]? completeAllDraft;
     // The pursuit the inspector shows while the chosen held row is not a pursuit, such as one Open in Live or the chain chose.
     private uint? chosenPursuit;
     // A held copy that history asked for. With pendingFirstCopy, the next inventory snapshot chooses chosenPursuit's first copy.
@@ -206,6 +209,7 @@ internal sealed partial class LiveInvestmentSection
         {
             pursuitTab = PursuitBoardTab.Bounties;
             BoardLine(missing, bounties.Length, held, capacity, "No bounties held.");
+            DrawCompleteAll(live, catalog, bounties);
             ScreenPager("bounty-screens", ref bountyScreen, bounties.Length, BountyColumns * BountyRows);
             DrawBountyCells(context, live, catalog, tables, bounties, free);
             ImGui.EndTabItem();
@@ -274,6 +278,62 @@ internal sealed partial class LiveInvestmentSection
         if (missing is { } line) { LiveGate.Line(line); return; }
         ImGui.TextDisabled(shown == 0 ? pursuitSearch.Length != 0 ? "No matching items." : none
             : capacity > 0 ? $"{held:N0} of {capacity:N0} held" : $"{held:N0} held");
+    }
+
+    /** The held bounties the game reports with objectives still open, which Complete all asks it to complete. */
+    internal static LiveHeldPursuit[] OpenBounties(IEnumerable<HeldPursuitCard> bounties) =>
+    [
+        .. bounties.Select(card => card.Status).OfType<LiveHeldPursuit>()
+            .Where(status => status.Flags.HasFlag(LivePursuitFlags.Bounty)
+                && !status.Flags.HasFlag(LivePursuitFlags.ObjectivesComplete))
+    ];
+
+    /** Why Complete all cannot run now, or empty: the link's reason, then whether any held bounty is still open. */
+    internal string CompleteAllRefusal(IReadOnlyList<LiveHeldPursuit> open)
+    {
+        string link = LiveGate.Reason(workspace, "");
+        return link.Length != 0 ? link : open.Count == 0 ? "Every held bounty's objectives are complete." : "";
+    }
+
+    /**
+     * What Complete all's confirmation does: asks the game to complete each open bounty's objectives, one request per copy,
+     * as Complete objectives does for one. The game judges each copy and Activity shows its result.
+     * @return The requests sent.
+     */
+    internal IReadOnlyList<LiveOperation> CompleteAll(LiveInvestmentSession live, InvestmentCatalog? catalog,
+        IReadOnlyList<LiveHeldPursuit> open) =>
+        [.. open.Select(held => live.Submit(new LiveCompleteObjectives(held, HeldName(catalog, held.ItemHash))))];
+
+    /** Complete all and its confirmation, which names how many bounties it sends. */
+    private void DrawCompleteAll(LiveInvestmentSession live, InvestmentCatalog? catalog, HeldPursuitCard[] bounties)
+    {
+        var open = OpenBounties(bounties);
+        if (LiveGate.Button("Complete all", CompleteAllRefusal(open),
+            "Completes the objectives of every held bounty that is still open. Rewards are paid when you turn them in."))
+        {
+            completeAllDraft = open;
+            ImGui.OpenPopup(CompleteAllTitle);
+        }
+        if (!ImGui.BeginPopupModal(CompleteAllTitle, ImGuiWindowFlags.AlwaysAutoResize)) return;
+        if (completeAllDraft is not { } draft)
+        {
+            ImGui.CloseCurrentPopup(); ImGui.EndPopup(); return;
+        }
+        ImGui.TextUnformatted($"Complete the objectives of {InvestmentTableViews.Count(draft.Length, "bounty", "bounties")}?");
+        string refusal = CompleteAllRefusal(draft);
+        if (LiveGate.Button("Complete", refusal, ""))
+        {
+            CompleteAll(live, catalog, draft);
+            completeAllDraft = null;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel"))
+        {
+            completeAllDraft = null;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.EndPopup();
     }
 
     /** The in-game screens a tab's entries fill; with nothing held there is still one. */
