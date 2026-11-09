@@ -43,6 +43,8 @@ internal sealed partial class LiveInvestmentSection
     private PursuitBoardTab? pursuitTabRequest;
     // The board tab last drawn, which the subtab's row records.
     private PursuitBoardTab pursuitTab;
+    // The in-game screen each tab shows, counted from zero.
+    private int questScreen, bountyScreen;
     // The pursuit the inspector shows while the chosen held row is not a pursuit, such as one Open in Live or the chain chose.
     private uint? chosenPursuit;
     // A held copy that history asked for. With pendingFirstCopy, the next inventory snapshot chooses chosenPursuit's first copy.
@@ -179,6 +181,8 @@ internal sealed partial class LiveInvestmentSection
             && quests.Concat(bounties).FirstOrDefault(card => card.Row.SameRow(chosen)) is { } shown)
         {
             pursuitTabRequest = shown.Bounty ? PursuitBoardTab.Bounties : PursuitBoardTab.Quests;
+            if (shown.Bounty) bountyScreen = Array.IndexOf(bounties, shown) / (BountyColumns * BountyRows);
+            else questScreen = Array.IndexOf(quests, shown) / (QuestColumns * QuestRows);
             revealPursuit = false;
         }
         int capacity = tables.Bucket(InvestmentPursuits.PursuitBucket) is { SlotCount: > 0 } bucket ? Math.Min(bucket.SlotCount,
@@ -194,6 +198,7 @@ internal sealed partial class LiveInvestmentSection
         {
             pursuitTab = PursuitBoardTab.Quests;
             BoardLine(missing, quests.Length, held, capacity, "No quests held.");
+            ScreenPager("quest-screens", ref questScreen, quests.Length, QuestColumns * QuestRows);
             DrawQuestCards(context, live, catalog, tables, quests, free);
             ImGui.EndTabItem();
         }
@@ -201,6 +206,7 @@ internal sealed partial class LiveInvestmentSection
         {
             pursuitTab = PursuitBoardTab.Bounties;
             BoardLine(missing, bounties.Length, held, capacity, "No bounties held.");
+            ScreenPager("bounty-screens", ref bountyScreen, bounties.Length, BountyColumns * BountyRows);
             DrawBountyCells(context, live, catalog, tables, bounties, free);
             ImGui.EndTabItem();
         }
@@ -270,16 +276,43 @@ internal sealed partial class LiveInvestmentSection
             : capacity > 0 ? $"{held:N0} of {capacity:N0} held" : $"{held:N0} held");
     }
 
+    /** The in-game screens a tab's entries fill; with nothing held there is still one. */
+    private static int Screens(int held, int perScreen) => Math.Max(1, (held + perScreen - 1) / perScreen);
+
     /**
-     * Draws quest cards two across like the in-game screen. Empty slots follow to the end of the ten-card screen the last
-     * card falls on, as far as the bucket has room. Only visible card rows are drawn.
+     * Steps between a tab's in-game screens and shows the range the current one holds, as the game's "1-28 / 31" does.
+     * Keeps the screen in range when entries leave. Nothing is drawn while one screen holds everything.
      */
-    private unsafe void DrawQuestCards(LiveSectionContext context, LiveInvestmentSession live,
+    private static void ScreenPager(string id, ref int screen, int held, int perScreen)
+    {
+        int screens = Screens(held, perScreen);
+        screen = Math.Clamp(screen, 0, screens - 1);
+        if (screens == 1) return;
+        ImGui.PushID(id);
+        ImGui.BeginDisabled(screen == 0);
+        if (ImGui.SmallButton("<")) screen--;
+        ImGui.EndDisabled();
+        ImGui.SameLine();
+        int first = screen * perScreen;
+        ImGui.TextDisabled($"{first + 1:N0}-{Math.Min(held, first + perScreen):N0} / {held:N0}");
+        ImGui.SameLine();
+        ImGui.BeginDisabled(screen == screens - 1);
+        if (ImGui.SmallButton(">")) screen++;
+        ImGui.EndDisabled();
+        ImGui.PopID();
+    }
+
+    /**
+     * Draws the current in-game screen of quest cards, two across and five down. On the last screen, empty slots follow the
+     * last card as far as the bucket has room.
+     */
+    private void DrawQuestCards(LiveSectionContext context, LiveInvestmentSession live,
         InvestmentCatalog? catalog, InvestmentTables? tables,
         HeldPursuitCard[] cards, int free)
     {
         int count = cards.Length;
-        int slots = ScreenSlots(count, free, QuestColumns * QuestRows);
+        int perScreen = QuestColumns * QuestRows, first = questScreen * perScreen;
+        int slots = Math.Min(perScreen, ScreenSlots(count, free, perScreen) - first);
         ImGui.BeginChild("pursuit-quests", Vector2.Zero, ImGuiChildFlags.None);
         var style = ImGui.GetStyle();
         float width = ImGui.GetContentRegionAvail().X;
@@ -289,35 +322,29 @@ internal sealed partial class LiveInvestmentSection
         var top = ImGui.GetCursorPos();
         var draw = ImGui.GetWindowDrawList();
         uint empty = ImGui.GetColorU32(ImGuiCol.FrameBg);
-        int rows = (slots + QuestColumns - 1) / QuestColumns;
-        var clipper = new ImGuiListClipperPtr(ImGuiNative.ImGuiListClipper_ImGuiListClipper());
-        clipper.Begin(rows, size.Y + spacing.Y);
-        while (clipper.Step())
-            for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
-                for (int index = row * QuestColumns; index < Math.Min(slots, (row + 1) * QuestColumns); index++)
-                {
-                    ImGui.SetCursorPos(top + IconGrid.CellOrigin(index, QuestColumns, size, spacing));
-                    var start = ImGui.GetCursorScreenPos();
-                    if (index >= count)
-                    {
-                        ImGui.Dummy(size);
-                        draw.AddRectFilled(start, start + size, empty, style.FrameRounding);
-                        continue;
-                    }
-                    ImGui.PushID(index);
-                    var card = cards[index];
-                    bool chosen = live.Selected?.SameRow(card.Row) == true;
-                    if (ImGui.Selectable("##card", chosen, ImGuiSelectableFlags.None, size)) ChooseHeldPursuit(card.Row);
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(card.Tip);
-                    if (ImGui.BeginPopupContextItem("quest-context"))
-                    {
-                        DrawHeldContext(context, live, card.Item, card.Row, PursuitPageOf(tables, card.Item));
-                        ImGui.EndPopup();
-                    }
-                    DrawQuestCard(draw, catalog, card, start, size, chosen);
-                    ImGui.PopID();
-                }
-        clipper.End(); clipper.Destroy();
+        for (int index = 0; index < slots; index++)
+        {
+            ImGui.SetCursorPos(top + IconGrid.CellOrigin(index, QuestColumns, size, spacing));
+            var start = ImGui.GetCursorScreenPos();
+            if (first + index >= count)
+            {
+                ImGui.Dummy(size);
+                draw.AddRectFilled(start, start + size, empty, style.FrameRounding);
+                continue;
+            }
+            ImGui.PushID(index);
+            var card = cards[first + index];
+            bool chosen = live.Selected?.SameRow(card.Row) == true;
+            if (ImGui.Selectable("##card", chosen, ImGuiSelectableFlags.None, size)) ChooseHeldPursuit(card.Row);
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(card.Tip);
+            if (ImGui.BeginPopupContextItem("quest-context"))
+            {
+                DrawHeldContext(context, live, card.Item, card.Row, PursuitPageOf(tables, card.Item));
+                ImGui.EndPopup();
+            }
+            DrawQuestCard(draw, catalog, card, start, size, chosen);
+            ImGui.PopID();
+        }
         ImGui.EndChild();
     }
 
@@ -367,22 +394,24 @@ internal sealed partial class LiveInvestmentSection
     }
 
     /**
-     * The number of slots to draw: the held entries, then free slots to the end of the in-game screen the last entry falls
-     * on, as far as the bucket has room. With nothing held, that is one screen.
+     * The slots a tab's screens hold together: the held entries, then free slots to the end of the in-game screen the last
+     * entry falls on, as far as the bucket has room. With nothing held, that is one screen.
      */
     private static int ScreenSlots(int held, int free, int perScreen) =>
         Math.Min(held + free, Math.Max(1, (held + perScreen - 1) / perScreen) * perScreen);
 
     /**
-     * Draws bounties as square icon cells with progress and completion, four across and seven down like the in-game screen,
-     * then empty cells to the end of that screen. One screen fits the board without scrolling, and names show in tooltips.
+     * Draws the current in-game screen of bounties as square icon cells with progress and completion, four across and seven
+     * down. On the last screen, empty cells follow the last bounty as far as the bucket has room. Names show in tooltips.
      */
     private void DrawBountyCells(LiveSectionContext context, LiveInvestmentSession live,
         InvestmentCatalog? catalog, InvestmentTables? tables,
         HeldPursuitCard[] cards, int free)
     {
-        IconCell Cell(int index)
+        int perScreen = BountyColumns * BountyRows, first = bountyScreen * perScreen;
+        IconCell Cell(int slot)
         {
+            int index = first + slot;
             if (index >= cards.Length) return new("", 0, "", null, true, StudioIcon.Cube, "", 0, IconGrid.NoProgress,
                 false, false, false, false, false);
             var card = cards[index];
@@ -390,12 +419,17 @@ internal sealed partial class LiveInvestmentSection
                 catalog is null || card.Item is null ? null : icons.Get(catalog, card.Item.Index), true, StudioIcon.Cube,
                 "", 0, card.Progress, card.Unknown, false, card.Complete, live.Selected?.SameRow(card.Row) == true, false);
         }
-        int chosen = IconGrid.DrawScreen("pursuit-bounties",
-            ScreenSlots(cards.Length, free, BountyColumns * BountyRows), BountyColumns,
-            BountyRows, Cell, scale, out int hovered, out int opened);
-        if (hovered >= 0 && hovered < cards.Length) ImGui.SetTooltip(cards[hovered].Tip);
-        if (chosen >= 0 && chosen < cards.Length) ChooseHeldPursuit(cards[chosen].Row);
-        if (opened >= 0 && opened < cards.Length) { pursuitContext = cards[opened]; ImGui.OpenPopup("bounty-context"); }
+        int slots = Math.Min(perScreen, ScreenSlots(cards.Length, free, perScreen) - first);
+        int chosen = IconGrid.DrawScreen("pursuit-bounties", slots, BountyColumns, BountyRows, Cell, scale,
+            out int hovered, out int opened);
+        // The grid reports slots on this screen; the cards are counted across every screen.
+        if (hovered >= 0 && first + hovered < cards.Length) ImGui.SetTooltip(cards[first + hovered].Tip);
+        if (chosen >= 0 && first + chosen < cards.Length) ChooseHeldPursuit(cards[first + chosen].Row);
+        if (opened >= 0 && first + opened < cards.Length)
+        {
+            pursuitContext = cards[first + opened];
+            ImGui.OpenPopup("bounty-context");
+        }
         if (pursuitContext is { } menu && ImGui.BeginPopup("bounty-context"))
         {
             DrawHeldContext(context, live, menu.Item, menu.Row, PursuitPageOf(tables, menu.Item));
