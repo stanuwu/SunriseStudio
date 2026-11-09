@@ -572,7 +572,7 @@ public static class LiveInvestmentProtocol
         "instance_capacity" => "No room in the inventory.",
         "profile_change_capacity" or "character_change_capacity" => "Too many inventory changes for one update.",
         "no_room" => "Its bucket is full and it has nowhere to overflow, so the game would drop it.",
-        "expiry_not_saved" => "This server does not save when a bounty expires.",
+        "expired" => "This bounty has expired.",
         "pursuit_contract" => "The game cannot read this pursuit's objectives.",
         "objective_source" => "This objective's progress is not one saved value.",
         "objective_value" => "A flag is set or clear.",

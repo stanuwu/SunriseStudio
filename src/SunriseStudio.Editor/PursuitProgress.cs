@@ -21,10 +21,11 @@ internal static class PursuitProgress
     public const string NotHeld = "This step is not held.";
     /** The game has no installed contract for the held pursuit, or cannot read it (pursuit_contract). */
     public static readonly string NoContract = LiveInvestmentProtocol.Describe("pursuit_contract");
-    /** Why the game refuses every bounty although its objectives may be saved rows (expiry_not_saved). */
-    public static readonly string BountyNotSaved = LiveInvestmentProtocol.Describe("expiry_not_saved");
     public const string Differs = "The game's objectives differ from this item's. Install this change and restart the game first.";
-    /** The game sets only an objective whose program is one saved flag or value row (objective_source). */
+    /**
+     * The game sets only an objective kept in one of the held copy's own values, or whose program is one saved flag or
+     * value row (objective_source).
+     */
     public static readonly string NotSavedValue = LiveInvestmentProtocol.Describe("objective_source");
     public const string ClassFlag = "Set by the character's class; not saved data.";
     /** The game reports no value for an objective it cannot evaluate, so there is no current value to compare. */
@@ -32,6 +33,8 @@ internal static class PursuitProgress
     /** The game reports a skipped objective's value as 0 without reading its row, so there is no current value to compare. */
     public const string Skipped = "The game skips this optional objective; its saved value is not read.";
     public static readonly string AllComplete = LiveInvestmentProtocol.Describe("objectives_complete");
+    /** The held copy's value that holds a bounty's deadline (Sunrise state/account/inventory/item_state.h kItemExpiryLane). */
+    private const int BountyDeadlineLane = 0;
 
     /** True when this server can set the objective at all, so Set progress is drawn. */
     public static bool CanSet(InvestmentTables tables, InvestmentPursuit pursuit, int ordinal, LiveHeldPursuit? held) =>
@@ -51,15 +54,10 @@ internal static class PursuitProgress
     {
         if (HeldRefusal(held, link) is { Text.Length: > 0 } refusal) return refusal;
         if (!SameObjective(tables, pursuit, ordinal, held!)) return new(Differs);
-        var source = tables.ProgressSource(tables.Objectives[pursuit.Objectives[ordinal]]);
-        return source.Kind switch
-        {
-            InvestmentProgressKind.Unreadable or InvestmentProgressKind.External or InvestmentProgressKind.Several
-                or InvestmentProgressKind.Other => new(NotSavedValue, Never: true),
-            InvestmentProgressKind.ClassFlag => new(ClassFlag, Never: true),
-            _ => new(!held!.Objectives[ordinal].Flags.HasFlag(LivePursuitObjectiveFlags.Known) ? Unreadable
-                : held.Objectives[ordinal].Flags.HasFlag(LivePursuitObjectiveFlags.Skipped) ? Skipped : "")
-        };
+        if (SourceRefusal(tables, pursuit, tables.Objectives[pursuit.Objectives[ordinal]]) is { } never) return never;
+        var flags = held!.Objectives[ordinal].Flags;
+        return new(!flags.HasFlag(LivePursuitObjectiveFlags.Known) ? Unreadable
+            : flags.HasFlag(LivePursuitObjectiveFlags.Skipped) ? Skipped : "");
     }
 
     /**
@@ -83,10 +81,9 @@ internal static class PursuitProgress
             var progress = held.Objectives[ordinal];
             // Optional objectives, skipped ones included, never gate completion.
             if (objective.Optional || progress.Flags.HasFlag(LivePursuitObjectiveFlags.Skipped)) continue;
-            var kind = tables.ProgressSource(objective).Kind;
             if (!progress.Flags.HasFlag(LivePursuitObjectiveFlags.Known)) return new($"The game cannot read objective {number}.");
             if (progress.Flags.HasFlag(LivePursuitObjectiveFlags.Complete) || writes) continue;
-            if (kind is not (InvestmentProgressKind.Flag or InvestmentProgressKind.Value))
+            if (SourceRefusal(tables, pursuit, objective) is not null)
                 return new($"Objective {number} is not a saved value.", Never: true);
             writes = true;
         }
@@ -94,14 +91,34 @@ internal static class PursuitProgress
     }
 
     /**
-     * The refusals both operations share, in the order read_held_pursuit gives them: the link, the held copy, its contract,
-     * then the bounty. Without a readable contract the game reports no objectives and does not know them
-     * (studio_investment_payloads.cpp held_pursuit); a contract with no objectives reads as known.
+     * The refusals both operations share, in the order read_held_pursuit gives them: the link, the held copy, then its
+     * contract. Without a readable contract the game reports no objectives and does not know them
+     * (studio_investment_payloads.cpp held_pursuit); a contract with no objectives reads as known. Studio does not read a
+     * bounty's deadline, so the game's expired refusal is left to the game.
      */
     private static ProgressRefusal HeldRefusal(LiveHeldPursuit? held, string link) =>
         link.Length != 0 ? new(link) : held is null ? new(NotHeld, Never: true)
             : held.Objectives.Count == 0 && !held.Flags.HasFlag(LivePursuitFlags.ObjectivesKnown) ? new(NoContract, Never: true)
-            : held.Flags.HasFlag(LivePursuitFlags.Bounty) ? new(BountyNotSaved, Never: true) : new("");
+            : new("");
+
+    /**
+     * Why the game can never write this objective's progress, or null when it can (pursuit_edit.cpp progress_row): progress
+     * kept in one of the held copy's own values other than a bounty's deadline, or one saved flag or value row. A positive
+     * lifetime makes the pursuit a bounty, as in Sunrise's contract.
+     */
+    private static ProgressRefusal? SourceRefusal(InvestmentTables tables, InvestmentPursuit pursuit,
+        InvestmentObjective objective)
+    {
+        int lane = tables.ProgressLane(objective, pursuit);
+        if (lane >= 0)
+            return lane == BountyDeadlineLane && pursuit.LifetimeSeconds > 0 ? new(NotSavedValue, Never: true) : null;
+        return tables.ProgressSource(objective).Kind switch
+        {
+            InvestmentProgressKind.Flag or InvestmentProgressKind.Value => null,
+            InvestmentProgressKind.ClassFlag => new(ClassFlag, Never: true),
+            _ => new(NotSavedValue, Never: true)
+        };
+    }
 
     /** True when the game's objective at this position is the one Studio reads there. */
     private static bool SameObjective(InvestmentTables tables, InvestmentPursuit pursuit, int ordinal, LiveHeldPursuit held) =>

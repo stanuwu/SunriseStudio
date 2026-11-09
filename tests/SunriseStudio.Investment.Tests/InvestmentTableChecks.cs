@@ -239,8 +239,8 @@ internal static class InvestmentTableChecks
         bool Waits(ProgressRefusal refusal, string text) => refusal == new ProgressRefusal(text, false);
         Check(Waits(Set(1, all, LiveGate.AttachSentence), LiveGate.AttachSentence) && Never(Set(1, null), PursuitProgress.NotHeld)
             && Never(Set(1, Held(LivePursuitFlags.None)), PursuitProgress.NoContract)
-            && Never(Set(1, all with { Flags = LivePursuitFlags.Bounty }), PursuitProgress.BountyNotSaved),
-            "Set progress did not refuse the link for now, then a missing copy, a contract the game cannot read and a bounty for good.");
+            && Waits(Set(1, all with { Flags = LivePursuitFlags.Bounty }), ""),
+            "Set progress did not refuse the link for now, then a missing copy and a contract the game cannot read for good, or refused a bounty.");
         Check(Waits(Set(7, all), PursuitProgress.Differs)
             && Waits(Set(1, all with { Objectives = [Row(0, known), Row(2, known)] }), PursuitProgress.Differs),
             "Set progress allowed an objective the game does not report at that position, or hid it for good.");
