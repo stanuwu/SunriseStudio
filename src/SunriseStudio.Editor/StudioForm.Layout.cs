@@ -18,7 +18,11 @@ public sealed partial class StudioForm
     /** The panel each area showed last frame, so a tab switch restarts the content fade. */
     private readonly Dictionary<int, StudioPanelKind> shownAreaPanels = [];
 
-    // UE5 layout: Reset layout uses the default preset (Solforge (UE5)); Window > Layouts keeps every older one.
+    /** Panels offered in editor UI and UI automation; the MCP-only edition omits its retired assistant workspace. */
+    private static IEnumerable<StudioPanelKind> VisiblePanelChoices => StudioLayout.Pickable
+        .Where(kind => kind != StudioPanelKind.Empty && (!McpOnlyUi || kind != StudioPanelKind.AI));
+
+    // UE5 layout: Reset layout uses the default preset (Solforge (UE5)); View > Layouts keeps every older one.
     public void ResetLayout() => ApplyLayoutPreset(StudioLayout.DefaultPreset);
 
     /**
@@ -69,6 +73,18 @@ public sealed partial class StudioForm
     private void DrawLayout(Vector2 position, Vector2 size)
     {
         UseProjectLayout();
+        if (McpOnlyUi)
+        {
+            if (IsPoppedOut(StudioPanelKind.AI)) ClosePopout(StudioPanelKind.AI);
+            if (layout.Find(StudioPanelKind.AI) is { } aiPanel)
+            {
+                if (aiPanel.Members.Count > 1) layout.CloseTab(aiPanel.Id, StudioPanelKind.AI);
+                else if (aiPanel == layout.Root) layout.SetPanel(aiPanel.Id, StudioPanelKind.Empty);
+                else layout.Remove(StudioPanelKind.AI);
+                maximizedPanel = null;
+                layoutDirty = true;
+            }
+        }
         if (!workspace.IsBusy && workspace.World is null)
         { focusWorldScene = focusMissionPage = false; }
         // A focus request shows a popped-out editor's window instead of docking a second copy.
@@ -185,6 +201,7 @@ public sealed partial class StudioForm
 
     private void DrawLayoutPanel(StudioLayoutNode node, Vector2 position, Vector2 size)
     {
+        areaFrames.Add((position, position + size));
         if (IsFolded(node) && maximizedPanel != node.Id) { DrawFoldedPanel(node, position, size); return; }
         float header = Math.Min(size.Y, AreaHeaderHeight);
         DrawAreaHeader(node, position, size, header);
@@ -260,7 +277,7 @@ public sealed partial class StudioForm
         if (area <= 0) return;
         ImGui.SetCursorPos(new(SolTheme.Space5, SolTheme.Space5));
         ImGui.TextDisabled("Choose an editor for this area, or drag a tab here.");
-        foreach (var kind in StudioLayout.Pickable.Where(kind => kind != StudioPanelKind.Empty))
+        foreach (var kind in VisiblePanelChoices)
         {
             ImGui.SetCursorPosX(SolTheme.Space5);
             if (UiAuto.Selectable(DisplayTitle(kind) + "##empty-" + kind, false, ImGuiSelectableFlags.None, new(220 * scale, 0)))
@@ -272,7 +289,8 @@ public sealed partial class StudioForm
     {
         if (UiAuto.BeginMenu("Panels"))
         {
-            foreach (var kind in StudioLayout.Pickable.Where(kind => kind != StudioPanelKind.Empty))
+            SolTheme.PopupShadow();
+            foreach (var kind in VisiblePanelChoices)
                 if (UiAuto.MenuItem(DisplayTitle(kind), "", layout.Find(kind) is not null || IsPoppedOut(kind))
                     && !ShowPopout(kind, true))
                 {
@@ -337,6 +355,34 @@ public sealed partial class StudioForm
     };
 
     private float FoldStrip(bool columns) => ImGui.GetFrameHeight() + (columns ? 10 : 8) * scale;
+
+    /** The areas drawn this frame (header top to body bottom), framed by DrawAreaFrames. */
+    private readonly List<(Vector2 Min, Vector2 Max)> areaFrames = [];
+
+    /**
+     * The mockup's framed panels: one input-less overlay window over the tiled areas paints each area's chamfered corners
+     * in the page background and its 1 px Line frame. The areas send themselves to the back every frame
+     * (SolTheme.SendToBack), so this overlay stays above them and below floating windows, popups, dialogs and toasts.
+     */
+    private void DrawAreaFrames()
+    {
+        if (areaFrames.Count == 0) return;
+        const ImGuiWindowFlags flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoInputs | ImGuiWindowFlags.NoBackground
+            | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav
+            | ImGuiWindowFlags.NoBringToFrontOnFocus | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize;
+        ImGui.SetNextWindowPos(Vector2.Zero);
+        ImGui.SetNextWindowSize(new(ClientSize.Width, ClientSize.Height));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        if (ImGui.Begin("##area-frames", flags))
+        {
+            var draw = ImGui.GetWindowDrawList();
+            draw.PushClipRectFullScreen();
+            foreach (var (min, max) in areaFrames) SolTheme.PanelFrame(draw, min, max);
+            draw.PopClipRect();
+        }
+        ImGui.End();
+        ImGui.PopStyleVar();
+    }
 
     /** The strip: an expand button and the area's panel names; clicking anywhere on it opens the area. */
     private void DrawFoldedPanel(StudioLayoutNode node, Vector2 position, Vector2 size)

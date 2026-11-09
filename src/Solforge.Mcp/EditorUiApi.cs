@@ -11,7 +11,8 @@
  *    packaged Solforge AI.exe has the Electron RunAsNode fuse off (ai/package-desktop.ps1 step 1c), so a process with that
  *    image is the Electron browser process, not a Node-mode script.
  * The editor (IEditorUiHost) runs every state change on its UI thread. Approvals stay a user decision: this channel never
- * auto-approves; the editor's own AutoApproveRequests rule is unchanged and never applies to worker sessions.
+ * auto-approves; the editor's user-controlled AutoApproveRequests preference covers permitted actions and project edits,
+ * including worker sessions. The channel cannot turn that preference on.
  */
 using System.Diagnostics;
 using System.Net;
@@ -72,7 +73,7 @@ public sealed partial class EditorUiApi : IDisposable
     private static readonly TimeSpan PairCooldown = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PairWait = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(15);
-    private static readonly string[] RefusedHeaders = ["mcp-session-id", McpSessionRegistry.PidHeader, McpSessionRegistry.WorkerHeader];
+    private static readonly string[] RefusedHeaders = ["mcp-session-id", McpSessionRegistry.PidHeader, McpSessionRegistry.WorkerHeader, McpSessionRegistry.ReadOnlyWorkerHeader];
 
     private readonly IEditorUiHost host;
     private readonly object sync = new();

@@ -80,7 +80,7 @@ public sealed partial class InvestmentCatalog
         Write64(nextBlock + field + 8, count == 0 ? 0 : header - nextBlock - field - 8);
         if (count > 0)
         {
-            Write32(header - 4, 0x80809FBD); Write64(header, count); Write64(header + 8, rowClass);
+            TagArrayRelocation.WriteHeader(output, header, count, rowClass);
             int target = start;
             for (int i = 0; i < rows.Count; i++)
             {
@@ -101,11 +101,7 @@ public sealed partial class InvestmentCatalog
             data.Array(source, 0x80807D31, 8);
             Rebase(source + 8, target + 8);
         }
-        void Rebase(int source, int target)
-        {
-            int address = data.Relative(source);
-            Write64(target, address < 0 ? 0 : address - target);
-        }
+        void Rebase(int source, int target) => TagArrayRelocation.Rebase(data, output, source, target);
         void Write64(int at, long value) => BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(at), value);
         void Write32(int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(at), value);
     }

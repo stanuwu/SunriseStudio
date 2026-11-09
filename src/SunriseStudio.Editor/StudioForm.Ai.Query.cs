@@ -59,7 +59,7 @@ public sealed partial class StudioForm
                 "search_items" or "get_item" or "search_perks" or "list_vendors" or "get_vendor" => await AiInvestmentAsync(tool, args, cancel),
                 "list_shaders" or "get_shader" or "list_animations" or "get_animation" or "list_audio" or "get_audio" => await AiAssetAsync(tool, args, cancel),
                 "list_creation_types" => AiCreationTypes(McpJson.String(args, "filter")),
-                "compare_with_base" or "get_item_sources" => await AiItemSourceQueryAsync(tool, args, cancel),
+                "compare_with_base" or "get_item_sources" or "check_item_perk_displays" => await AiItemSourceQueryAsync(tool, args, cancel),
                 "get_perk_behavior" or "list_perk_node_types" => await AiPerkQueryAsync(tool, args, cancel),
                 "get_help" => await OnUi(() => AiHelp(args)).WaitAsync(cancel),
                 "list_commands" => await OnUi(AiCommandStates).WaitAsync(cancel),
@@ -166,7 +166,9 @@ public sealed partial class StudioForm
         ["fpsFocused"] = settings.FpsFocused, ["fpsBackground"] = settings.FpsBackground, ["uiScale"] = Math.Round(settings.UiScale, 2),
         ["memory"] = AiMemory(),
         ["aiEngine"] = AiEngines[aiEngine].Name, ["autoApproveRequests"] = settings.AutoApproveRequests, ["mcp"] = settings.AiMcpEnabled,
-        ["aiFolders"] = new JsonArray(settings.AiFolders.Select(folder => (JsonNode)folder).ToArray())
+        ["aiFolders"] = new JsonArray(settings.AiFolders.Select(folder => (JsonNode)folder).ToArray()),
+        ["aiReadFolders"] = new JsonArray((aiHost?.AllowedReadFolders ?? []).Select(folder => (JsonNode)folder).ToArray()),
+        ["aiFoldersIncludeSubfolders"] = true
     };
 
     /** Where RAM goes, in MiB: process, managed heap, and the caches that only speed up reloads. */
@@ -607,11 +609,16 @@ public sealed partial class StudioForm
                 return workspace.Error.Length > 0 ? workspace.Error : "Reverted.";
             }
             case "apply_item_edit": return AiApplyItemEdit(args);
+            case "edit_perk_behavior" or "create_perk" or "clone_tags" or "fork_subclass_grid" or "set_display_icons" or "set_item_screen_art"
+                or "add_icon_row" or "set_icon_container_fingerprint" or "set_subclass_element" or "add_list_presentation_rows"
+                or "add_talent_display_rows" or "set_icon_layer_texture" or "set_item_lore" or "fork_list_text_bank"
+                or "set_talent_display_record":
+                return AiPerkAction(tool, args);
             case "apply_graph": return AiApplyGraph(args);
             case "create_mission_script": return AiCreateMissionScript(args);
-            case "edit_perk_behavior" or "create_perk" or "clone_tags": return AiPerkAction(tool, args);
             case "apply_vendor_edit": return AiApplyVendorEdit(args);
             case "revert_to_base": return AiRevertToBase(args);
+            case "repair_item_perk_displays": return AiRepairPerkDisplays(args);
             case "retail_open_map": return AiRetailOpenMap(args);
             case "start_creation": return AiStartCreation(args);
             case "start_parhelion_weapon_recipe": return AiStartParhelionWeaponRecipe(args);

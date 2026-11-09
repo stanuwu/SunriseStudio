@@ -240,6 +240,14 @@ public sealed partial class StudioForm
         return EngineLaunch.AddDirs(folder, folders, ancestors: false);
     }
 
+    /** Replace the read grant snapshot on the UI thread; MCP reads never enumerate mutable settings lists. */
+    private void RefreshAiReadFolders()
+    {
+        if (aiHost is null) return;
+        aiHost.AllowedReadFolders = workspace.Project?.DirectoryPath is { } project ? AiAddDirs(project)
+            : settings.AiFolders.Where(Directory.Exists).Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
     /**
      * Folders Solforge has open outside the project: the game install, the open script's and the last export's
      * folders, and each ancestor of the project holding a .claude folder or CLAUDE.md.
@@ -328,6 +336,7 @@ public sealed partial class StudioForm
         StartAiForProject();
         if (aiHost is null || now < aiNextPublish) return;
         aiNextPublish = now + .25;
+        RefreshAiReadFolders();
         aiHost.ContextJson = aiPaused ? "{\"paused\":true}" : BuildAiContext().ToJsonString(McpJson.Indented);
         aiHost.CurrentMap = workspace.World?.Map.Name;
         if (now >= aiHost.NextVisible) { aiHost.NextVisible = now + 1; aiHost.Visible = aiPaused ? [] : BuildAiVisible(); }
@@ -352,6 +361,8 @@ public sealed partial class StudioForm
         var context = new JsonObject
         {
             ["project"] = workspace.Project?.DirectoryPath,
+            ["aiReadFolders"] = new JsonArray((aiHost?.AllowedReadFolders ?? []).Select(folder => (JsonNode)folder).ToArray()),
+            ["aiFoldersIncludeSubfolders"] = true,
             ["map"] = workspace.World?.Map.Name,
             ["mission"] = workspace.World?.MissionTag is { } mission ? $"0x{mission:X8}" : null,
             // Hook H9 (b): the credential file is never named or read into the context.
@@ -925,6 +936,8 @@ public sealed partial class StudioForm
         public string? ProjectRoot => form.workspace.Project?.DirectoryPath;
         public IReadOnlyList<string> SdkRoots => ProjectRoot is { } root
             ? new[] { Path.Combine(root, "sdk"), Path.Combine(root, "docs") }.Where(Directory.Exists).ToArray() : [];
+        private volatile IReadOnlyList<string> readFolders = [];
+        public IReadOnlyList<string> AllowedReadFolders { get => readFolders; set => readFolders = value; }
         /** ISolforgeHost: Settings > Paths server mission scripts folder, read live so set_settings applies at once. */
         public string? ServerScriptsRoot => form.settings.ScriptsPath is { Length: > 0 } scripts && Directory.Exists(scripts) ? scripts : null;
         public AttentionLog Attention => form.aiAttention;
@@ -980,15 +993,16 @@ public sealed partial class StudioForm
         /**
          * ISolforgeHost: asks the user to approve an action; false when declined. The request never opens a window or
          * takes focus (hook H9 a): it raises the toolbar badge and the approval toast, and docks the AI panel as a tab
-         * when the layout has none. A model-workflow worker session is never auto-approved.
+         * when the layout has none. Enabled auto-approval covers permitted worker actions too; worker tool restrictions
+         * and validation still run before the approval gate.
          */
         public async Task<bool> ApproveAsync(string tool, string summary, CancellationToken cancel)
         {
             bool worker = McpSessionRegistry.Current?.IsWorker == true;
             var session = McpSessionRegistry.Current;
-            // Unchanged rule (SOLFORGE-AI-APP-SPEC §6.3): only the editor's AutoApproveRequests setting auto-approves, never
-            // for a worker session; Solforge AI only shows the request and relays the user's answer.
-            var gate = new ApprovalGate(() => form.settings.AutoApproveRequests && !worker, (t, s) =>
+            cancel.ThrowIfCancellationRequested();
+            // Only the user's editor preference enables automatic approval; clients cannot change it through MCP.
+            var gate = new ApprovalGate(() => form.settings.AutoApproveRequests, (t, s) =>
                 form.RecordAiRequest(t, s, AiRequestOutcome.Auto, session?.Label));
             return await gate.AskAsync(tool, summary, async () =>
             {
@@ -1025,12 +1039,12 @@ public sealed partial class StudioForm
                     lock (form.aiRequests) form.aiRequests.Remove(request);
                     form.NoteAiAnswered(request.Id, EditorRequestKinds.Action, outcome, reason);
                 }
-            }).ConfigureAwait(false);
+            }, cancel).ConfigureAwait(false);
         }
 
         /** ISolforgeHost: runs an editor action tool. */
         public Task<string> RunActionAsync(string tool, JsonObject args, CancellationToken cancel) =>
-            form.OnUi(() => form.RunAiAction(tool, args)).WaitAsync(cancel);
+            form.OnUi(() => { cancel.ThrowIfCancellationRequested(); return form.RunAiAction(tool, args); }).WaitAsync(cancel);
 
         /** ISolforgeHost: runs a project query tool (see StudioForm.Ai.Query.cs). */
         public Task<JsonObject> QueryAsync(string tool, JsonObject args, CancellationToken cancel) =>

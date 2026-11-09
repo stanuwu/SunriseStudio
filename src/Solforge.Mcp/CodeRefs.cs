@@ -118,7 +118,9 @@ public static class CodeRefs
     {
         var roots = new List<CodeRoot>();
         string[] sdkTails = [@"bin\x64\Sunrise\sdk\lua\missions", @"Sunrise\sdk\lua\missions", @"sdk\lua\missions"];
-        string[] serverTails = [@"02-server\solserver\solserverbase\Destiny-Sol-main\mission-scripts", @"solserverbase\Destiny-Sol-main\mission-scripts",
+        string[] serverTails = [@"02-server\solserver\solserverbase\Destiny-Sol\02-server\mission-scripts",
+            @"solserverbase\Destiny-Sol\02-server\mission-scripts", @"Destiny-Sol\02-server\mission-scripts", @"02-server\mission-scripts",
+            @"02-server\solserver\solserverbase\Destiny-Sol-main\mission-scripts", @"solserverbase\Destiny-Sol-main\mission-scripts",
             @"Destiny-Sol-main\mission-scripts", @"Destiny-Sol\mission-scripts", "mission-scripts"];
         var bases = new List<string>();
         foreach (string? start in new[] { gameRoot, projectRoot }.Concat(folders))

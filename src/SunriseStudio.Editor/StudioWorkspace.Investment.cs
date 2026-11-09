@@ -128,9 +128,14 @@ public sealed partial class StudioWorkspace
     /** Removes a stat row of the selected item. */
     public void RemoveInvestmentStat(InvestmentStat stat) => ApplyInvestmentRows((data, tag, bytes) => data.RemoveStat(tag, bytes, stat));
     /** Adds a perk row to the selected item. */
-    public void AddInvestmentPerk(ushort index) => ApplyInvestmentRows((data, tag, bytes) => data.AddPerk(tag, bytes, index));
+    public void AddInvestmentPerk(ushort index) =>
+        ApplyInvestmentPerk((data, tag, bytes) => (data.AddPerk(tag, bytes, index), null));
     /** Removes a perk row of the selected item. */
-    public void RemoveInvestmentPerk(InvestmentPerk perk) => ApplyInvestmentRows((data, tag, bytes) => data.RemovePerk(tag, bytes, perk));
+    public void RemoveInvestmentPerk(InvestmentPerk perk) => ApplyInvestmentPerk((data, tag, bytes) =>
+    {
+        int position = data.ReadItem(tag, bytes).Perks.ToList().IndexOf(perk);
+        return (data.RemovePerk(tag, bytes, perk), position < 0 ? null : position);
+    });
     /** Duplicates a cost and its paired display row on a sale. */
     public void DuplicateInvestmentCost(InvestmentSale sale, InvestmentCost cost) =>
         ApplyInvestmentSale((data, tag, bytes, display, displayBytes) => data.DuplicateCostPair(tag, bytes, display, displayBytes, sale, cost));
@@ -158,6 +163,21 @@ public sealed partial class StudioWorkspace
         uint display = data.FindVendor(document.Entry.TagHash)?.DisplayTag ?? 0;
         if (display == 0) throw new InvalidOperationException("This vendor has no display definition.");
         ApplyAssetEdits(edit(data, document.Entry.TagHash, document.Bytes, display, Catalog!.Read(display)), "Sale rows saved");
+    }
+
+    /** A perk row and its paired display requirement row are saved as one undo step; the client walks both arrays with one index. */
+    private void ApplyInvestmentPerk(Func<InvestmentCatalog, uint, ReadOnlyMemory<byte>, (byte[] Item, int? Removed)> edit)
+    {
+        RequireEditable();
+        var data = Investment ?? throw new InvalidOperationException("Load investment first.");
+        var document = Document ?? throw new InvalidOperationException("Choose an item.");
+        uint tag = document.Entry.TagHash;
+        uint display = data.FindItem(tag)?.DisplayTag ?? 0;
+        if (display == 0) throw new InvalidOperationException("This item has no display definition.");
+        var (item, removed) = edit(data, tag, document.Bytes);
+        int count = data.ReadItem(tag, item).Perks.Count;
+        byte[] displayBytes = InvestmentPerkDisplayEdits.Resize(Catalog!.Read(display), count, removed);
+        ApplyAssetEdits(new Dictionary<uint, byte[]> { [tag] = item, [display] = displayBytes }, "Perk rows saved");
     }
 
     /** Structural edits remain one undoable package delta. */

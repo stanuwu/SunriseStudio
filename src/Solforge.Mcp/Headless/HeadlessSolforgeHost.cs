@@ -17,10 +17,11 @@ public sealed class HeadlessSolforgeHost : ISolforgeHost
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
     /** @param project the project folder (null: none; project tools say how to get one). */
-    public HeadlessSolforgeHost(string? project)
+    public HeadlessSolforgeHost(string? project, string? settingsPath = null)
     {
+        this.settingsPath = settingsPath;
         ProjectRoot = Normalize(project);
-        var settings = EditorSettings.Read();
+        var settings = EditorSettings.Read(settingsPath);
         GameRoot = settings.GameRoot;
         ServerScriptsRoot = settings.ScriptsRoot is { } scripts && Directory.Exists(scripts) ? scripts : null;
         // The same credential guard as the editor: the file named in the editor's settings is never read or searched.
@@ -33,6 +34,7 @@ public sealed class HeadlessSolforgeHost : ISolforgeHost
     }
 
     private readonly Lazy<IReadOnlyList<CodeRoot>> codeRoots;
+    private readonly string? settingsPath;
 
     /** The game installation from the editor's settings (code roots, reference library), or null. */
     public string? GameRoot { get; }
@@ -41,6 +43,19 @@ public sealed class HeadlessSolforgeHost : ISolforgeHost
     public string? ProjectRoot { get; }
     public IReadOnlyList<string> SdkRoots => ProjectRoot is { } root
         ? new[] { Path.Combine(root, "sdk"), Path.Combine(root, "docs") }.Where(Directory.Exists).ToArray() : [];
+    public IReadOnlyList<string> AllowedReadFolders
+    {
+        get
+        {
+            // Read grants live, so hiding/removing a folder applies without restarting a standalone MCP.
+            var settings = EditorSettings.Read(settingsPath);
+            if (ProjectRoot is not { } project) return settings.ReadFolders.Where(Directory.Exists).ToArray();
+            var found = EngineLaunch.AddDirs(project, [settings.GameRoot])
+                .Where(folder => !settings.HiddenFolders.Contains(folder, StringComparer.OrdinalIgnoreCase));
+            // An explicitly added folder is still a grant even if the same automatically found row is hidden.
+            return EngineLaunch.AddDirs(project, found.Concat(settings.ReadFolders), ancestors: false);
+        }
+    }
     public string? ServerScriptsRoot { get; }
     public string? CurrentMap => null;
     public AttentionLog Attention { get; } = new();
@@ -117,7 +132,7 @@ public sealed class HeadlessSolforgeHost : ISolforgeHost
      * RequiresEditor tool answering NeedsEditor and project-folder tools answering "no project" when none was given.
      * @param worker apply WorkerSessionPolicy (solforge-mcp --worker).
      */
-    public static McpDispatcher CreateDispatcher(HeadlessSolforgeHost host, string version, bool worker = false)
+    public static McpDispatcher CreateDispatcher(HeadlessSolforgeHost host, string version, bool worker = false, bool readOnly = false)
     {
         var sessions = new McpSessionRegistry();
         IReadOnlyList<McpTool> tools = MultiAgentTools.Wrap([.. SolforgeTools.Create(host),
@@ -127,14 +142,15 @@ public sealed class HeadlessSolforgeHost : ISolforgeHost
         var served = new List<McpTool>(tools.Count);
         foreach (var tool in tools)
         {
-            if (worker && !WorkerSessionPolicy.Allows(tool.Name, tool.RequiresApproval)) continue;
+            if (worker && !WorkerSessionPolicy.Allows(tool.Name, tool.RequiresApproval, readOnly)) continue;
             if (SolforgeTools.RequiresEditor(tool))
             {
                 string message = host.NeedsEditor;
                 served.Add(tool with { Handler = (_, _) => Task.FromResult(McpToolResult.Error(message)) });
             }
             else if (host.ProjectRoot is null && SolforgeTools.ProjectFolderTools.Contains(tool.Name))
-                served.Add(tool with { Handler = (_, _) => Task.FromResult(McpToolResult.Error(SolforgeTools.NoProjectOpen(host))) });
+                served.Add(tool with { Handler = (args, cancel) => tool.Name is "read_project_file" or "search_project" && host.AllowedReadFolders.Count > 0
+                    ? tool.Handler(args, cancel) : Task.FromResult(McpToolResult.Error(SolforgeTools.NoProjectOpen(host))) });
             else served.Add(tool);
         }
         return new McpDispatcher(served, version, "Standalone Solforge MCP (no editor running): " + SolforgeTools.Instructions +
@@ -149,21 +165,25 @@ public sealed class HeadlessSolforgeHost : ISolforgeHost
     }
 
     /** The few path settings the headless host borrows from the editor's settings file (never anything else). */
-    private sealed record EditorSettings(string? GameRoot, string? ScriptsRoot, string? CredentialFile)
+    private sealed record EditorSettings(string? GameRoot, string? ScriptsRoot, string? CredentialFile,
+        IReadOnlyList<string> ReadFolders, IReadOnlyList<string> HiddenFolders)
     {
-        public static EditorSettings Read()
+        public static EditorSettings Read(string? settingsPath = null)
         {
-            string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Sunrise Studio", "settings.json");
+            string path = settingsPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Sunrise Studio", "settings.json");
             try
             {
-                if (!File.Exists(path)) return new(null, null, null);
+                if (!File.Exists(path)) return new(null, null, null, [], []);
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                 using var document = JsonDocument.Parse(stream);
                 string? Text(string name) => document.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
                     && value.GetString() is { Length: > 0 } text ? text : null;
-                return new(Text("SunrisePath"), Text("ScriptsPath"), Text("CredentialFile"));
+                IReadOnlyList<string> Folders(string name) => document.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
+                    ? value.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString()!)
+                        .Where(folder => !string.IsNullOrWhiteSpace(folder)).ToArray() : [];
+                return new(Text("SunrisePath"), Text("ScriptsPath"), Text("CredentialFile"), Folders("AiFolders"), Folders("AiHiddenFolders"));
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException) { return new(null, null, null); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException) { return new(null, null, null, [], []); }
         }
     }
 }

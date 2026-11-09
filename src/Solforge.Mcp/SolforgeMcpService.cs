@@ -87,6 +87,9 @@ public sealed partial class SolforgeMcpService : IAsyncDisposable
                 StandaloneShim = shim;
                 // A registered ~/.claude.json entry follows the run copy (older copies are pruned); never created here.
                 StandaloneRegistration.Refresh(shim, upstreams);
+                // Every other ~/.claude.json entry on an older run copy (the user-level `sol` among them) follows too, so a
+                // client never points at a pruned copy, even when no project is opened in this editor session.
+                StandaloneRegistration.RefreshRunCopies(shim);
                 // Write and RefreshIfStale return null when the folder is not writable: never report that as success.
                 StandaloneStatus = descriptor is null
                     ? "solforge-ai-mcp.json could not be written/refreshed in " + McpDiscovery.Folder + " (folder not writable)."
@@ -134,7 +137,7 @@ public sealed partial class SolforgeMcpService : IAsyncDisposable
         IReadOnlyList<SolMcpServers.Server>? servers = null) =>
         Configs = McpClientConfigs.WriteAll(projectRoot, shimPath, servers: servers);
 
-    /** solforge-mcp.exe beside the running exe, else the developer build of the shim project. */
+    /** solforge-mcp.exe beside the running exe, else the published single-file exe, else the developer build. */
     public static string? FindShim()
     {
         string here = AppContext.BaseDirectory;
@@ -142,6 +145,8 @@ public sealed partial class SolforgeMcpService : IAsyncDisposable
         if (File.Exists(beside)) return beside;
         for (var folder = new DirectoryInfo(here); folder is not null; folder = folder.Parent)
         {
+            string published = Path.Combine(folder.FullName, "publish", "solforge-mcp.exe");
+            if (File.Exists(published)) return published;
             string project = Path.Combine(folder.FullName, "src", "Solforge.Mcp.Shim", "bin");
             if (!Directory.Exists(project)) continue;
             return Directory.EnumerateFiles(project, "solforge-mcp.exe", SearchOption.AllDirectories)

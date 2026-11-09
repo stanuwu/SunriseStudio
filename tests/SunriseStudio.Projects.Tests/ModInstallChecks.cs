@@ -223,7 +223,11 @@ internal static class ModInstallChecks
             "A changed scripts folder did not need a restart.");
         Check(Restart(installed, installed with { Manifest = [9], Scripts = null })
             == "The mod details changed. The mod no longer has mission scripts" + close, "Restart reasons were not all named.");
-        Console.WriteLine("mod_update_plan scripts=in_place manifest=restart packages=restart scripts_root=restart case=kept");
+        var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["ui/subclass_screens.json"] = "AA" };
+        Check(Restart(installed, installed with { Files = data }) == "The mod data files changed" + close
+            && Restart(installed with { Files = data }, installed with { Files = new Dictionary<string, string> { ["ui/subclass_screens.json"] = "aa" } }) == "",
+            "Changed mod data files did not need a restart, or hash case did.");
+        Console.WriteLine("mod_update_plan scripts=in_place manifest=restart packages=restart scripts_root=restart case=kept files=restart");
     }
 
     private static void ProjectMetadata(string parent)
@@ -332,6 +336,22 @@ internal static class ModInstallChecks
         Check(File.ReadAllBytes(Path.Combine(target, "scripts", "alpha", "alpha.lua")).SequenceEqual(controller), "Script layout differs.");
         Check(Entries(mods) == Example.Id, "Staging left a folder in mods.");
         Console.WriteLine("mod_install patches=installed_id packages=new_id scripts=stem_layout sdk=absent staging=removed");
+
+        string modFiles = Path.Combine(project.DirectoryPath, "modfiles");
+        Directory.CreateDirectory(Path.Combine(modFiles, "ui"));
+        byte[] screens = Encoding.UTF8.GetBytes("{\"format\":1,\"screens\":[]}");
+        File.WriteAllBytes(Path.Combine(modFiles, "ui", "subclass_screens.json"), screens);
+        ModInstaller.BuildAndInstall(project, catalog, scripts);
+        Check(File.ReadAllBytes(Path.Combine(target, "ui", "subclass_screens.json")).SequenceEqual(screens), "A mod data file was not installed.");
+        Directory.CreateDirectory(Path.Combine(modFiles, "bin"));
+        File.WriteAllBytes(Path.Combine(modFiles, "bin", "evil.dll"), [1]);
+        Throws<InvalidDataException>(() => ModInstaller.BuildAndInstall(project, catalog, scripts));
+        Check(File.Exists(Path.Combine(target, "ui", "subclass_screens.json")) && !File.Exists(Path.Combine(target, "bin", "evil.dll")),
+            "A refused mod file changed the install.");
+        Directory.Delete(modFiles, recursive: true);
+        ModInstaller.BuildAndInstall(project, catalog, scripts);
+        Check(!Directory.Exists(Path.Combine(target, "ui")), "A removed mod data file stayed installed.");
+        Console.WriteLine("mod_files ui=installed bin=refused removed=gone");
 
         File.WriteAllText(Path.Combine(target, "stale.txt"), "old");
         project.SetMod(Example with { Version = "1.1.0" });

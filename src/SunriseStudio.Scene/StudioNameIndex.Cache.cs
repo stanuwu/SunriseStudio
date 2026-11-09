@@ -19,15 +19,26 @@ public sealed partial class StudioNameIndex
     public bool CacheHit { get; private set; }
     public string CacheStatus { get; private set; } = "Not loaded";
 
-    /** Assembly identities invalidate snapshots when either reader or naming rules change. */
+    /**
+     * Version of the naming rules the snapshot holds. The snapshot used to be keyed by the build ids of this assembly and
+     * SunriseStudio.Packages, so every Solforge rebuild that touched either one threw the snapshot away and the next start
+     * spent 2-4 minutes rebuilding it (entity components and asset owners walk about a million package entries). It is
+     * now keyed by the installed data (packages, keys, SDK scripts) plus this number. BUMP IT whenever a change alters
+     * which names are produced: StudioNameIndex*.cs, GameNames/ComponentIndex/ComponentSlots/LocalizedStrings/RenderNames
+     * (SunriseStudio.Packages and SunriseStudio.Scene). Layout changes are caught anyway: NameCacheFormat and the
+     * component cache version reject an old snapshot, which is then rebuilt.
+     */
+    private const int NameRulesVersion = 1;
+
+    /** The installed data (packages, keys, SDK activity scripts and scenario packs) plus the naming rules version. */
     private string? NameCacheIdentity(CancellationToken token)
     {
         string sdk = Path.Combine(catalog.GameRoot, "bin", "x64", "Sunrise", "sdk");
         string activities = Path.Combine(sdk, "lua", "activities"), scenarios = Path.Combine(sdk, "scenarios");
         var files = (Directory.Exists(activities) ? Directory.EnumerateFiles(activities, "*.lua") : [])
             .Concat(Directory.Exists(scenarios) ? Directory.EnumerateFiles(scenarios, "*.pack") : []);
-        return catalog.CreateCacheIdentity($"studio-names-v4:{typeof(StudioNameIndex).Module.ModuleVersionId}",
-            files, token);
+        return catalog.CreateCacheIdentity($"studio-names-v4:format{NameCacheFormat}:rules{NameRulesVersion}",
+            files, token, codeVersioned: false);
     }
 
     /** Restore into private objects first, then publish the complete naming state together. */

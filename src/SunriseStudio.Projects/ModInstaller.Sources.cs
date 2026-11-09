@@ -29,6 +29,49 @@ public static partial class ModInstaller
     }
 
     /** Source folders contain owned Lua; they never copy modules from the installed SDK. */
+    /** Top folders a project's `modfiles` may fill; the client reads them from loaded mods (e.g. ui/subclass_screens.json). */
+    public static readonly string[] ModFileFolders = ["ui", "textures", "data", "resources"];
+    private const long MaximumModFileBytes = 16L * 1024 * 1024;
+    private const int MaximumModFiles = 512;
+
+    /**
+     * Mod data files: everything below `<project>/modfiles/` is copied into the mod folder at the same relative path.
+     * Only the ModFileFolders top folders are allowed, so a data file can never replace mod.json, packages, patches,
+     * scripts, sdk or a native bin/ DLL.
+     */
+    private static IReadOnlyList<ModScriptFile> ProjectModFiles(StudioProject project)
+    {
+        string root = ProjectPaths.Resolve(project.DirectoryPath, "modfiles");
+        if (!Directory.Exists(root)) return [];
+        var result = new List<ModScriptFile>();
+        foreach (string path in UnlinkedFiles(root))
+        {
+            string relative = Relative(root, path);
+            RequireModFilePath(relative);
+            if (new FileInfo(path).Length > MaximumModFileBytes)
+                throw new InvalidDataException($"Mod file {relative} exceeds {MaximumModFileBytes} bytes.");
+            if (result.Count >= MaximumModFiles) throw new InvalidDataException($"modfiles holds more than {MaximumModFiles} files.");
+            result.Add(new(relative, File.ReadAllBytes(path)));
+        }
+        return result.OrderBy(file => file.RelativePath, StringComparer.Ordinal).ToArray();
+    }
+
+    /** A mod file path: '/'-separated, no empty, '.' or '..' part, under one of ModFileFolders. */
+    internal static void RequireModFilePath(string relative)
+    {
+        string[] parts = relative.Split('/');
+        if (parts.Length < 2 || parts.Any(part => part.Length == 0 || part is "." or ".." || part.IndexOfAny([':', '\\']) >= 0)
+            || !ModFileFolders.Contains(parts[0], StringComparer.OrdinalIgnoreCase))
+            throw new InvalidDataException($"Mod file {relative} must sit below one of: {string.Join(", ", ModFileFolders)}.");
+    }
+
+    private static bool SameHashes(IReadOnlyDictionary<string, string>? before, IReadOnlyDictionary<string, string>? after)
+    {
+        if ((before?.Count ?? 0) != (after?.Count ?? 0)) return false;
+        if (before is null || after is null) return true;
+        return before.All(file => after.TryGetValue(file.Key, out string? hash) && hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static IReadOnlyList<ModScriptFile> ProjectSources(StudioProject project, string folder)
     {
         string root = ProjectPaths.Resolve(project.DirectoryPath, folder);

@@ -1,7 +1,8 @@
 /**
- * File: the compact tabbed area header and tab docking (docs/UI-UE5.md §1.2). Each area's header is a 22 px strip of
- * tabs (icon, 11 px semibold title, a close "x" on hover in a tabbed area) with the editor-type combo, collapse and
- * the "..." Area menu at its right end as compact icon buttons. A tab drags with an ImGui drag/drop payload typed
+ * File: the tabbed area header and tab docking (docs/UI-UE5.md §1.2, styled after the mockup's .tablist). Each area's
+ * header is a 30 px strip of tabs (icon, upper-case Chakra Petch title tracked .1 em, the amber angled underline under
+ * the active tab, a close cross on hover in a tabbed area) with the editor-type combo, collapse and the "..." Area menu
+ * at its right end as compact icon buttons. A tab drags with an ImGui drag/drop payload typed
  * "SOLFORGE_PANEL" carrying the kind name: dropped on another area's header it joins that area as a tab, dropped on
  * an area's edge (the outer 25 %) it splits that area. While a drag runs, the zone under the pointer shows an Accent
  * 20 % overlay. Layout changes apply after the frame (pendingLayoutChange).
@@ -23,7 +24,7 @@ public sealed partial class StudioForm
     /** Header and body rects of the areas drawn this frame (main window), the drop targets of a tab drag. */
     private readonly List<(int Id, Vector2 Min, Vector2 Max, bool Header)> dropAreas = [];
 
-    /** The compact header height: 22 px at 100 %, never shorter than one control. */
+    /** The header height: 30 px at 100 %, never shorter than one control. */
     private float AreaHeaderHeight => MathF.Max(SolTheme.PanelHeaderHeight, ImGui.GetFrameHeight() + 2 * scale);
 
     /** Draws an area's tab strip and its right-hand controls; the content below it is the caller's. */
@@ -40,7 +41,7 @@ public sealed partial class StudioForm
         var min = ImGui.GetWindowPos();
         var max = min + new Vector2(size.X, header);
         draw.AddRectFilled(min, max, SolTheme.U32(SolTheme.Header));
-        draw.AddLine(new(min.X, max.Y - .5f), new(max.X, max.Y - .5f), SolTheme.U32(SolTheme.Border), 1);
+        draw.AddLine(new(min.X, max.Y - .5f), new(max.X, max.Y - .5f), SolTheme.U32(SolTheme.Line), 1);
 
         float icon = MathF.Round(MathF.Min(header - 4 * scale, 18 * scale));
         int actions = node.Panel == StudioPanelKind.Empty ? 2 : 3;
@@ -57,7 +58,7 @@ public sealed partial class StudioForm
         if (UiAuto.BeginCombo("##editor-type", "", ImGuiComboFlags.NoPreview | ImGuiComboFlags.PopupAlignLeft))
         {
             SolTheme.PopupShadow();
-            foreach (var kind in StudioLayout.Pickable)
+            foreach (var kind in VisiblePanelChoices)
             {
                 if (UiAuto.Selectable(DisplayTitle(kind), node.Panel == kind))
                     pendingLayoutChange = () => { ClosePopout(kind); layout.SetPanel(node.Id, kind); };
@@ -95,13 +96,13 @@ public sealed partial class StudioForm
         ImGui.PopStyleVar(3);
     }
 
-    /** The tabs of an area: drawn by hand so they sit flush in the 22 px strip; each is a drag source. */
+    /** The tabs of an area: drawn by hand so they sit flush in the header strip; each is a drag source. */
     private unsafe void DrawAreaTabs(StudioLayoutNode node, Vector2 min, Vector2 max, float right)
     {
         var draw = ImGui.GetWindowDrawList();
         var members = node.Members;
-        float top = min.Y + 2 * scale, bottom = max.Y;
-        float x = min.X + SolTheme.Space2;
+        float top = min.Y, bottom = max.Y - scale;
+        float x = min.X + SolTheme.Space3;
         float iconSize = MathF.Round(12 * scale);
         bool tabbed = members.Count > 1;
         float closeSize = tabbed ? MathF.Round(14 * scale) : 0;
@@ -110,7 +111,7 @@ public sealed partial class StudioForm
         {
             // An empty area: one inactive pseudo-tab naming the choice.
             string text = DisplayTitle(StudioPanelKind.Empty);
-            float width = ImGui.CalcTextSize(text).X + SolTheme.Space4 * 2;
+            float width = SolTheme.LabelWidth(SolTheme.LabelFont, text, SolTheme.TrackLabel) + SolTheme.Space5 * 2;
             SolTheme.PanelTab(draw, new(x, top), new(Math.Min(right, x + width), bottom), text, false);
             if (labelFont) ImGui.PopFont();
             return;
@@ -120,7 +121,8 @@ public sealed partial class StudioForm
         float total = 0;
         for (int i = 0; i < members.Count; i++)
         {
-            widths[i] = ImGui.CalcTextSize(TabLabel(members[i])).X + iconSize + SolTheme.Space2 + SolTheme.Space4 * 2 + closeSize;
+            widths[i] = SolTheme.LabelWidth(SolTheme.LabelFont, TabLabel(members[i]), SolTheme.TrackLabel) + iconSize + SolTheme.Space3
+                + SolTheme.Space5 * 2 + closeSize;
             total += widths[i] + scale;
         }
         float room = Math.Max(1, right - x - SolTheme.Space2);
@@ -156,14 +158,16 @@ public sealed partial class StudioForm
             float on = UiMotion.Ease(UiMotion.Mix(hoverKey, 0xAC71u), active ? 1 : 0, 22f);
             SolTheme.PanelTab(draw, tabMin, tabMax, "", active, hover, accentLine: false, activeBlend: on);
             if (active) { activeMin = tabMin; activeMax = tabMax; }
-            var tint = active ? SolTheme.TextStrong : Vector4.Lerp(SolTheme.Muted, SolTheme.Text, hover);
-            float midY = (tabMin.Y + tabMax.Y) / 2;
-            float textX = tabMin.X + SolTheme.Space4;
+            // The mockup's tab text: --text-dim at rest, --text when hovered or active.
+            var tint = Vector4.Lerp(Vector4.Lerp(SolTheme.Muted, SolTheme.Text, hover), SolTheme.TextStrong, on);
+            float midY = MathF.Round((tabMin.Y + tabMax.Y) / 2);
+            float textX = tabMin.X + SolTheme.Space5;
             draw.PushClipRect(tabMin, tabMax - new Vector2(closeSize, 0), true);
             ImGuiIcons.Draw(draw, PanelIcon(kind), new(textX, midY - iconSize / 2), iconSize,
-                SolTheme.U32(kind == StudioPanelKind.AI ? SolTheme.Brand : tint));
-            textX += iconSize + SolTheme.Space2;
-            draw.AddText(new(textX, midY - ImGui.GetTextLineHeight() / 2), SolTheme.U32(tint), TabLabel(kind));
+                SolTheme.U32(kind == StudioPanelKind.AI || active ? SolTheme.Accent : tint));
+            textX += iconSize + SolTheme.Space3;
+            SolTheme.TrackedText(draw, new(textX, MathF.Round(midY - ImGui.GetTextLineHeight() / 2)), SolTheme.U32(tint),
+                TabLabel(kind).ToUpperInvariant(), ImGui.GetFontSize() * SolTheme.TrackLabel);
             draw.PopClipRect();
             bool overClose = false;
             if (tabbed && (hovered || active))
@@ -173,12 +177,10 @@ public sealed partial class StudioForm
                 overClose = hovered && ImGui.IsMouseHoveringRect(closeMin, closeMax);
                 if (hovered)
                 {
-                    if (overClose) draw.AddRectFilled(closeMin, closeMax, SolTheme.U32(SolTheme.Pressed), 2 * scale);
-                    var c = (closeMin + closeMax) / 2;
-                    float h = closeSize * .22f;
-                    uint glyph = SolTheme.U32(overClose ? SolTheme.TextStrong : SolTheme.Muted);
-                    draw.AddLine(c - new Vector2(h), c + new Vector2(h), glyph, Math.Max(1, 1.25f * scale));
-                    draw.AddLine(c + new Vector2(-h, h), c + new Vector2(h, -h), glyph, Math.Max(1, 1.25f * scale));
+                    if (overClose) SolTheme.ChamferFrame(draw, closeMin, closeMax, SolTheme.CutTiny, SolTheme.U32(SolTheme.AccentSoft));
+                    float glyphSize = MathF.Round(closeSize * .62f);
+                    ImGuiIcons.Draw(draw, StudioIcon.Close, Vector2.Round((closeMin + closeMax - new Vector2(glyphSize)) / 2), glyphSize,
+                        SolTheme.U32(overClose ? SolTheme.Accent : SolTheme.Muted));
                 }
             }
             if (hovered) StudioUi.Tip(tabbed ? $"{DisplayTitle(kind)}: drag to dock it elsewhere; middle-click or x closes the tab"
@@ -198,11 +200,11 @@ public sealed partial class StudioForm
         }
         if (activeMax.X > activeMin.X)
         {
-            // One 2 px Accent top line per area, its x and width sprung (about 160 ms), clipped to the tab strip.
+            // One amber underline per area (the mockup's angled 2 px bar), its x and width sprung (about 160 ms) so a tab
+            // switch slides, clipped to the tab strip.
             var line = UiMotion.SpringVec(UiMotion.Mix((uint)node.Id, 0xA7ABu), new(activeMin.X, activeMax.X - activeMin.X), 520f, 46f);
             float x0 = Math.Max(line.X, min.X), x1 = Math.Min(line.X + line.Y, right);
-            if (x1 - x0 >= 1) draw.AddRectFilled(new(x0, activeMin.Y), new(x1, activeMin.Y + 2 * scale), SolTheme.U32(SolTheme.Accent),
-                SolTheme.RoundingTab * scale, ImDrawFlags.RoundCornersTop);
+            if (x1 - x0 >= 1) SolTheme.AngledUnderline(draw, x0, x1, max.Y - scale, 10);
         }
         if (labelFont) ImGui.PopFont();
     }

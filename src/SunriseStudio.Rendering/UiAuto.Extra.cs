@@ -108,14 +108,30 @@ public static partial class UiAuto
     /** Drop-in for ImGui.TreeNodeEx with flags. */
     public static bool TreeNodeEx(string label, ImGuiTreeNodeFlags flags) => Fold(label, flags, true);
 
+    /**
+     * The fill of a collapsing header at rest, hovered and held, set by the host theme (SolTheme.Apply). ImGui draws
+     * headers with the selected-row colour; the theme keeps headers neutral and the selection amber. Null keeps ImGui's.
+     */
+    public static (Vector4 Idle, Vector4 Hovered, Vector4 Held)? HeaderColors { get; set; }
+
+    private static bool CollapsingHeaderThemed(string label, ImGuiTreeNodeFlags flags)
+    {
+        if (HeaderColors is not { } colors) return ImGui.CollapsingHeader(label, flags);
+        ImGui.PushStyleColor(ImGuiCol.Header, colors.Idle);
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, colors.Hovered);
+        ImGui.PushStyleColor(ImGuiCol.HeaderActive, colors.Held);
+        try { return ImGui.CollapsingHeader(label, flags); }
+        finally { ImGui.PopStyleColor(3); }
+    }
+
     private static bool Fold(string label, ImGuiTreeNodeFlags flags, bool tree)
     {
-        if (Current() is not { } state) return tree ? ImGui.TreeNodeEx(label, flags) : ImGui.CollapsingHeader(label, flags);
+        if (Current() is not { } state) return tree ? ImGui.TreeNodeEx(label, flags) : CollapsingHeaderThemed(label, flags);
         uint id = ImGui.GetID(label);
         var command = Find(state, id);
         bool want = command is { Operation: Op.SetChecked } ? command.Check : true;
         if (command is { Operation: Op.Invoke or Op.Select or Op.SetChecked }) ImGui.SetNextItemOpen(want);
-        bool open = tree ? ImGui.TreeNodeEx(label, flags) : ImGui.CollapsingHeader(label, flags);
+        bool open = tree ? ImGui.TreeNodeEx(label, flags) : CollapsingHeaderThemed(label, flags);
         Record(state, id, "header", label, null, open);
         if (command is not null)
             Finish(state, command, command.Operation is not Op.SetValue,

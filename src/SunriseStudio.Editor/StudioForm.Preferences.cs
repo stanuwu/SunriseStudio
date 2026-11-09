@@ -59,10 +59,14 @@ public sealed partial class StudioForm
         if (ImGui.BeginTabBar("settings-tabs", ImGuiTabBarFlags.FittingPolicyScroll))
         {
             if (BeginSettingsTab("Rendering")) { DrawRenderingSettings(); UiAuto.EndTabItem(); }
-            if (BeginSettingsTab("AI")) { DrawAiSettings(); UiAuto.EndTabItem(); }
+            if (BeginSettingsTab(McpOnlyUi ? "MCP" : "AI"))
+            {
+                if (McpOnlyUi) DrawMcpSettings(); else DrawAiSettings();
+                UiAuto.EndTabItem();
+            }
             // Hook H4: agent C's pages (each draws its own UiAuto.PushBlocked/PopBlocked).
-            if (BeginSettingsTab("Solforge AI")) { DrawSolforgeAiSettings(); UiAuto.EndTabItem(); }
-            if (BeginSettingsTab("Models & workflows")) { DrawModelsWorkflowsSettings(); UiAuto.EndTabItem(); }
+            if (!McpOnlyUi && BeginSettingsTab("Solforge AI")) { DrawSolforgeAiSettings(); UiAuto.EndTabItem(); }
+            if (!McpOnlyUi && BeginSettingsTab("Models & workflows")) { DrawModelsWorkflowsSettings(); UiAuto.EndTabItem(); }
             if (BeginSettingsTab("Paths")) { DrawPathSettings(); UiAuto.EndTabItem(); }
             if (BeginSettingsTab("Live link")) { DrawLiveSettings(); UiAuto.EndTabItem(); }
             if (BeginSettingsTab("Interface")) { DrawInterfaceSettings(); UiAuto.EndTabItem(); }
@@ -114,6 +118,17 @@ public sealed partial class StudioForm
         finally { UiAuto.PopBlocked(); }
     }
 
+    /** MCP-only edition: expose the project tool bridge without assistant, model or workflow controls. */
+    private void DrawMcpSettings()
+    {
+        SettingNote("Solforge exposes live project context, project skills and editing tools to connected MCP clients.");
+        bool mcp = settings.AiMcpEnabled;
+        if (UiAuto.Checkbox("Solforge MCP server", ref mcp)) SetAiMcp(mcp);
+        string status = "MCP off";
+        AiServiceStatus(ref status);
+        SettingNote(status + ". When enabled, connected clients can read the open project context and use its tools.");
+    }
+
     /**
      * Settings > AI: the MCP server switch, auto-approve and the automatic-mode note. The console rows (the consoles,
      * the Pi harness path, Resume) went with the in-editor console; their settings fields stay so old files load.
@@ -124,8 +139,8 @@ public sealed partial class StudioForm
             + "context and live editing tools with it, and with any other MCP client, through its MCP server. Settings > Solforge AI sets where the app is.");
         bool approveRequests = settings.AutoApproveRequests;
         if (UiAuto.Checkbox("Auto-approve AI requests", ref approveRequests)) { settings.AiAutoApproveRequests = approveRequests; SaveSettings(); }
-        SettingNote("Solforge MCP action requests (open file, edits, builds) run with no Approve click and are listed in the AI LOG (Output Log, MCP). "
-            + "Model-workflow workers are never auto-approved.");
+        SettingNote("Allowed Solforge MCP actions and project edits run with no Approve click and are listed in the AI LOG (Output Log, MCP), including workflow workers. "
+            + "Stale-file, paused-context and cancellation checks still apply. Off requires review. Only you can change this setting.");
         bool mcp = settings.AiMcpEnabled;
         if (UiAuto.Checkbox("MCP server (Solforge live editing tools)", ref mcp)) SetAiMcp(mcp);
         string status = "MCP off";

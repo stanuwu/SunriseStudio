@@ -156,7 +156,7 @@ internal sealed class WindowChrome(Form form)
             // The hover fill fades in and out; close turns the Windows red, the others the Hover token.
             float fade = UiMotion.Ease(ImGui.GetItemID(), hovered ? 1 : 0, 30f);
             if (fade > .01f)
-                draw.AddRectFilled(min, max, ImGui.GetColorU32(SolTheme.Alpha(button == 2 ? new Vector4(0.77f, 0.17f, 0.11f, 1) : SolTheme.Hover, fade)));
+                draw.AddRectFilled(min, max, ImGui.GetColorU32(SolTheme.Alpha(button == 2 ? SolTheme.CloseHover : SolTheme.Hover, fade)));
             if (button == 2 && fade > .5f) glyph = ImGui.GetColorU32(SolTheme.TextStrong);
             else glyph = ImGui.GetColorU32(ImGuiCol.Text);
             float half = 5 * Scale;

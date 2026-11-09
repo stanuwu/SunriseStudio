@@ -92,7 +92,7 @@ public static class HelpCatalog
     public static IReadOnlyList<HelpTip> Tips { get; } =
     [
         new("Workflow", "Projects never touch the game", "Edits live in the project (sunrise.project.json and content/). Build packages, then Build and install " +
-            "writes the mod to bin\\x64\\Sunrise\\mods; Changes lists every edit with undo and Revert."),
+            "writes the mod to Sunrise\\mods beside destiny2.exe when that folder exists, else bin\\x64\\Sunrise\\mods; Changes lists every edit with undo and Revert."),
         new("Workflow", "Find anything by name", "The Asset browser (Ctrl+Space in the Sunrise preset) searches the whole install; Back/Forward " +
             "walk your inspection history like a browser."),
         new("Workflow", "Clone, then edit", "File > New/Clone makes weapons, armor, plugs, subclasses and more with fresh hashes; edit the clone in the " +

@@ -9,8 +9,8 @@ namespace Solforge.Mcp.Testkit;
 public static class TestkitTools
 {
     public const string Instructions =
-        " testkit_status checks the sol-testkit MCP (process, ports, handshake) and gives a green, amber or red light; testkit_restart ends it so the client " +
-        "reconnects, or starts its HTTP mode.";
+        " testkit_status checks testkit transport health, not game-frame freshness. Multiple stdio instances are normal for multiple MCP clients; do not restart just to reduce their count. " +
+        "testkit_restart defaults to restarting only the standalone HTTP instance and preserves stdio clients.";
 
     public static readonly string[] Names = ["testkit_status", "testkit_restart"];
 
@@ -23,15 +23,16 @@ public static class TestkitTools
             McpJson.Schema(), false,
             async (_, cancel) => McpToolResult.Json((await monitor.StatusAsync(cancel).ConfigureAwait(false)).ToJson())),
         new McpTool("testkit_restart",
-            "Restart the sol-testkit MCP. mode 'kill' (default) ends the running testkit; the client (Claude Code) respawns it when you reconnect " +
-            "with /mcp, and tools like capture and pad fail until then. mode 'http' also starts the script's HTTP server on port 48840. " +
-            "Asks the user to approve first; this cuts the testkit tools of the current session.",
-            McpJson.Schema(("mode", "string", "kill (default) or http", false)), true,
+            "Restart testkit. mode 'http' (default) replaces only HTTP workers on port 48840 and preserves stdio clients. " +
+            "mode 'kill' explicitly stops all testkit connections and requires their clients to reconnect. Multiple stdio workers are normal; " +
+            "do not restart to reduce their count. A healthy transport port does not prove a live game frame. Asks for approval.",
+            McpJson.Schema(("mode", "string", "http (default, preserves stdio) or kill (disconnects all clients)", false)), true,
             async (args, cancel) =>
             {
-                string mode = McpJson.String(args, "mode") is { Length: > 0 } given ? given.ToLowerInvariant() : "kill";
+                string mode = McpJson.String(args, "mode") is { Length: > 0 } given ? given.ToLowerInvariant() : "http";
                 if (mode is not ("kill" or "http")) return McpToolResult.Error("mode must be kill or http");
-                if (!await approve("testkit_restart", "Restart the sol-testkit MCP (" + mode + "); its tools drop until the client reconnects.", cancel).ConfigureAwait(false))
+                if (!await approve("testkit_restart", mode == "http" ? "Restart the standalone HTTP testkit; preserve stdio clients."
+                    : "Stop all testkit connections; clients must reconnect.", cancel).ConfigureAwait(false))
                     return McpToolResult.Error("The user declined this in Solforge.");
                 var result = await monitor.RestartAsync(mode, cancel).ConfigureAwait(false);
                 return result.Ok ? McpToolResult.Json(result.ToJson()) : McpToolResult.Error(result.ToJson().ToJsonString(McpJson.Indented));

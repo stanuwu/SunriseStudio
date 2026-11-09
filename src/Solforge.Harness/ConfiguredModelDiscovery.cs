@@ -59,7 +59,7 @@ public static class ConfiguredModelDiscovery
         void Add(string label, string display, HarnessTransport transport, string provider, string model, string? baseUrl, string? key, string note,
             bool unavailable = false)
         {
-            if (output.Count >= MaximumCandidates) return;
+            if (output.Count >= MaximumCandidates || transport is not (HarnessTransport.ClaudeSubscription or HarnessTransport.CodexSubscription)) return;
             string id = (unavailable ? "unavailable|" + label + "|" : "") + transport + "|" + provider + "|" + model + "|" + (baseUrl ?? "");
             if (keys.Add(id)) output.Add(new(id, label, display, transport, provider, model, baseUrl, key, note, unavailable));
         }
@@ -70,25 +70,15 @@ public static class ConfiguredModelDiscovery
             string model = choice.Model.Trim();
             switch (choice.Provider)
             {
-                case "claude-subscription" or "cline-claude-code":
+                case "claude-subscription":
                     Add(label, "Claude subscription" + (model.Length == 0 ? "" : " (" + model + ")"), HarnessTransport.ClaudeSubscription, "anthropic",
                         model.Length == 0 ? "default" : model, null, null, "Runs through your signed-in claude CLI (claude -p), hidden and read-only.");
-                    break;
-                case "cline-pass" or "claude-cline-pass" when model.Length > 0:
-                    // ClinePass ids are FULL ids with their prefix (cline-pass/..., cline-free/..., vendor/...-free).
-                    string id = model.Contains('/') ? model : "cline-pass/" + model;
-                    Add(label, "ClinePass " + id, HarnessTransport.OpenAiCompatible, "clinepass", id, ProviderCatalogs.ClinePassBaseUrl, ProviderCatalogs.ClinePassKey,
-                        "ClinePass (streamed OpenAI-compatible endpoint); needs " + ProviderCatalogs.ClinePassKey + " in your credential file.");
                     break;
                 case "claude-api-key" or "claude-gateway":
                     // Listed so the user sees it; an API key / gateway is a paid route, which Solforge tiers never fall back to.
                     Add(label, (choice.Provider == "claude-api-key" ? "Anthropic API key" : "Anthropic-format gateway") + (model.Length == 0 ? "" : " (" + model + ")"),
                         HarnessTransport.ClaudeSubscription, choice.Provider, model.Length == 0 ? "default" : model, null, null,
                         "API-key / gateway route: not offered in tiers (no paid fallback). Use a Claude subscription entry instead.", unavailable: true);
-                    break;
-                case "cline-saved":
-                    Add(label, "Cline saved provider", HarnessTransport.OpenAiCompatible, "cline-saved", model.Length == 0 ? "unknown" : model, null, null,
-                        "Cline saved provider: unknown model (whatever cline auth configured); not offered in tiers.", unavailable: true);
                     break;
                 case "" when model.Length == 0:
                     break;
@@ -100,8 +90,6 @@ public static class ConfiguredModelDiscovery
             }
         }
 
-        // Cline's usage-billed catalog (hundreds of ids) is listed last, after ClinePass and OpenCode.
-        var usageBilled = new List<(string Display, string Provider, string Model, string Url, string Env)>();
         foreach (string file in ProfilePatchFiles())
         {
             string? text = ReadSmall(file);
@@ -119,33 +107,10 @@ public static class ConfiguredModelDiscovery
                         Add(label, display, HarnessTransport.CodexSubscription, "openai", modelId, null, null, "Runs through your signed-in codex CLI (hidden, read-only).");
                     else if (lower == "anthropic" && provider.ApiKeyEnv is null)
                         Add(label, display, HarnessTransport.ClaudeSubscription, "anthropic", modelId, null, null, "Runs through your signed-in claude CLI (hidden, read-only).");
-                    else if (lower is "google-gemini-cli" or "google-antigravity")
-                        Add(label, display, HarnessTransport.GoogleSubscription, "google", modelId, null, null, "Runs through your signed-in Gemini CLI or agy (hidden, read-only).");
-                    else if (provider.BaseUrl is { } url && provider.ApiKeyEnv is { } env && provider.Api is null or "openai-completions" or "openai-responses")
-                    {
-                        if (ProviderCatalogs.IsClineEndpoint(url) && !ProviderCatalogs.IsClinePassId(modelId))
-                            // Cline's usage-billed catalog: its own group, never shown as ClinePass.
-                            usageBilled.Add(("Cline usage " + display, provider.Id, modelId, url.TrimEnd('/'), env));
-                        else
-                            Add(label, (provider.DisplayName ?? provider.Id) + " " + display, HarnessTransport.OpenAiCompatible, provider.Id, modelId,
-                                url.TrimEnd('/'), env, "OpenAI-compatible (" + url + "); key name " + env + ".");
-                    }
+
                 }
             }
         }
-
-        foreach (string id in ProviderCatalogs.ClinePassModels)
-            Add("ClinePass (subscription)", "ClinePass " + id, HarnessTransport.OpenAiCompatible, "clinepass", id, ProviderCatalogs.ClinePassBaseUrl,
-                ProviderCatalogs.ClinePassKey, "ClinePass model (streamed); needs " + ProviderCatalogs.ClinePassKey + " in your credential file."
-                + (id.StartsWith("cline-free/", StringComparison.Ordinal) ? " cline-free models may answer 403 (not available for this key)." : ""));
-        foreach (var (id, name, inputCost, outputCost) in ProviderCatalogs.OpenCodeModels)
-            Add("OpenCode Zen", "OpenCode " + name, HarnessTransport.OpenAiCompatible, "opencode", id, ProviderCatalogs.OpenCodeBaseUrl, ProviderCatalogs.OpenCodeKey,
-                "OpenCode Zen model, " + (inputCost == 0 && outputCost == 0 ? "free" : FormattableString.Invariant($"paid: ${inputCost} / ${outputCost} per million input / output tokens"))
-                + "; needs " + ProviderCatalogs.OpenCodeKey + " in your credential file.");
-
-        foreach (var usage in usageBilled)
-            Add("Cline (usage-billed, not ClinePass)", usage.Display, HarnessTransport.OpenAiCompatible, usage.Provider, usage.Model, usage.Url, usage.Env,
-                "Cline usage-billed model (pay per token, not ClinePass); key name " + usage.Env + ".");
 
         var clis = SubscriptionClis.Find();
         if (clis.Claude is not null)
@@ -154,10 +119,6 @@ public static class ConfiguredModelDiscovery
         if (clis.Codex is not null)
             Add("codex CLI", "Codex subscription (CLI default model)", HarnessTransport.CodexSubscription, "openai", "default", null, null,
                 "Your signed-in codex CLI (codex exec, ChatGPT sign-in), hidden and read-only.");
-        if (clis.Google is { } google)
-            Add(google.Cli + " CLI", "Google AI Pro subscription (CLI default model)", HarnessTransport.GoogleSubscription, "google", "default", null, null,
-                google.Cli == "gemini" ? "Your Gemini CLI signed in with your Google account (no API key), hidden and read-only."
-                    : "Your signed-in Antigravity CLI (agy -p --mode plan), hidden and read-only; no API key.");
         return output;
     }
 

@@ -19,14 +19,16 @@ Mod Editor for Sunrise
 - Attach to Sunrise with live cui or inworld view
 - Build and install projects as Sunrise mods
 
-## Editor UI (Solforge v2, branch `ue5-ui`)
+## Editor UI (MCP edition)
 
-This copy has an Unreal Engine 5 style layout (menu bar, main toolbar, tabbed docks, Content Browser drawer, status bar)
-with eased and sprung UI motion; Settings > Interface > Reduce motion turns it off. The in-editor AI console is gone: the
-**Solforge AI** button on the toolbar launches, focuses or stops the separate Solforge AI app, and the Solforge AI panel
-keeps approvals, AI edits and context publishing. To give a Solforge AI you start by itself the Solforge MCP too, use
-Settings > Solforge AI > STANDALONE MCP > Register. Details: [docs/UI-UE5.md](docs/UI-UE5.md),
-[docs/FEATURES.md](docs/FEATURES.md); what was and was not checked: [docs/V2-STATUS.md](docs/V2-STATUS.md).
+The editor keeps its workspace, menus, toolbar, dock panels and project tools. The separate Solforge AI desktop app,
+assistant panel, launch button, model settings and assistant menus are not included in this edition. The editor's MCP
+server remains available from Settings > MCP. Connected clients can read the live project through `get_context` and
+`get_open_documents`; Solforge project playbooks ship under `skills/`, and the editor adds the project context and skill
+list to `.solforge/SESSION.md` and the managed section of `AGENTS.md` when a project opens.
+
+Details: [docs/UI-UE5.md](docs/UI-UE5.md), [docs/FEATURES.md](docs/FEATURES.md), and
+[docs/V2-STATUS.md](docs/V2-STATUS.md).
 
 ## Alpha
 
@@ -71,7 +73,7 @@ cd SunriseStudio
 
 2. Build Studio
 ```powershell
-.\publish.ps1                  # writes publish\Solforge.exe (see RELEASING.md)
+.\publish.ps1 -Output publish-new # use a new or empty output folder (see RELEASING.md)
 ```
 
 On first start, choose your Sunrise installation; Studio remembers it. `Sunrise Studio.exe --help`

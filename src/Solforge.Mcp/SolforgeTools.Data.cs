@@ -27,7 +27,7 @@ public static partial class SolforgeTools
 
     public static readonly string[] PackageDataToolNames =
     [
-        "get_string", "search_strings", "list_tag_classes", "list_tags_of_class", "read_tag_bytes", "dump_tag", "infer_tag_schema", "export_data"
+        "get_string", "search_strings", "read_string_bank", "list_tag_classes", "list_tags_of_class", "read_tag_bytes", "dump_tag", "infer_tag_schema", "export_data"
     ];
 
     /** Error shown when no decompiled-code folder can be found. */
@@ -435,6 +435,33 @@ public static partial class SolforgeTools
                 var hits = await data.SearchStringsAsync(query, DataPages.Start(args) + DataPages.Limit(args) + 1, cancel).ConfigureAwait(false);
                 return McpToolResult.Json(DataPages.Page(hits, args, hit => new JsonObject
                     { ["hash"] = Hex(hit.Hash), ["text"] = hit.Text, ["bank"] = hit.Container is { } bank ? Hex(bank) : null }, countAll: false));
+            });
+
+        yield return Pkg("read_string_bank", "Every string of one string bank (class 0x80809A88 container, e.g. a socket-entry " +
+            "list's text bank): role hash and English text, in bank order. Reads the project's bytes unless original is true.",
+            McpJson.Schema(("bank", "string", "Bank container tag (0x...)", true), ("original", "boolean", "Shipped bytes", false)),
+            (data, args, cancel) =>
+            {
+                if (ParseHash(McpJson.String(args, "bank")) is not { } bank) return Task.FromResult(McpToolResult.Error("Give the bank tag."));
+                bool original = args["original"] is JsonValue flag && flag.TryGetValue(out bool value) && value;
+                if (data.ReadTag(bank, original) is not { Length: >= 0x1C } container)
+                    return Task.FromResult(McpToolResult.Error($"0x{bank:X8} is not a readable string bank."));
+                uint dataTag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(container.AsSpan(0x18));
+                if (data.ReadTag(dataTag, original) is not { } bytes)
+                    return Task.FromResult(McpToolResult.Error($"The bank's English data 0x{dataTag:X8} is missing."));
+                try
+                {
+                    var rows = SunriseStudio.Packages.StringBankWriter.Read(container, bytes);
+                    return Task.FromResult(McpToolResult.Json(new JsonObject
+                    {
+                        ["bank"] = Hex(bank), ["data"] = Hex(dataTag), ["count"] = rows.Count,
+                        ["strings"] = new JsonArray([.. rows.Select(row => (JsonNode?)new JsonObject { ["hash"] = Hex(row.Hash), ["text"] = row.Text })])
+                    }));
+                }
+                catch (Exception error) when (error is InvalidDataException or NotSupportedException or ArgumentException or IndexOutOfRangeException)
+                {
+                    return Task.FromResult(McpToolResult.Error($"0x{bank:X8} could not be read as a string bank: {error.Message}"));
+                }
             });
 
         yield return Pkg("list_tag_classes", "Every tag class (reference hash) in the installation with its tag count and Solforge's label " +

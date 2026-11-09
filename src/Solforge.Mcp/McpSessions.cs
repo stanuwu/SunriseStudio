@@ -29,6 +29,8 @@ public sealed class McpSession(string id, string client, string? version, int? p
     public string? Project { get; internal set; }
     /** A model-workflow worker (solforge-mcp --worker): WorkerSessionPolicy limits what it may call. */
     public bool IsWorker { get; internal set; }
+    /** Planner/reviewer workers receive reads only, even while editor automatic approval is enabled. */
+    public bool IsReadOnlyWorker { get; internal set; }
     /** "claude-code (pid 1234)": what people and other agents see. */
     public string Label => Pid is { } p ? $"{Client} (pid {p})" : Client;
     /** The id people can quote: the first 8 characters. */
@@ -108,13 +110,14 @@ public sealed class McpSessionRegistry(Func<DateTimeOffset>? clock = null, Func<
     public const string PidHeader = "X-Solforge-Client-Pid";
     /** The header `solforge-mcp --worker` sends at initialize; the session then follows WorkerSessionPolicy. */
     public const string WorkerHeader = "X-Solforge-Worker";
+    public const string ReadOnlyWorkerHeader = "X-Solforge-Worker-ReadOnly";
     /** JSON-RPC error code of a call refused because the editor switched projects (the shim then reconnects). */
     public const int ProjectChangedCode = -32001;
 
     /** Binds a session to a project and marks workers; called right after Register at initialize. */
-    public void Bind(McpSession session, string? project, bool worker)
+    public void Bind(McpSession session, string? project, bool worker, bool readOnly = false)
     {
-        lock (sessions) { session.Project = Normalize(project); session.IsWorker |= worker; }
+        lock (sessions) { session.Project = Normalize(project); session.IsWorker |= worker || readOnly; session.IsReadOnlyWorker |= readOnly; }
         Changed?.Invoke();
     }
 
@@ -325,7 +328,7 @@ public sealed class McpSessionRegistry(Func<DateTimeOffset>? clock = null, Func<
                 ["connectedMinutes"] = Math.Round((now - session.Started).TotalMinutes, 1),
                 ["idleSeconds"] = Math.Round((now - session.LastSeen).TotalSeconds), ["calls"] = session.Calls, ["lastTool"] = session.LastTool,
                 ["hasMap"] = held is not null && held.SessionId == session.Id,
-                ["project"] = session.Project, ["worker"] = session.IsWorker
+                ["project"] = session.Project, ["worker"] = session.IsWorker, ["readOnlyWorker"] = session.IsReadOnlyWorker
             });
         var running = new JsonArray();
         var live = Running(presence);

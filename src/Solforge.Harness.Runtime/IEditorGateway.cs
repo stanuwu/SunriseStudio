@@ -77,8 +77,8 @@ public class HostEditorGateway : IEditorGateway
     public virtual async Task<EditorGatewayReply> ReadDocumentAsync(string path, CancellationToken cancellationToken)
     {
         if (Problem() is { } problem) return EditorGatewayReply.Fail(problem);
-        if (ProjectFiles.Resolve(host.ProjectRoot, host.SdkRoots, path, host.ServerScriptsRoot) is not { } full)
-            return EditorGatewayReply.Fail("That path is outside the project, the SDK docs and the server scripts folder.");
+        if (ProjectFiles.Resolve(host.ProjectRoot, host.SdkRoots, path, host.ServerScriptsRoot, host.AllowedReadFolders) is not { } full)
+            return EditorGatewayReply.Fail("That path is outside the project, SDK docs, server scripts and enabled AI folders (including their subfolders).");
         if (CredentialGuard.IsCredentialPath(full)) return EditorGatewayReply.Fail(CredentialGuard.Refusal);
         var info = new FileInfo(full);
         if (!info.Exists) return EditorGatewayReply.Fail("No such file: " + path);

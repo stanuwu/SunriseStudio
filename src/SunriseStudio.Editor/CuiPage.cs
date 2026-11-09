@@ -284,7 +284,9 @@ public sealed partial class CuiPage : IPreparedStudioPage
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Static properties only");
         ImGui.SameLine(); UiAuto.Checkbox("Apply bindings", ref applyBindings);
         if (ImGui.IsItemHovered()) ImGui.SetTooltip($"Hide widgets whose bound visibility is false\n{bindingInputs.Count} inputs set, {bindingHidden.Count} widgets hidden");
+        EnsureScene(context, scene);
         DrawStructureToolbar(context, scene);
+        DrawSceneToolbar(context);
         var choice = scene.Nodes.FirstOrDefault(node => node.Id == selectedComposed);
         if (choice is not null)
         {
@@ -302,6 +304,7 @@ public sealed partial class CuiPage : IPreparedStudioPage
         if (choice is not null)
         {
             ImGui.TextUnformatted(StructureName(choice));
+            DrawSceneDetails(choice);
             if (choice.Limitation.Length != 0) ImGui.TextDisabled(choice.Limitation);
             if (choice.Rectangle is { } rect) ImGui.TextDisabled($"{rect.X:0.#}, {rect.Y:0.#}   {rect.Z:0.#} x {rect.W:0.#}");
             foreach (uint tag in choice.Properties.Select(property => property.Source.TagHash).Distinct())
@@ -357,21 +360,24 @@ public sealed partial class CuiPage : IPreparedStudioPage
         {
             if (node.Id == 0 || visibleNodes is not null && !visibleNodes.Contains(node.Id) || node.Rectangle is not { } rect
                 || applyBindings && bindingHidden.Contains(node.Id) || hiddenWidgetTree.Contains(node.Id)
+                || !showHiddenNodes && SceneNode(node.Id) is { Visible: false }
                 || LiveOverlay && !liveJoin.ShownOrUnknown(node.Id)) continue;
             if (preview?.ConfiguredNodeRectangles.TryGetValue(node.Id, out var configured) == true) rect = configured;
             var min = start + new Vector2(rect.X, rect.Y) * zoom;
             var max = min + new Vector2(rect.Z, rect.W) * zoom;
             if (max.X < origin.X || max.Y < origin.Y || min.X > origin.X + available.X || min.Y > origin.Y + available.Y) continue;
-            draw.AddRect(min, max, ImGui.GetColorU32(node.Id == selectedComposed ? StudioTheme.Accent : new Vector4(.4f, .5f, .6f, .7f)), 0,
-                ImDrawFlags.None, node.Id == selectedComposed ? 2 : 1);
             bool dim = LiveStale && LiveDrawn(node.Id);
             if (dim) ImGui.PushStyleVar(ImGuiStyleVar.Alpha, ImGui.GetStyle().Alpha * LiveStaleAlpha);
-            DrawContent(context, draw, min, max, ComposedContent(node.Id));
+            var sceneNode = SceneNode(node.Id);
+            var shown = ComposedContent(node.Id);
+            DrawContent(context, draw, min, max, shown, sceneNode?.Tint);
+            DrawNodeFrame(draw, min, max, sceneNode, shown, node.Id == selectedComposed);
             if (dim) ImGui.PopStyleVar();
             if (hovered && io.MousePos.X >= min.X - 3 && io.MousePos.X <= max.X + 3
                 && io.MousePos.Y >= min.Y - 3 && io.MousePos.Y <= max.Y + 3 && rect.Z * rect.W < hitArea)
             { hit = node; hitArea = rect.Z * rect.W; }
         }
+        DrawGridOverlay(draw, start);
         draw.PopClipRect();
         if (hit is not null)
         {
@@ -382,12 +388,14 @@ public sealed partial class CuiPage : IPreparedStudioPage
         ImGui.EndChild();
     }
 
-    private void DrawContent(StudioPageContext context, ImDrawListPtr draw, Vector2 min, Vector2 max, CuiWidgetContent? content)
+    private void DrawContent(StudioPageContext context, ImDrawListPtr draw, Vector2 min, Vector2 max, CuiWidgetContent? content,
+        Vector4? tint = null)
     {
         if (content is null || max.X <= min.X || max.Y <= min.Y) return;
         draw.PushClipRect(min, max, true);
         if (content.TextureTag != 0 && textures.TryGetValue(content.TextureTag, out var texture))
-            draw.AddImage(texture.ImGuiId, min, max, Vector2.Zero, Vector2.One);
+            draw.AddImage(texture.ImGuiId, min, max, Vector2.Zero, Vector2.One,
+                tint is { } color ? ImGui.ColorConvertFloat4ToU32(Vector4.Clamp(color, Vector4.Zero, Vector4.One)) : 0xFFFFFFFF);
         // Hash zero with text is a string copied from the game, which has no key to resolve.
         if (content.TextHash is not 0 and not 0x811C9DC5 || content.TextHash == 0 && content.Text.Length > 0)
         {

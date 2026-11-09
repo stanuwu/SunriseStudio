@@ -44,7 +44,7 @@ public static partial class UiMotion
     }
 
     /**
-     * Draws the 2 px Accent line of an ImGui tab bar on the active tab's top edge (the 1.2 compact tab style, the same
+     * Draws the 2 px amber underline of an ImGui tab bar under the active tab (the mockup's tab style, the same
      * line area tabs and pop-out tabs draw), its x and width sprung so it slides between tabs (about 160 ms). barId
      * names the bar; activeMin and activeMax are the active tab's screen rect (ImGui.GetItemRect* after BeginTabItem).
      * BeginTabItem has already popped the bar's clip, so the line is clipped here to the window's content columns, minus
@@ -65,8 +65,9 @@ public static partial class UiMotion
         if (activeMax.X > right - arrows - .5f || activeMin.X < left - .5f) right -= arrows;
         if (listButton) left += list;
         float x0 = MathF.Max(at.X, left), x1 = MathF.Min(at.X + at.Y, right);
-        if (x1 - x0 < 1) return;
-        draw.AddRectFilled(new(x0, activeMin.Y), new(x1, activeMin.Y + thickness), SolTheme.U32(SolTheme.Accent));
+        if (x1 - x0 < 1 || thickness <= 0) return;
+        // The mockup's active tab: an amber bar on the bottom edge with angled ends, inset 10 px from the tab's sides.
+        SolTheme.AngledUnderline(draw, x0, x1, activeMax.Y, 10);
     }
 
     /**

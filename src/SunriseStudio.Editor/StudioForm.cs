@@ -17,6 +17,9 @@ namespace SunriseStudio.Editor;
 /** The window thread owns all ImGui calls and GPU resources. */
 public sealed partial class StudioForm : Form
 {
+    /** This build is the editor-only MCP edition; assistant UI lives outside the editor and is omitted. */
+    private static readonly bool McpOnlyUi = true;
+
     private readonly StudioOptions options;
     private readonly StudioSettings settings;
     private readonly string settingsPath;
@@ -260,16 +263,43 @@ public sealed partial class StudioForm : Form
         catch (Exception error) { Failure = error.ToString(); Close(); }
     }
 
+    private long skipSinceTick;
+    private bool skipLogged, skipPolling;
+
+    /** Adopts worker results on a tick that draws nothing, and logs when such ticks last past 5 s. */
+    internal void PollWhileSkipping(string reason)
+    {
+        long now = Environment.TickCount64;
+        if (skipSinceTick == 0) { skipSinceTick = now; skipLogged = false; }
+        else if (!skipLogged && now - skipSinceTick > 5000)
+        {
+            skipLogged = true;
+            try { Console.Error.WriteLine($"[solforge] frames skipped for over 5 s ({reason}); still polling workers."); } catch { }
+        }
+        if (skipPolling) return;
+        skipPolling = true;
+        try { workspace.Poll(); }
+        catch (Exception error) { try { Console.Error.WriteLine($"[solforge] Poll while skipping frames failed: {error.Message}"); } catch { } }
+        finally { skipPolling = false; }
+    }
+
     /** Worker results are adopted before the frame; native dialogs cannot reenter rendering. */
     private void TickFrame()
     {
-        if (drawing || nativeDialog || closed || renderer is null || gui is null || viewport is null) return;
+        if (drawing || nativeDialog || closed || renderer is null || gui is null || viewport is null)
+        {
+            // Worker results (the item catalog, builds) must still be adopted while a dialog or a stuck frame holds drawing.
+            if (!closed) PollWhileSkipping(drawing ? "drawing" : nativeDialog ? "native dialog" : "renderer not ready");
+            return;
+        }
         if (WindowState == FormWindowState.Minimized)
         {
+            PollWhileSkipping("minimised");
             // Once per minimize: drop caches that only speed up later loads; the next frame looks the same.
             if (!memoryTrimmed && !workspace.IsBusy) { memoryTrimmed = true; workspace.TrimMemory(); }
             return;
         }
+        skipSinceTick = 0;
         memoryTrimmed = false;
 
         long tickNow = Environment.TickCount64;
@@ -309,7 +339,8 @@ public sealed partial class StudioForm : Form
         long profileBytes = options.ProfileFrames is null ? 0 : GC.GetAllocatedBytesForCurrentThread();
         try
         {
-            workspace.Poll();
+            skipPolling = true;
+            try { workspace.Poll(); } finally { skipPolling = false; }
             foreach (var audio in pages.Pages.OfType<AudioPage>()) audio.Update(workspace);
             if (changesOnly && projectRevision != workspace.ProjectRevision) browserDirty = true;
             projectRevision = workspace.ProjectRevision;
@@ -701,26 +732,31 @@ public sealed partial class StudioForm : Form
         finally { if (!requested) target.UseGameShaders = false; }
     }
 
-    /** The status bar's height (24 px at 100 %); the load toast sits above it. */
-    private float StatusBarHeight => MathF.Round(24 * scale);
+    /** The status bar's height (26 px at 100 %, the mockup's); the load toast sits above it. */
+    private float StatusBarHeight => MathF.Round(26 * scale);
 
     /**
-     * Area layout is local; projects keep no window or machine preferences. UE5 chrome: a 30 px menu bar (brand,
-     * menus, project name, window buttons; the caption is its empty part), a 40 px main toolbar, the areas and a
-     * 24 px status bar.
+     * Area layout is local; projects keep no window or machine preferences. The mockup's chrome: a 36 px menu bar (brand,
+     * menus, project name, window buttons; the caption is its empty part), a 40 px main toolbar, the framed areas on the
+     * dark background with a 5 px gap around them, and a 26 px status bar.
      */
     private void DrawEditor()
     {
-        float status = StatusBarHeight, menu = MathF.Round(30 * scale), toolbar = MathF.Round(40 * scale);
+        float status = StatusBarHeight, menu = MathF.Round(36 * scale), toolbar = MathF.Round(40 * scale);
         float width = ClientSize.Width, height = ClientSize.Height;
         PollOutputLog();
         chrome.Scale = scale;
         chrome.CaptionHeight = menu;
+        // The page background (--bg) shows in the gaps between the framed panels.
+        ImGui.GetBackgroundDrawList().AddRectFilled(Vector2.Zero, new(width, height), SolTheme.U32(SolTheme.Bg));
         DrawTitleBar(menu);
         DrawMainToolbar(menu, toolbar);
         float top = menu + toolbar;
-        float contentHeight = Math.Max(100, height - top - status);
-        DrawLayout(new(0, top), new(width, contentHeight));
+        float gap = MathF.Round(5 * scale);
+        float contentHeight = Math.Max(100, height - top - status - gap * 2);
+        areaFrames.Clear();
+        DrawLayout(new(gap, top + gap), new(Math.Max(100, width - gap * 2), contentHeight));
+        DrawAreaFrames();
         DrawStatus(new(0, height - status), new(width, status));
         DrawApprovalToast();
         UiAuto.SetWindow("Dialogs");
@@ -743,13 +779,15 @@ public sealed partial class StudioForm : Form
         ImGui.SetNextWindowSize(size);
         bool open = ImGui.Begin(id, PanelFlags | extra);
         UiAuto.SetWindow(id);
+        // Tiled panels stay at the back of the display order, under the panel frames, floating windows, popups and toasts.
+        SolTheme.SendToBack();
         SolTheme.PanelGradient();
         return open;
     }
 
     /**
-     * Draws a draggable splitter and reports the drag delta. The hit area stays 5 px; it draws a 1 px Border line that
-     * eases to a 2 px Accent line at 60 % while hovered or dragged (docs/UI-UE5.md §2.2).
+     * Draws a draggable splitter and reports the drag delta. The hit area stays 5 px: the gap between two framed panels
+     * (the mockup's 6 px grid gap), plain background at rest, easing to a 2 px Accent line at 60 % while hovered or dragged.
      */
     private static void Splitter(string id, Vector2 position, Vector2 size, Action<Vector2> drag)
     {
@@ -768,11 +806,11 @@ public sealed partial class StudioForm : Form
         var draw = ImGui.GetWindowDrawList();
         bool vertical = size.X < size.Y;
         float thickness = 1 + t * SolTheme.Scale;
-        var color = Vector4.Lerp(SolTheme.Border, SolTheme.Alpha(SolTheme.Accent, .6f), t);
+        var color = SolTheme.Alpha(SolTheme.Accent, .6f * t);
         var centre = position + size / 2;
         var lineMin = vertical ? new Vector2(centre.X - thickness / 2, position.Y) : new Vector2(position.X, centre.Y - thickness / 2);
         var lineMax = vertical ? new Vector2(centre.X + thickness / 2, position.Y + size.Y) : new Vector2(position.X + size.X, centre.Y + thickness / 2);
-        draw.AddRectFilled(lineMin, lineMax, SolTheme.U32(color));
+        if (t > .01f) draw.AddRectFilled(lineMin, lineMax, SolTheme.U32(color));
         ImGui.End(); ImGui.PopStyleColor(); ImGui.PopStyleVar(3);
     }
 
@@ -1035,6 +1073,7 @@ public sealed partial class StudioForm : Form
     /** A settings write that fails shows in the status line; it must not close Studio. */
     private void SaveSettings()
     {
+        RefreshAiReadFolders();
         if (options.Smoke) return;
         try { settings.Save(settingsPath); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { workspace.Error = error.Message; }

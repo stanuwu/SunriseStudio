@@ -1,6 +1,8 @@
 /**
- * File: the 30 px menu bar, row 1 of the UE5 chrome (docs/UI-UE5.md §1.3): the 16 px brand mark, the menus File to
- * Help, the project name centred in muted text and the window buttons. Its empty part is the window caption
+ * File: the 36 px menu bar, row 1 of the chrome, styled after the mockup's top bar: the brand mark and SOLFORGE wordmark,
+ * the menus File, Edit, View, Assets, Map, Mission, Build, AI and Help (upper-case Chakra Petch, tracked .08 em, a
+ * chamfered --panel-2 highlight and amber text when hovered or open), the project name centred in muted text and the
+ * window buttons. Its empty part is the window caption
  * (WindowChrome hit test). Menus that do not fit fold into a "»" menu; the toolbar row (StudioForm.Toolbar.cs) does
  * the same for its groups. The TitleGroup names stay as they were so the overflow, MCP UI automation names and the
  * layout checks still resolve.
@@ -22,11 +24,18 @@ public sealed partial class StudioForm
     {
         File, Edit, Assets, Build, View, Window, Help,
         Navigation, Project, Render, Shaders, Quality, Detail, Lighting, Settings,
-        Tools, Place, SolforgeAi
+        Tools, Place, SolforgeAi,
+        // The mockup's Map, Mission and AI menus, appended so the old values keep their numbers. Window's items now live
+        // in View (Panels, Layouts, drawer, Content editors) and AI (Solforge AI, the AI panel); the value stays unused.
+        Map, Mission, Ai
     }
 
+    /** The mockup's menu order. */
     private static readonly TitleGroup[] MenuGroups =
-        [TitleGroup.File, TitleGroup.Edit, TitleGroup.Assets, TitleGroup.Build, TitleGroup.View, TitleGroup.Window, TitleGroup.Help];
+    [
+        TitleGroup.File, TitleGroup.Edit, TitleGroup.View, TitleGroup.Assets, TitleGroup.Map, TitleGroup.Mission,
+        TitleGroup.Build, TitleGroup.Help
+    ];
     /** Row 2 order; the Solforge AI pill is drawn apart, right-aligned, and never folds. */
     private static readonly TitleGroup[] ToolGroups =
     [
@@ -47,7 +56,7 @@ public sealed partial class StudioForm
     internal IReadOnlyList<string> TitleBarOverflow => titleOverflow;
 
     /** One title bar group (or "Overflow") as last drawn, relative to its row's window: its x span, and its last item's y span. */
-    internal readonly record struct TitleRect(string Name, bool Menu, Vector2 Min, Vector2 Max);
+    internal readonly record struct TitleRect(string Name, bool Menu, Vector2 Min, Vector2 Max, float RowHeight, bool CaptionRow);
     private readonly List<TitleRect> titleRects = [];
 
     /** Where each group and the "»" buttons were last drawn. */
@@ -93,7 +102,8 @@ public sealed partial class StudioForm
         TitleBarFrameHeight = ImGui.GetFrameHeight();
         var barMin = ImGui.GetWindowPos();
         var draw = ImGui.GetWindowDrawList();
-        draw.AddLine(barMin + new Vector2(0, height - .5f), barMin + new Vector2(ClientSize.Width, height - .5f), SolTheme.U32(SolTheme.Border), 1);
+        // The mockup's soft line between the menu row and the toolbar row.
+        draw.AddLine(barMin + new Vector2(0, height - .5f), barMin + new Vector2(ClientSize.Width, height - .5f), SolTheme.U32(SolTheme.LineSoft), 1);
         float x = DrawTitleBrand(height);
         float right = ClientSize.Width - chrome.ButtonsWidth - 8 * scale;
 
@@ -105,7 +115,9 @@ public sealed partial class StudioForm
             var group = MenuGroups[i];
             float start = x;
             ImGui.SetCursorPos(new(x, textTop));
-            DrawTitleGroup(group, row, textTop);
+            menuBarRow = true;
+            try { DrawTitleGroup(group, row, textTop); }
+            finally { menuBarRow = false; }
             // On a menu bar row each item's ItemSize steps the cursor past it (and the item spacing).
             x = ImGui.GetCursorPosX();
             titleWidths[(int)group] = x - start;
@@ -162,13 +174,13 @@ public sealed partial class StudioForm
         return x;
     }
 
-    private static bool IsMenu(TitleGroup group) => group <= TitleGroup.Help;
+    private static bool IsMenu(TitleGroup group) => group <= TitleGroup.Help || group is TitleGroup.Map or TitleGroup.Mission or TitleGroup.Ai;
 
     /** Records a group from its first x to its last item, relative to its row's window, for the layout checks. */
     private void RecordTitleRect(string name, bool menu, float startX, Vector2 barMin)
     {
         Vector2 min = ImGui.GetItemRectMin() - barMin, max = ImGui.GetItemRectMax() - barMin;
-        titleRects.Add(new(name, menu, new(Math.Min(startX, min.X), min.Y), max));
+        titleRects.Add(new(name, menu, new(Math.Min(startX, min.X), min.Y), max, ImGui.GetWindowHeight(), barMin.Y < 1));
     }
 
     // Extra room before a toolbar section, with a hairline in it: navigation | tools | place | build | view controls.
@@ -176,13 +188,13 @@ public sealed partial class StudioForm
     private float TitleLead(TitleGroup group) => group is TitleGroup.Tools or TitleGroup.Place or TitleGroup.Project or TitleGroup.Render
         ? 14 * scale : 0;
 
-    /** A BorderHi hairline one control tall, centred at x between two toolbar sections. */
+    /** A Line hairline one control tall, centred at x between two toolbar sections (the mockup's .tb-group border). */
     private static void TitleDivider(float x, float row)
     {
         var origin = ImGui.GetWindowPos();
         float top = row + ImGui.GetFrameHeight() * .15f, bottom = row + ImGui.GetFrameHeight() * .85f;
         x = MathF.Round(x) + .5f;
-        ImGui.GetWindowDrawList().AddLine(origin + new Vector2(x, top), origin + new Vector2(x, bottom), SolTheme.U32(SolTheme.BorderHi), 1);
+        ImGui.GetWindowDrawList().AddLine(origin + new Vector2(x, top), origin + new Vector2(x, bottom), SolTheme.U32(SolTheme.Line), 1);
     }
 
     /** A group's width when last drawn, or a guess before its first frame on the row. */
@@ -191,7 +203,7 @@ public sealed partial class StudioForm
         float width = titleWidths[(int)group];
         if (width > 0) return width;
         var style = ImGui.GetStyle();
-        return IsMenu(group) ? ImGui.CalcTextSize(group.ToString()).X + style.ItemSpacing.X * 2 + style.FramePadding.X * 2
+        return IsMenu(group) ? SolTheme.LabelWidth(SolTheme.ButtonFont, MenuTitle(group), SolTheme.TrackButton) + style.ItemSpacing.X * 2 + style.FramePadding.X * 2
             : group is TitleGroup.Quality or TitleGroup.Lighting ? 150 * scale
             : group is TitleGroup.Tools ? (ImGui.GetFrameHeight() + style.ItemSpacing.X) * 4 + TitleLead(group)
             : group is TitleGroup.Place ? 90 * scale + TitleLead(group)
@@ -199,12 +211,15 @@ public sealed partial class StudioForm
             : ImGui.GetFrameHeight() * 2 + style.ItemSpacing.X + TitleLead(group);
     }
 
-    /** The 16 px brand mark, drawn without a clickable item so it stays part of the drag caption; its tooltip names the version. */
+    /**
+     * The brand (the mockup's .brand): the 22 px mark and the SOLFORGE wordmark in Chakra Petch 700, tracked .1 em, drawn
+     * without a clickable item so they stay part of the drag caption; the tooltip names the version.
+     */
     private float DrawTitleBrand(float height)
     {
         Vector2 origin = ImGui.GetWindowPos();
-        float x = SolTheme.Space4;
-        int mark = (int)MathF.Round(16 * scale);
+        float x = SolTheme.Space5;
+        int mark = (int)MathF.Round(22 * scale);
         if (toolbarLogo?.Width != mark && renderer is not null)
         {
             toolbarLogo?.Dispose();
@@ -215,9 +230,103 @@ public sealed partial class StudioForm
             // Whole pixels keep the 1:1 logo from being resampled again.
             ImGui.GetWindowDrawList().AddImage(logo.ImGuiId, markMin, markMin + new Vector2(mark));
         else StudioBrand.DrawMark(ImGui.GetWindowDrawList(), markMin, mark);
-        if (ImGui.IsMouseHoveringRect(markMin, markMin + new Vector2(mark)) && ImGui.IsWindowHovered())
+        float wordX = x + mark + SolTheme.Space4, wordWidth = 0;
+        bool font = SolTheme.PushFont(SolTheme.WordmarkFont);
+        // The wordmark only when the bar is wide enough to keep the menus on the row.
+        if (ClientSize.Width >= 900 * scale)
+            wordWidth = SolTheme.TrackedText(ImGui.GetWindowDrawList(), Vector2.Round(origin + new Vector2(wordX, (height - ImGui.GetTextLineHeight()) / 2)),
+                SolTheme.U32(SolTheme.TextStrong), "SOLFORGE", ImGui.GetFontSize() * SolTheme.TrackLabel);
+        if (font) ImGui.PopFont();
+        var brandMax = origin + new Vector2(wordX + wordWidth, (height + mark) / 2);
+        if (ImGui.IsMouseHoveringRect(markMin, brandMax) && ImGui.IsWindowHovered())
             ImGui.SetTooltip($"Solforge {StudioVersion.Text}\n{AboutCredit}");
-        return x + mark + SolTheme.Space4;
+        return wordX + wordWidth + (wordWidth > 0 ? SolTheme.Space5 : 0);
+    }
+
+    /** True while the menus are drawn on the bar itself (not as submenus of its "»" menu). */
+    private bool menuBarRow;
+
+    /** A menu's title as the mockup shows it on the bar. */
+    private static string MenuTitle(TitleGroup group) => group == TitleGroup.Ai ? "AI" : group.ToString();
+
+    // Labels padded with spaces so ImGui's menu item is as wide as the tracked upper-case title drawn over it, per font size.
+    private readonly Dictionary<(string, float), string> barMenuLabels = [];
+
+    /**
+     * Begins one of the bar's menus. On the bar it is drawn as the mockup's .menu-top: ImGui's menu item keeps the name
+     * (UI automation and the layout checks see "File", "Edit", ...) with its text hidden, and the upper-case Chakra Petch
+     * title, the chamfered --panel-2 fill and the amber hover/open colour are drawn over it. In the "»" menu it is a plain
+     * submenu. Either way the popup gets the mockup's chamfered menu frame and roomier rows; pair with EndBarMenu.
+     */
+    private bool BeginBarMenu(string name)
+    {
+        bool open;
+        if (!menuBarRow) open = UiAuto.BeginMenu(name);
+        else
+        {
+            var barDraw = ImGui.GetWindowDrawList();
+            float barTop = ImGui.GetWindowPos().Y;
+            bool font = SolTheme.PushFont(SolTheme.ButtonFont);
+            float tracking = ImGui.GetFontSize() * SolTheme.TrackButton;
+            string upper = name.ToUpperInvariant();
+            float titleWidth = SolTheme.TrackedWidth(upper, tracking);
+            if (!barMenuLabels.TryGetValue((name, ImGui.GetFontSize()), out string? label))
+            {
+                float space = Math.Max(1, ImGui.CalcTextSize(" ").X);
+                int pad = Math.Max(0, (int)MathF.Ceiling((titleWidth - ImGui.CalcTextSize(name).X) / space));
+                label = name + new string(' ', pad) + "##bar";
+                barMenuLabels[(name, ImGui.GetFontSize())] = label;
+            }
+            var clear = Vector4.Zero;
+            ImGui.PushStyleColor(ImGuiCol.Text, clear);
+            ImGui.PushStyleColor(ImGuiCol.Header, clear);
+            ImGui.PushStyleColor(ImGuiCol.HeaderHovered, clear);
+            ImGui.PushStyleColor(ImGuiCol.HeaderActive, clear);
+            open = UiAuto.BeginMenu(label);
+            ImGui.PopStyleColor(4);
+            // BeginMenu keeps the bar item as the last item, also when its popup opened.
+            var min = ImGui.GetItemRectMin();
+            var max = ImGui.GetItemRectMax();
+            bool hot = open || ImGui.IsItemHovered();
+            float spacing = ImGui.GetStyle().ItemSpacing.X;
+            float fillHeight = MathF.Round(28 * scale);
+            float fillTop = MathF.Round(barTop + (TitleBarHeight - fillHeight) / 2);
+            var fillMin = new Vector2(min.X - spacing * .5f, fillTop);
+            var fillMax = new Vector2(max.X + spacing * .5f, fillTop + fillHeight);
+            uint key = ImGui.GetID(label);
+            var fill = UiMotion.EaseColor(UiMotion.Mix(key, 0x3E7Bu), hot ? SolTheme.Panel2 : SolTheme.Alpha(SolTheme.Panel2, 0), 40f);
+            if (fill.W > .01f) SolTheme.ChamferFrame(barDraw, fillMin, fillMax, SolTheme.CutTiny, SolTheme.U32(fill));
+            var text = UiMotion.EaseColor(UiMotion.Mix(key, 0x3E7Cu), hot ? SolTheme.Accent : SolTheme.Text, 40f);
+            var at = Vector2.Round(new Vector2(min.X + (max.X - min.X - titleWidth) / 2, fillMin.Y + (fillHeight - ImGui.GetTextLineHeight()) / 2));
+            SolTheme.TrackedText(barDraw, at, SolTheme.U32(text), upper, tracking);
+            if (font) ImGui.PopFont();
+        }
+        if (!open) return false;
+        SolTheme.PopupShadow();
+        // The mockup's menu rows: about 28 px tall, an amber wash on the hovered row.
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(12 * scale, 9 * scale));
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, SolTheme.AccentSoft);
+        return true;
+    }
+
+    /** Ends a menu begun by BeginBarMenu. */
+    private void EndBarMenu()
+    {
+        ImGui.PopStyleColor();
+        ImGui.PopStyleVar();
+        UiAuto.EndMenu();
+    }
+
+    /** A non-interactive group caption inside a menu (the mockup's .menu-group-label: Chakra Petch 500, upper-case, --text-dim). */
+    private static void MenuCaption(string text)
+    {
+        var at = ImGui.GetCursorScreenPos();
+        bool font = SolTheme.PushFont(SolTheme.CaptionFont);
+        float height = ImGui.GetTextLineHeight();
+        SolTheme.TrackedText(ImGui.GetWindowDrawList(), Vector2.Round(at + new Vector2(0, 2 * SolTheme.Scale)), SolTheme.U32(SolTheme.Muted),
+            text.ToUpperInvariant(), ImGui.GetFontSize() * SolTheme.TrackLabel);
+        if (font) ImGui.PopFont();
+        ImGui.Dummy(new(1, height));
     }
 
     /** One group on its row; the cursor is at its start, its top at row (textTop for text). */
@@ -230,8 +339,10 @@ public sealed partial class StudioForm
             case TitleGroup.Assets: DrawAssetsMenu(); break;
             case TitleGroup.Build: DrawBuildMenu(); break;
             case TitleGroup.View: DrawViewMenu(); break;
-            case TitleGroup.Window: DrawWindowMenu(); break;
             case TitleGroup.Help: DrawHelpMenu(); break;
+            case TitleGroup.Map: DrawMapMenu(); break;
+            case TitleGroup.Mission: DrawMissionMenu(); break;
+            case TitleGroup.Ai: DrawAiMenu(); break;
             default: DrawToolbarGroup(group, row, textTop); break;
         }
     }
@@ -246,8 +357,10 @@ public sealed partial class StudioForm
             case TitleGroup.Assets: DrawAssetsMenu(); break;
             case TitleGroup.Build: DrawBuildMenu(); break;
             case TitleGroup.View: DrawViewMenu(); break;
-            case TitleGroup.Window: DrawWindowMenu(); break;
             case TitleGroup.Help: DrawHelpMenu(); break;
+            case TitleGroup.Map: DrawMapMenu(); break;
+            case TitleGroup.Mission: DrawMissionMenu(); break;
+            case TitleGroup.Ai: DrawAiMenu(); break;
             case TitleGroup.Navigation:
                 if (UiAuto.MenuItem("Back", ShortcutInput.Text(ShortcutActions.NavigateBack), false, workspace.CanNavigateBack)) NavigateBack();
                 if (UiAuto.MenuItem("Forward", ShortcutInput.Text(ShortcutActions.NavigateForward), false, workspace.CanNavigateForward))

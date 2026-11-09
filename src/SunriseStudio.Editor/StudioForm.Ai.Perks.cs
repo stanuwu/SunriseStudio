@@ -41,7 +41,18 @@ public sealed partial class StudioForm
         if (!workspace.CanEdit || workspace.Project is null || workspace.Catalog is not { } catalog) return "No project is open, or Solforge is busy.";
         try
         {
-            return tool switch { "create_perk" => AiCreatePerk(args), "clone_tags" => AiCloneTags(args), _ => AiEditPerk(catalog, args) };
+            return tool switch
+            {
+                "create_perk" => AiCreatePerk(args), "clone_tags" => AiCloneTags(args),
+                "fork_subclass_grid" => AiForkSubclassGrid(args), "set_display_icons" => AiSetDisplayIcons(args), "set_item_screen_art" => AiSetItemScreenArt(args),
+                "add_icon_row" => AiAddIconRow(args), "set_icon_container_fingerprint" => AiSetIconContainerFingerprint(args),
+                "set_subclass_element" => AiSetSubclassElement(args),
+                "add_list_presentation_rows" => AiAddListPresentationRows(args),
+                "add_talent_display_rows" => AiAddTalentDisplayRows(args),
+                "set_icon_layer_texture" => AiSetIconLayerTexture(args), "set_item_lore" => AiSetItemLore(args),
+                "fork_list_text_bank" => AiForkListTextBank(args), "set_talent_display_record" => AiSetTalentDisplayRecord(args),
+                _ => AiEditPerk(catalog, args)
+            };
         }
         catch (Exception error) when (error is InvalidDataException or InvalidOperationException or ArgumentException or KeyNotFoundException
             or FormatException or OverflowException)

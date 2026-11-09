@@ -119,7 +119,7 @@ public sealed partial class StudioForm
         StudioUi.Tip("Off pauses everything the AI can see about the scene (privacy).");
         ImGui.SameLine();
         if (UiAuto.Button("Folders...")) ImGui.OpenPopup(AiFoldersPopup);
-        StudioUi.Tip("Folders outside the project that AI clients may read");
+        StudioUi.Tip("Folders outside the project that AI clients may read, including all subfolders");
         DrawAiFoldersPopup();
         ImGui.BeginDisabled(!CanAskAi);
         if (UiAuto.Button("Ask about this")) AskAiAboutContext();
@@ -156,7 +156,7 @@ public sealed partial class StudioForm
         layoutDirty = true;
     }
 
-    /** A short confirmation (copied, saved) that fades in above the status bar for 3 seconds. */
+    /** A short confirmation (copied, saved) that fades in at the bottom right, above the status bar, for 3 seconds. */
     private void ShowInfoToast(string text) => infoToast = (text, clock.Elapsed.TotalSeconds + 3);
 
     /** Draws the info toast; never takes focus. */
@@ -165,16 +165,17 @@ public sealed partial class StudioForm
         bool visible = clock.Elapsed.TotalSeconds < infoToast.Until;
         var (alpha, rise) = UiMotion.Toast(0x1F0_70A5u, visible);
         if (alpha <= .01f || infoToast.Text.Length == 0) return;
-        ImGui.SetNextWindowPos(new(ClientSize.Width / 2f, ClientSize.Height - StatusBarHeight - SolTheme.Space5 + rise), ImGuiCond.Always, new(.5f, 1));
+        // The mockup's toast stack: bottom right, 12 px in, above the status bar.
+        ImGui.SetNextWindowPos(new(ClientSize.Width - SolTheme.Space5, ClientSize.Height - StatusBarHeight - SolTheme.Space5 + rise), ImGuiCond.Always, Vector2.One);
         ImGui.PushStyleVar(ImGuiStyleVar.Alpha, alpha * ImGui.GetStyle().Alpha);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(SolTheme.Space5, SolTheme.Space3));
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 4 * scale);
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, SolTheme.Popup);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(18 * scale, 9 * scale));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0f);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, SolTheme.ToastFill);
         const ImGuiWindowFlags flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings
             | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoInputs;
         if (ImGui.Begin("##info-toast", flags))
         {
-            SolTheme.PopupShadow();
+            SolTheme.ToastFrame();
             ImGui.TextColored(SolTheme.TextStrong, infoToast.Text);
         }
         ImGui.End();

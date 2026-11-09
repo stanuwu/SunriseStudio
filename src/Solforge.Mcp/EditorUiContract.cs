@@ -145,7 +145,8 @@ public sealed record EditorFoundFolderDto(string Path, bool Shown);
 public sealed record EditorAddedFolderDto(string Path, bool Exists);
 
 /** GET /editor/folders. */
-public sealed record EditorFoldersDto(string? Project, IReadOnlyList<EditorFoundFolderDto> Found, IReadOnlyList<EditorAddedFolderDto> Added);
+public sealed record EditorFoldersDto(string? Project, IReadOnlyList<EditorFoundFolderDto> Found, IReadOnlyList<EditorAddedFolderDto> Added,
+    bool IncludesSubfolders = true);
 
 /** POST /editor/folders: op add or remove (added folders), hide or show (found folders). */
 public sealed record EditorFolderOpBody(string Op, string Path);

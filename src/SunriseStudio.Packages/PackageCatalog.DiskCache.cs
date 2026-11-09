@@ -30,12 +30,16 @@ public sealed partial class PackageCatalog
 
     /** Overlay bytes and changed open package tables never share an installed-data snapshot. */
     public string? CreateCacheIdentity(string schema, IEnumerable<string>? additionalFiles = null,
-        CancellationToken token = default)
-        => HasOverlay ? null : CreateOriginalCacheIdentity(schema, additionalFiles, token);
+        CancellationToken token = default, bool codeVersioned = true)
+        => HasOverlay ? null : CreateOriginalCacheIdentity(schema, additionalFiles, token, codeVersioned);
 
-    /** This identity is only for data read through ReadOriginal; overlays never enter its cache. */
+    /**
+     * This identity is only for data read through ReadOriginal; overlays never enter its cache. With @param codeVersioned
+     * false the reader assembly's build id is left out: the caller's @param schema must then carry an explicit version that
+     * is bumped whenever the cached data's meaning changes (a rebuilt Solforge with unchanged rules keeps the snapshot).
+     */
     public string? CreateOriginalCacheIdentity(string schema, IEnumerable<string>? additionalFiles = null,
-        CancellationToken token = default)
+        CancellationToken token = default, bool codeVersioned = true)
     {
         if (!DiskCache.Enabled || openedPackageIdentity is null) return null;
         try
@@ -46,7 +50,8 @@ public sealed partial class PackageCatalog
             var sources = new[] { keys }.Append(Path.Combine(GameRoot, "bin", "x64", "oo2core_3_win64.dll"))
                 .Concat(additionalFiles ?? []);
             string dependencies = CacheFileIdentity.Compute(sources, token);
-            string identity = $"{schema}\n{typeof(PackageCatalog).Module.ModuleVersionId}\n"
+            string code = codeVersioned ? typeof(PackageCatalog).Module.ModuleVersionId.ToString() : "explicit";
+            string identity = $"{schema}\n{code}\n"
                 + $"{GameRoot.ToUpperInvariant()}\n{openedPackageIdentity}\n{dependencies}";
             return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
         }

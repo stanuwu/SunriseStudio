@@ -25,8 +25,8 @@ public sealed partial class StudioForm
         (TransformTool.Scale, StudioIcon.Scale, "Scale (the game stores one uniform scale)")
     ];
 
-    /** The pill's size at 100 %: about 132 px wide, one 26 px control tall, its chevron part 22 px. */
-    private const float PillWidth = 132, PillHeight = 26, PillChevron = 22;
+    /** The Solforge AI button's size at 100 %: 156 px wide, one 26 px control tall, its chevron part 22 px. */
+    private const float PillWidth = 156, PillHeight = 26, PillChevron = 22;
 
     /** Row 2: the toolbar groups that fit, a "»" for the rest, and the Solforge AI pill at the right end. */
     private void DrawMainToolbar(float top, float height)
@@ -43,7 +43,7 @@ public sealed partial class StudioForm
         draw.AddLine(barMin + new Vector2(0, height - .5f), barMin + new Vector2(ClientSize.Width, height - .5f), SolTheme.U32(SolTheme.Border), 1);
         float row = MathF.Round((height - ImGui.GetFrameHeight()) / 2);
         float textTop = row + style.FramePadding.Y;
-        float pill = MathF.Round(PillWidth * scale);
+        float pill = McpOnlyUi ? 0 : MathF.Round(PillWidth * scale);
         float right = ClientSize.Width - pill - SolTheme.Space6 - SolTheme.Space4;
         float x = SolTheme.Space4;
         float overflowWidth = ImGui.CalcTextSize("»").X + style.FramePadding.X * 2 + style.ItemSpacing.X;
@@ -62,10 +62,13 @@ public sealed partial class StudioForm
             RecordTitleRect(group.ToString(), false, start + TitleLead(group), barMin);
         }
         if (fit < ToolGroups.Length) DrawOverflowButton("toolbar-overflow", ToolGroups, fit, x, row, barMin, height);
-        ImGui.SetCursorPos(new(ClientSize.Width - pill - SolTheme.Space4, MathF.Round((height - PillHeight * scale) / 2)));
-        DrawSolforgeAiPill();
-        titleReachable.Add(TitleGroup.SolforgeAi.ToString());
-        RecordTitleRect(TitleGroup.SolforgeAi.ToString(), false, ClientSize.Width - pill - SolTheme.Space4, barMin);
+        if (!McpOnlyUi)
+        {
+            ImGui.SetCursorPos(new(ClientSize.Width - pill - SolTheme.Space4, MathF.Round((height - PillHeight * scale) / 2)));
+            DrawSolforgeAiPill();
+            titleReachable.Add(TitleGroup.SolforgeAi.ToString());
+            RecordTitleRect(TitleGroup.SolforgeAi.ToString(), false, ClientSize.Width - pill - SolTheme.Space4, barMin);
+        }
         ImGui.End();
         ImGui.PopStyleVar(2);
     }
@@ -183,7 +186,6 @@ public sealed partial class StudioForm
         float width = MathF.Round(PillWidth * scale), height = MathF.Round(PillHeight * scale), chevron = MathF.Round(PillChevron * scale);
         var min = ImGui.GetCursorScreenPos();
         var max = min + new Vector2(width, height);
-        float radius = height / 2;
         UiAuto.PushBlocked();
         try
         {
@@ -208,21 +210,31 @@ public sealed partial class StudioForm
             bool chevronHovered = ImGui.IsItemHovered();
             if (chevronHovered) ImGui.SetTooltip("Solforge AI options");
 
-            // Fills ease between rest, hover and pressed; the whole pill is one rounded shape split by a hairline.
-            var mainFill = UiMotion.EaseColor(mainId, !pill.Enabled ? SolTheme.Surface : mainHeld ? SolTheme.Pressed : mainHovered ? SolTheme.Hover : SolTheme.Surface, 35f);
-            var chevronFill = UiMotion.EaseColor(chevronId, chevronHovered ? SolTheme.Hover : SolTheme.Surface, 35f);
-            draw.AddRectFilled(min, new(max.X - chevron, max.Y), SolTheme.U32(mainFill), radius, ImDrawFlags.RoundCornersLeft);
-            draw.AddRectFilled(new(max.X - chevron, min.Y), max, SolTheme.U32(chevronFill), radius, ImDrawFlags.RoundCornersRight);
-            draw.AddRect(min, max, SolTheme.U32(pill.State == SolforgeAiState.Running && pill.BackendReady ? SolTheme.Alpha(SolTheme.Brand, .55f) : SolTheme.BorderHi),
-                radius, ImDrawFlags.None, 1);
-            draw.AddLine(new(max.X - chevron, min.Y + 5 * scale), new(max.X - chevron, max.Y - 5 * scale), SolTheme.U32(SolTheme.BorderHi), 1);
+            // The mockup's .tb-btn: one chamfered outline split by a hairline; the fill eases to the amber wash on hover
+            // and press, and the frame turns amber when hovered or when Solforge AI runs with its backend ready.
+            var mainFill = UiMotion.EaseColor(mainId, !pill.Enabled ? SolTheme.Surface : mainHeld ? SolTheme.Pressed : mainHovered ? SolTheme.AccentSoft : SolTheme.Surface, 35f);
+            var chevronFill = UiMotion.EaseColor(chevronId, chevronHovered ? SolTheme.AccentSoft : SolTheme.Surface, 35f);
+            bool lit = mainHovered || chevronHovered || pill.State == SolforgeAiState.Running && pill.BackendReady;
+            draw.PushClipRect(min, new(max.X - chevron, max.Y), true);
+            SolTheme.ChamferFrame(draw, min, max, SolTheme.CutTiny, SolTheme.U32(mainFill));
+            draw.PopClipRect();
+            draw.PushClipRect(new(max.X - chevron, min.Y), max, true);
+            SolTheme.ChamferFrame(draw, min, max, SolTheme.CutTiny, SolTheme.U32(chevronFill));
+            draw.PopClipRect();
+            SolTheme.ChamferFrame(draw, min, max, SolTheme.CutTiny, 0, SolTheme.U32(lit ? SolTheme.Accent : SolTheme.LineStrong));
+            draw.AddLine(new(max.X - chevron, min.Y + 5 * scale), new(max.X - chevron, max.Y - 5 * scale), SolTheme.U32(SolTheme.LineStrong), 1);
             float icon = MathF.Round(14 * scale);
-            var iconAt = new Vector2(min.X + 10 * scale, min.Y + (height - icon) / 2);
+            var iconAt = Vector2.Round(new Vector2(min.X + 10 * scale, min.Y + (height - icon) / 2));
             ImGuiIcons.Draw(draw, StudioIcon.Sparkle, iconAt, icon, SolTheme.U32(pill.Enabled ? SolTheme.Brand : SolTheme.Alpha(SolTheme.Brand, .5f)));
+            var textAt = Vector2.Round(new Vector2(iconAt.X + icon + 7 * scale, min.Y + (height - ImGui.GetTextLineHeight()) / 2));
+            // Upper-case Chakra Petch, tracked .08 em, clipped before the status dot.
+            draw.PushClipRect(textAt - new Vector2(0, 2 * scale), new(max.X - chevron - 16 * scale, max.Y), true);
             bool font = SolTheme.PushFont(SolTheme.ButtonFont);
-            var textAt = new Vector2(iconAt.X + icon + 6 * scale, min.Y + (height - ImGui.GetTextLineHeight()) / 2);
-            draw.AddText(textAt, SolTheme.U32(pill.Enabled ? SolTheme.TextStrong : SolTheme.Muted), pill.Label);
+            float labelTop = MathF.Round(min.Y + (height - ImGui.GetTextLineHeight()) / 2);
+            SolTheme.TrackedText(draw, new(textAt.X, labelTop), SolTheme.U32(pill.Enabled ? SolTheme.TextStrong : SolTheme.Muted),
+                pill.Label.ToUpperInvariant(), ImGui.GetFontSize() * SolTheme.TrackButton);
             if (font) ImGui.PopFont();
+            draw.PopClipRect();
             var dotCentre = new Vector2(max.X - chevron - 10 * scale, min.Y + height / 2);
             UiMotion.Dot(draw, dotCentre, 3.5f * scale, mainId, SolforgeAiDot(pill.State, pill.BackendReady), pill.Pulsing,
                 hollow: pill.State == SolforgeAiState.NotFound);
@@ -303,11 +315,11 @@ public sealed partial class StudioForm
         ImGui.SetNextWindowPos(new(ClientSize.Width - SolTheme.Space4, top - rise), ImGuiCond.Always, new(1, 0));
         ImGui.SetNextWindowSizeConstraints(new(220 * scale, 0), new(420 * scale, 400 * scale));
         ImGui.PushStyleVar(ImGuiStyleVar.Alpha, alpha * ImGui.GetStyle().Alpha);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(SolTheme.Space5, SolTheme.Space4));
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 4 * scale);
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1f);
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, SolTheme.Popup);
-        ImGui.PushStyleColor(ImGuiCol.Border, SolTheme.Alpha(SolTheme.Warn, .6f));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(18 * scale, SolTheme.Space4));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, SolTheme.ToastFill);
+        ImGui.PushStyleColor(ImGuiCol.Border, SolTheme.Accent);
         const ImGuiWindowFlags flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings
             | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.AlwaysAutoResize;
         UiAuto.PushBlocked();
@@ -315,26 +327,24 @@ public sealed partial class StudioForm
         {
             if (ImGui.Begin("##approval-toast", flags))
             {
-                SolTheme.PopupShadow();
+                // The mockup's toast: chamfered, amber frame.
+                SolTheme.ToastFrame();
                 var draw = ImGui.GetWindowDrawList();
                 float icon = ImGui.GetTextLineHeight();
                 ImGuiIcons.Draw(draw, StudioIcon.Sparkle, ImGui.GetCursorScreenPos(), icon, SolTheme.U32(SolTheme.Brand));
                 ImGui.Dummy(new(icon));
                 ImGui.SameLine();
-                ImGui.TextColored(SolTheme.TextStrong, "Solforge AI wants to:");
+                ImGui.TextColored(SolTheme.TextStrong, "MCP action needs approval:");
                 if (count > 1) { ImGui.SameLine(); ImGui.TextColored(SolTheme.Warn, $"(+{count - 1} more)"); }
                 ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + 380 * scale);
                 ImGui.TextWrapped($"{shown.Tool}: {shown.Summary}");
                 ImGui.PopTextWrapPos();
                 // The buttons stay (disabled) through the fade-out, so the auto-sized toast does not snap shorter.
-                // Approve and Deny answer the request here (SOLFORGE-AI-APP-SPEC §6.6), so it never waits unseen when Solforge AI
-                // is closed; Solforge AI may answer it too, and whichever side answers first wins.
+                // Approve and Deny answer the request here, so MCP actions remain usable without an assistant interface.
                 ImGui.BeginDisabled(!visible);
                 if (SolTheme.PrimaryButton("Approve##approval-toast") && visible) Answer(shown, true);
                 ImGui.SameLine();
                 if (UiAuto.Button("Deny##approval-toast") && visible) Answer(shown, false);
-                ImGui.SameLine();
-                if (UiAuto.Button("Review##approval-toast") && visible) OpenAiWorkspace();
                 ImGui.SameLine();
                 if (UiAuto.Button("Dismiss##approval-toast") && visible) approvalToastDismissed = newest;
                 ImGui.EndDisabled();

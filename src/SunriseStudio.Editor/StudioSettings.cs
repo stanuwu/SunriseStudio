@@ -91,8 +91,6 @@ public sealed partial class StudioSettings
     public int AiAutomaticMaxNudges { get; set; } = 50;
     public int AiAutomaticMaxMinutes { get; set; } = 240;
     public int AiAutomaticIdleSeconds { get; set; } = 45;
-    /** AI workspace: Claude Code also gets the ask_clinepass tool (solforge-mcp --clinepass) when cline is installed. */
-    public bool AiAskClinePass { get; set; }
     /** AI workspace: the provider preset per engine command (claude, cline); never holds keys or tokens. */
     public Dictionary<string, Solforge.Mcp.EngineProviders.Choice> AiProviders { get; set; } = [];
     /** The AI panel was docked once by default; never added again, so closing it stays closed. */

@@ -54,22 +54,22 @@ static class McpSetChecks
                     }
                 }
             },
-            ["mcpServers"] = new JsonObject { ["sol-testkit"] = new JsonObject { ["command"] = "loses.exe" }, ["mine"] = new JsonObject { ["command"] = "m.exe" } }
+            ["mcpServers"] = new JsonObject { ["sol-testkit"] = new JsonObject { ["command"] = "loses.exe" }, ["mine"] = new JsonObject { ["command"] = tiger } }
         }.ToJsonString());
 
         var servers = SolMcpServers.Collect(project, shim, gemini: true, clinePass: true, home);
-        Expect(servers.Select(server => server.Name).SequenceEqual(["solforge", "gemini", "clinepass", "tiger-mcp", "sol-testkit"]),
+        Expect(servers.Select(server => server.Name).SequenceEqual(["solforge", "tiger-mcp", "sol-testkit", "mine"]),
             "collected: " + string.Join(", ", servers.Select(server => server.Name)));
-        Expect(servers.Take(3).All(server => server.Owned && server.Command == shim) && servers.Skip(3).All(server => !server.Owned), "owned");
-        Expect(servers[0].Args.SequenceEqual(["--project", project]) && servers[1].Args.SequenceEqual(["--gemini"]), "shim args");
-        Expect(servers[4].Command == "py" && servers[4].Env["SOL_PAD_PORT"]?.ToString() == "48811", "testkit from .claude.json project entry");
+        Expect(servers.Take(1).All(server => server.Owned && server.Command == shim) && servers.Skip(1).All(server => !server.Owned), "owned");
+        Expect(servers[0].Args.SequenceEqual(["--project", project]), "shim args");
+        Expect(servers[2].Command == "py" && servers[2].Env["SOL_PAD_PORT"]?.ToString() == "48811", "testkit from .claude.json project entry");
         var bare = SolMcpServers.Collect(project, shim, gemini: false, clinePass: false, home);
-        Expect(bare.Select(server => server.Name).SequenceEqual(["solforge", "tiger-mcp", "sol-testkit"]), "no gemini or clinepass unless asked");
+        Expect(bare.Select(server => server.Name).SequenceEqual(["solforge", "tiger-mcp", "sol-testkit", "mine"]), "no gemini or clinepass unless asked");
 
         // An engine never gets its own delegate.
         Expect(!SolMcpServers.For(SolMcpServers.Engine.Agy, servers).Any(server => server.Name == "gemini"), "agy without gemini");
         Expect(!SolMcpServers.For(SolMcpServers.Engine.Cline, servers).Any(server => server.Name == "clinepass"), "cline without clinepass");
-        Expect(SolMcpServers.For(SolMcpServers.Engine.Claude, servers).Count() == 5, "claude gets all");
+        Expect(SolMcpServers.For(SolMcpServers.Engine.Claude, servers).Count() == 4, "claude gets all");
 
         // Claude's --mcp-config holds one aggregate, whose local upstream list carries the whole set.
         var claude = SolMcpServers.ClaudeConfig(servers)["mcpServers"]!.AsObject();
@@ -84,7 +84,7 @@ static class McpSetChecks
             && upstreams.All(node => node?["name"]?.ToString() != "sol"), "local upstream list");
         string folder = Path.Combine(scratch, "claude-files");
         var files = EngineLaunch.WriteClaudeFiles(project, shim, folder, servers: servers);
-        Expect(files.Gemini && files.ClinePass && JsonNode.DeepEquals(JsonNode.Parse(File.ReadAllText(files.McpConfig)), SolMcpServers.ClaudeConfig(servers)),
+        Expect(!files.Gemini && !files.ClinePass && JsonNode.DeepEquals(JsonNode.Parse(File.ReadAllText(files.McpConfig)), SolMcpServers.ClaudeConfig(servers)),
             "claude files from the set");
         var plain = EngineLaunch.WriteClaudeFiles(project, shim, folder, servers: bare);
         Expect(!plain.Gemini && !plain.ClinePass && !EngineLaunch.ClaudeArguments(plain, []).Contains("ask_gemini"), "flags follow the set");
@@ -180,7 +180,7 @@ static class McpSetChecks
         File.Delete(script);
         File.Delete(shim);
         var problems = SolMcpServers.CheckFiles(servers, Path.Combine(scratch, "nothing"), ".EXE");
-        Expect(problems.Count(line => line.StartsWith("solforge: ") || line.StartsWith("gemini: ") || line.StartsWith("clinepass: ")) == 3
+        Expect(problems.Count(line => line.StartsWith("solforge: ") || line.StartsWith("gemini: ") || line.StartsWith("clinepass: ")) == 1
             && problems.Any(line => line.StartsWith("sol-testkit: py not found")) && problems.Any(line => line.StartsWith("sol-testkit: " + script)),
             "problems: " + string.Join(" | ", problems));
 
@@ -209,8 +209,54 @@ static class McpSetChecks
         }
         Expect(Directory.GetFiles(runs, "solforge-mcp-*.exe").Length <= 3 && Directory.GetFiles(runs, "*.tmp").Length == 0, "old copies pruned");
 
-        // Initialize probe: the real shim's gemini server answers; a missing command and an early exit are reported.
-        Expect(await SolMcpServers.Probe("dotnet", [shimDll, "--gemini"], TimeSpan.FromSeconds(60)) is null, "shim answers initialize");
+        // ~/.claude.json entries on an older run copy follow the current one (user `sol`, project entries); others stay.
+        string home4 = Path.Combine(scratch, "home4");
+        Directory.CreateDirectory(home4);
+        string claude4 = Path.Combine(home4, ".claude.json");
+        string current = Path.Combine(runs, "solforge-mcp-new0000001.exe"), old = Path.Combine(runs, "solforge-mcp-old0000001.exe");
+        File.WriteAllText(claude4, new JsonObject
+        {
+            ["mcpServers"] = new JsonObject
+            {
+                ["sol"] = new JsonObject { ["command"] = old, ["args"] = new JsonArray("--sol") },
+                ["rea"] = new JsonObject { ["command"] = "cmd.exe" },
+                ["elsewhere"] = new JsonObject { ["command"] = @"C:\other\solforge-mcp-old0000001.exe" }
+            },
+            ["projects"] = new JsonObject { ["C:/p"] = new JsonObject { ["mcpServers"] = new JsonObject { ["sol"] = new JsonObject { ["command"] = old } } } },
+            ["keep"] = 7
+        }.ToJsonString());
+        Expect(StandaloneRegistration.RefreshRunCopies(current, claude4) == 2, "two stale run-copy entries re-pointed");
+        var root4 = JsonNode.Parse(File.ReadAllText(claude4))!;
+        Expect(root4["mcpServers"]?["sol"]?["command"]?.ToString() == current && root4["mcpServers"]?["sol"]?["args"]?[0]?.ToString() == "--sol"
+            && root4["projects"]?["C:/p"]?["mcpServers"]?["sol"]?["command"]?.ToString() == current
+            && root4["mcpServers"]?["rea"]?["command"]?.ToString() == "cmd.exe"
+            && root4["mcpServers"]?["elsewhere"]?["command"]?.ToString() == @"C:\other\solforge-mcp-old0000001.exe"
+            && root4["keep"]?.GetValue<int>() == 7, "run-copy refresh: " + root4.ToJsonString());
+        Expect(StandaloneRegistration.RefreshRunCopies(current, claude4) == 0, "run-copy refresh is idempotent");
+
+        // Upstream skips: a nested aggregate and a missing entry script are not started; a missing data file is.
+        Expect(SolMcpServers.SkipReason("solforge-standalone", current, ["--sol", "--upstreams", "x.json"]) is not null, "nested aggregate skipped");
+        Expect(SolMcpServers.SkipReason("solforge", current, ["--project", "p"]) is null, "solforge itself kept");
+        Expect(SolMcpServers.SkipReason("destiny-modder", "node", [Path.Combine(scratch, "gone", "index.ts")]) is not null, "missing script skipped");
+        Expect(SolMcpServers.SkipReason("graphify", "py", ["--graph", Path.Combine(scratch, "gone", "graph.json")]) is null, "missing data file still starts");
+        Expect(SolMcpServers.SkipReason("x", Path.Combine(scratch, "gone", "x.exe"), []) is not null, "missing command skipped");
+        Expect(SolMcpServers.IsNestedAggregate(new SolMcpServers.Server("solforge-standalone", current, ["--sol"], new JsonObject(), false, "t")), "nested aggregate detected");
+
+        // npx pins resolve to an installed copy of that exact version only.
+        string npxRoot = Path.Combine(scratch, "npx", "abc"), pkg = Path.Combine(npxRoot, "node_modules", "rea-agents");
+        Directory.CreateDirectory(Path.Combine(pkg, "scripts"));
+        File.WriteAllText(Path.Combine(pkg, "scripts", "rea.mjs"), "");
+        File.WriteAllText(Path.Combine(pkg, "package.json"), "{\"name\":\"rea-agents\",\"version\":\"6.7.0\",\"bin\":{\"rea\":\"scripts/rea.mjs\",\"rea-agents\":\"scripts/rea.mjs\"}}");
+        var npx = NpxLocal.Resolve("cmd.exe", ["/d", "/c", "npx", "-y", "rea-agents@6.7.0", "mcp"], [npxRoot]);
+        Expect(npx is { } found && found.Command == "node" && found.Args.SequenceEqual([Path.Combine(pkg, "scripts", "rea.mjs"), "mcp"]),
+            "npx pin resolved: " + (npx is null ? "null" : npx.Value.Command + " " + string.Join(" ", npx.Value.Args)));
+        Expect(NpxLocal.Resolve("npx", ["-y", "rea-agents@6.7.0", "mcp"], [npxRoot]) is not null, "plain npx resolved");
+        Expect(NpxLocal.Resolve("cmd.exe", ["/d", "/c", "npx", "-y", "rea-agents@6.8.0", "mcp"], [npxRoot]) is null, "other version not resolved");
+        Expect(NpxLocal.Resolve("cmd.exe", ["/d", "/c", "npx", "-y", "rea-agents@latest", "mcp"], [npxRoot]) is null, "latest not resolved");
+        Expect(NpxLocal.Resolve("node", ["x.js"], [npxRoot]) is null, "non-npx untouched");
+
+        // Initialize probe: the real headless shim answers; a missing command and an early exit are reported.
+        Expect(await SolMcpServers.Probe("dotnet", [shimDll], TimeSpan.FromSeconds(60)) is null, "shim answers initialize");
         Expect((await SolMcpServers.Probe(Path.Combine(scratch, "nothing.exe"), [], TimeSpan.FromSeconds(5)))?.StartsWith("could not start") == true, "missing command");
         Expect(await SolMcpServers.Probe("cmd.exe", ["/d", "/c", "exit"], TimeSpan.FromSeconds(10)) == "exited without answering initialize", "early exit");
 
@@ -244,6 +290,12 @@ static class McpSetChecks
                                          "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}]}
                 elif method == "tools/call":
                     text = request.get("params", {}).get("arguments", {}).get("text", "")
+                    if text == "crash":
+                        with open(os.path.join(os.path.dirname(__file__), name + ".actions"), "a") as actions:
+                            actions.write("executed\n")
+                        os._exit(42)
+                    if text == "pid":
+                        text = str(os.getpid())
                     result = {"content": [{"type": "text", "text": name + ":" + text}], "isError": False}
                 elif method == "resources/list":
                     result = {"resources": [{"uri": "fake://resource", "name": "resource", "mimeType": "text/plain"}]}
@@ -340,6 +392,23 @@ static class McpSetChecks
                 ["name"] = "fake_greet", ["arguments"] = new JsonObject { ["who"] = "Ada" }
             });
             Expect(prompt["messages"]?[0]?["content"]?["text"]?.ToString() == "fake:Ada", "aggregate prompt get: " + prompt.ToJsonString());
+            var pidReply = await Call(11, "tools/call", new JsonObject { ["name"] = "fake_echo", ["arguments"] = new JsonObject { ["text"] = "pid" } });
+            int upstreamPid = int.Parse(pidReply["content"]![0]!["text"]!.ToString()[5..]);
+            using (var ownedUpstream = Process.GetProcessById(upstreamPid))
+            {
+                ownedUpstream.Kill(true);
+                await ownedUpstream.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            var reconnected = await Call(12, "tools/call", new JsonObject { ["name"] = "fake_echo", ["arguments"] = new JsonObject { ["text"] = "pid" } });
+            Expect(reconnected["isError"]?.GetValue<bool>() != true && reconnected["content"]![0]!["text"]!.ToString() != "fake:" + upstreamPid,
+                "a dead upstream reconnects before the next request");
+            var interrupted = await Call(13, "tools/call", new JsonObject { ["name"] = "fake_echo", ["arguments"] = new JsonObject { ["text"] = "crash" } });
+            Expect(interrupted["isError"]?.GetValue<bool>() == true && interrupted["content"]![0]!["text"]!.ToString().Contains("not replayed", StringComparison.Ordinal),
+                "interrupted action reports uncertain outcome without replay");
+            var recovered = await Call(14, "tools/call", new JsonObject { ["name"] = "fake_echo", ["arguments"] = new JsonObject { ["text"] = "recovered" } });
+            Expect(recovered["content"]![0]!["text"]!.ToString() == "fake:recovered"
+                && File.ReadAllLines(Path.Combine(folder, "fake.actions")).Length == 1,
+                "the next call reconnects and the interrupted action ran only once");
         }
         finally
         {

@@ -5,55 +5,102 @@ using ImGuiNET;
 namespace SunriseStudio.Viewport;
 
 /**
- * Sol design language, UE5 edition (docs/UI-UE5.md §2): the token set, the bundled Chakra Petch / Inter faces and
- * the draw helpers built on them. Pages take colours from here instead of writing their own. The token names from
- * the Sol website palette are kept so every call site compiles; their values are the UE5 editor greys and blue
- * accent. The token table lives in SolTheme.Tokens.cs.
+ * Solforge design language, after the HTML mockup (solforge ui mockup html): the token set (SolTheme.Tokens.cs), the
+ * faces (system UI body, Chakra Petch labels and buttons, Consolas code) and the draw helpers: chamfered frames and
+ * fills (14/8/5 px cuts), framed panels, the amber angled underline of the active tab, upper-case tracked labels and
+ * chamfered dialogs, popups and toasts. Pages take colours from here instead of writing their own.
  */
 public static unsafe partial class SolTheme
 {
     /** The DPI scale from the last Apply. */
     public static float Scale { get; private set; } = 1;
-    /** Inter 600 at body size: panel section headings, emphasised labels and mode buttons. */
+    /** Body semibold (Segoe UI Semibold) at body size: section headings, emphasised labels, mode buttons. */
     public static ImFontPtr HeadingFont { get; private set; }
-    /** Inter 600 at button size: primary and secondary buttons. */
+    /** Chakra Petch 600 at button size: buttons and the menu bar titles (drawn upper-case, tracked). */
     public static ImFontPtr ButtonFont { get; private set; }
-    /** Inter 600 at label size: tabs, small upper-case section headers. */
+    /** Chakra Petch 600 at label size: tabs, panel titles and small upper-case section headers. */
     public static ImFontPtr LabelFont { get; private set; }
+    /** Chakra Petch 500 at 11 px: menu group captions. */
+    public static ImFontPtr CaptionFont { get; private set; }
     /** Chakra Petch 600 at title size: start screen and dialog titles. */
     public static ImFontPtr TitleFont { get; private set; }
     /** Chakra Petch 700 at title size: the SOLFORGE wordmark and the loading card. */
     public static ImFontPtr BrandFont { get; private set; }
-    /** Inter 600 at body size: emphasised body text. */
+    /** Chakra Petch 700 at 15 px: the wordmark in the menu bar. */
+    public static ImFontPtr WordmarkFont { get; private set; }
+    /** Body semibold at body size: emphasised body text. */
     public static ImFontPtr StrongFont { get; private set; }
 
-    private static readonly string[] FaceNames = ["Inter-Regular", "Inter-SemiBold", "ChakraPetch-SemiBold", "ChakraPetch-Bold"];
-    // Native copies of the embedded faces. The atlas reads them on every rebuild and never frees them.
+    // Embedded faces (Assets/Fonts, SIL OFL 1.1). Inter is the body fallback when the system UI face is missing.
+    private static readonly string[] FaceNames =
+        ["Inter-Regular", "Inter-SemiBold", "ChakraPetch-SemiBold", "ChakraPetch-Bold", "ChakraPetch-Medium"];
+    // The system UI faces (Windows ships them; they are read at run time, never redistributed).
+    private static readonly string[] SystemFaces = ["segoeui.ttf", "seguisb.ttf"];
+    // Native copies of the faces. The atlas reads them on every rebuild and never frees them.
     private static (IntPtr Data, int Length)[]? faces;
+    private static (IntPtr Data, int Length)?[]? systemFaces;
     private static bool facesTried;
     private static readonly string[] Glyphs = Enumerable.Range(0, 128).Select(code => ((char)code).ToString()).ToArray();
 
+    /**
+     * Body glyph ranges: Latin through Latin Extended-B, general punctuation (dashes, ellipsis, bullets), arrows, the math
+     * minus and the geometric shapes, so "…", "→" and "•" draw instead of "?". Lives for the process (the atlas keeps it).
+     */
+    private static readonly ushort* BodyRanges = MakeRanges([0x0020, 0x024F, 0x2000, 0x206F, 0x20AC, 0x20AC, 0x2190, 0x21FF, 0x2212, 0x2212, 0x25A0, 0x25FF, 0x2713, 0x2713]);
+
+    private static ushort* MakeRanges(ReadOnlySpan<ushort> pairs)
+    {
+        var ranges = (ushort*)NativeMemory.AllocZeroed((nuint)(pairs.Length + 1), sizeof(ushort));
+        pairs.CopyTo(new Span<ushort>(ranges, pairs.Length));
+        return ranges;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct Vertex { public Vector2 Position; public Vector2 Uv; public uint Color; }
+
+    // ImGui internals (exported by cimgui, which ImGui.NET ships): the current window and its display order.
+    [DllImport("cimgui", CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr igGetCurrentWindow();
+    [DllImport("cimgui", CallingConvention = CallingConvention.Cdecl)] private static extern void igBringWindowToDisplayBack(IntPtr window);
+    private static bool internalsMissing;
+
+    /**
+     * Moves the current window to the back of the display order without focusing it. Tiled panels call this every frame,
+     * so the panel frame overlay, floating windows, popups and toasts always draw above them.
+     */
+    public static void SendToBack()
+    {
+        if (internalsMissing) return;
+        try
+        {
+            var window = igGetCurrentWindow();
+            if (window != IntPtr.Zero) igBringWindowToDisplayBack(window);
+        }
+        catch (Exception error) when (error is EntryPointNotFoundException or DllNotFoundException) { internalsMissing = true; }
+    }
 
     public static Vector4 Alpha(Vector4 color, float alpha) => color with { W = alpha };
     public static uint U32(Vector4 color) => ImGui.GetColorU32(color);
 
     /**
-     * Installs the bundled faces for ImGuiController.HostFonts. The controller's body size is 16 px at
-     * 96 DPI, so its ratio to 16 is the DPI scale. Returns null, adding nothing, when a face is missing.
+     * Installs the faces for ImGuiController.HostFonts. The controller's body size is 16 px at 96 DPI, so its ratio to 16
+     * is the DPI scale. Returns null, adding nothing, when an embedded face is missing.
      */
     public static ImFontPtr? AddFonts(ImFontAtlasPtr fonts, float controllerBodySize)
     {
         HeadingFont = default; ButtonFont = default; LabelFont = default; TitleFont = default; StrongFont = default; BrandFont = default;
+        CaptionFont = default; WordmarkFont = default;
         if (!LoadFaces() || faces is not { } loaded) return null;
         float scale = Math.Max(1, controllerBodySize / 16f);
-        AddFace(fonts, loaded[0], BodySize * scale); // first face: ImGui's default font
-        StrongFont = AddFace(fonts, loaded[1], BodySize * scale);
-        // UE5 headings are the body face at body size, semibold: one atlas entry serves both.
+        var body = systemFaces?[0] ?? loaded[0];
+        var bodyStrong = systemFaces?[1] ?? loaded[1];
+        AddFace(fonts, body, BodySize * scale, BodyRanges); // first face: ImGui's default font
+        StrongFont = AddFace(fonts, bodyStrong, BodySize * scale, BodyRanges);
         HeadingFont = StrongFont;
-        ButtonFont = AddFace(fonts, loaded[1], ButtonSize * scale);
-        LabelFont = AddFace(fonts, loaded[1], LabelSize * scale);
+        ButtonFont = AddFace(fonts, loaded[2], ButtonSize * scale);
+        // Labels and buttons share one size, so one atlas entry serves both.
+        LabelFont = LabelSize == ButtonSize ? ButtonFont : AddFace(fonts, loaded[2], LabelSize * scale);
+        CaptionFont = AddFace(fonts, loaded[4], 11 * scale);
+        WordmarkFont = AddFace(fonts, loaded[3], 15 * scale);
         TitleFont = AddFace(fonts, loaded[2], TitleSize * scale);
         BrandFont = AddFace(fonts, loaded[3], TitleSize * scale);
         return TitleFont;
@@ -74,19 +121,33 @@ public static unsafe partial class SolTheme
             }
             var bytes = new byte[stream.Length];
             stream.ReadExactly(bytes);
-            var data = Marshal.AllocHGlobal(bytes.Length);
-            Marshal.Copy(bytes, 0, data, bytes.Length);
-            loaded[i] = (data, bytes.Length);
+            loaded[i] = Native(bytes);
         }
         faces = loaded;
+        // Segoe UI and Segoe UI Semibold, the mockup's system-ui body; both or neither, so weights match.
+        try
+        {
+            string folder = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+            var paths = SystemFaces.Select(name => Path.Combine(folder, name)).ToArray();
+            if (paths.All(File.Exists) && paths.All(path => new FileInfo(path).Length is > 0 and < 16 << 20))
+                systemFaces = paths.Select(path => ((IntPtr, int)?)Native(File.ReadAllBytes(path))).ToArray();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { systemFaces = null; }
         return true;
     }
 
-    private static ImFontPtr AddFace(ImFontAtlasPtr fonts, (IntPtr Data, int Length) face, float pixels)
+    private static (IntPtr Data, int Length) Native(byte[] bytes)
+    {
+        var data = Marshal.AllocHGlobal(bytes.Length);
+        Marshal.Copy(bytes, 0, data, bytes.Length);
+        return (data, bytes.Length);
+    }
+
+    private static ImFontPtr AddFace(ImFontAtlasPtr fonts, (IntPtr Data, int Length) face, float pixels, ushort* ranges = null)
     {
         ImFontConfigPtr config = ImGuiNative.ImFontConfig_ImFontConfig();
         config.FontDataOwnedByAtlas = false;
-        var font = fonts.AddFontFromMemoryTTF(face.Data, face.Length, MathF.Round(pixels), config);
+        var font = fonts.AddFontFromMemoryTTF(face.Data, face.Length, MathF.Round(pixels), config, (IntPtr)ranges);
         config.Destroy();
         return font;
     }
@@ -99,7 +160,7 @@ public static unsafe partial class SolTheme
         return true;
     }
 
-    /** UE5 colours, shapes and sizes on the current context; safe to call again on a DPI change. */
+    /** The mockup's colours, square ImGui widgets with 1 px frames, and sizes on the current context; safe to call again on a DPI change. */
     public static void Apply(float scale)
     {
         Scale = Math.Max(1, scale);
@@ -110,13 +171,13 @@ public static unsafe partial class SolTheme
         ImGuiNative.ImGuiStyle_destroy(defaults);
         ImGui.StyleColorsDark();
         style.WindowPadding = new(8, 8);
-        // The spec's compact padding (docs/UI-UE5.md §2.2); with 13 px body text a frame is about 19-20 px tall.
-        style.FramePadding = new(6, 3);
-        style.ItemSpacing = new(6, 4);
-        style.ItemInnerSpacing = new(4, 4);
+        // 13 px body text in a 26 px control, as the mockup's inputs and buttons.
+        style.FramePadding = new(8, 4);
+        style.ItemSpacing = new(6, 5);
+        style.ItemInnerSpacing = new(6, 4);
         style.IndentSpacing = 14;
-        style.CellPadding = new(4, 2);
-        // Rounded controls, square areas: panels meet edge to edge.
+        style.CellPadding = new(6, 3);
+        // ImGui's own widgets cannot be chamfered; square corners keep them in the same family as the chamfered chrome.
         style.WindowRounding = 0;
         style.ChildRounding = 0;
         style.PopupRounding = RoundingPopup;
@@ -126,32 +187,36 @@ public static unsafe partial class SolTheme
         style.ScrollbarRounding = RoundingScrollbar;
         style.WindowBorderSize = 0;
         style.ChildBorderSize = 1;
+        // Popups draw their own chamfered frame (PopupShadow); a plain popup keeps a 1 px LineStrong frame.
         style.PopupBorderSize = 1;
-        // The Input fill gives fields their contrast, so frames carry no border.
-        style.FrameBorderSize = 0;
+        // Outlined controls: a 1 px LineStrong frame on buttons, fields and checkboxes, as the mockup.
+        style.FrameBorderSize = 1;
         style.TabBorderSize = 0;
         style.TabBarBorderSize = 1;
-        style.TabBarOverlineSize = 2;
+        // The active tab is marked by the amber underline (UiMotion.TabUnderline), not ImGui's overline.
+        style.TabBarOverlineSize = 0;
         style.ScrollbarSize = 10;
         style.GrabMinSize = 8;
         style.SeparatorTextBorderSize = 1;
         style.SeparatorTextPadding = new(0, 4);
+        style.DisabledAlpha = .5f;
         var colors = style.Colors;
         void Set(ImGuiCol slot, Vector4 value) => colors[(int)slot] = value;
         var clear = Vector4.Zero;
         Set(ImGuiCol.Text, Text);
-        Set(ImGuiCol.TextDisabled, Dim);
+        // Shortcuts in menus and secondary text read --text-dim (about 7:1 on the panel fill).
+        Set(ImGuiCol.TextDisabled, Muted);
         Set(ImGuiCol.WindowBg, Panel);
-        Set(ImGuiCol.ChildBg, Panel);
+        Set(ImGuiCol.ChildBg, clear);
         Set(ImGuiCol.PopupBg, Popup);
-        Set(ImGuiCol.Border, BorderHi);
+        Set(ImGuiCol.Border, LineStrong);
         Set(ImGuiCol.BorderShadow, clear);
         Set(ImGuiCol.FrameBg, Input);
         Set(ImGuiCol.FrameBgHovered, InputHover);
         Set(ImGuiCol.FrameBgActive, Input);
-        Set(ImGuiCol.TitleBg, Bar);
-        Set(ImGuiCol.TitleBgActive, Bar);
-        Set(ImGuiCol.TitleBgCollapsed, Bar);
+        Set(ImGuiCol.TitleBg, Panel);
+        Set(ImGuiCol.TitleBgActive, Panel);
+        Set(ImGuiCol.TitleBgCollapsed, Panel);
         Set(ImGuiCol.MenuBarBg, Bar);
         Set(ImGuiCol.ScrollbarBg, clear);
         Set(ImGuiCol.ScrollbarGrab, ScrollGrab);
@@ -160,12 +225,13 @@ public static unsafe partial class SolTheme
         Set(ImGuiCol.CheckMark, Accent);
         Set(ImGuiCol.SliderGrab, Accent);
         Set(ImGuiCol.SliderGrabActive, AccentHover);
+        // Buttons are outlined (no fill); hover is the amber wash, pressed a stronger one.
         Set(ImGuiCol.Button, Surface);
-        Set(ImGuiCol.ButtonHovered, Hover);
+        Set(ImGuiCol.ButtonHovered, AccentSoft);
         Set(ImGuiCol.ButtonActive, Pressed);
-        // Selected rows are a blue wash; hovered rows the hover grey.
+        // Selected rows are an amber wash; hovered rows --panel-2.
         Set(ImGuiCol.Header, Selection);
-        Set(ImGuiCol.HeaderHovered, Hover);
+        Set(ImGuiCol.HeaderHovered, Panel2);
         Set(ImGuiCol.HeaderActive, Selection);
         Set(ImGuiCol.Separator, Line);
         Set(ImGuiCol.SeparatorHovered, Alpha(Accent, .6f));
@@ -173,65 +239,75 @@ public static unsafe partial class SolTheme
         Set(ImGuiCol.ResizeGrip, clear);
         Set(ImGuiCol.ResizeGripHovered, Alpha(Accent, .5f));
         Set(ImGuiCol.ResizeGripActive, Accent);
-        Set(ImGuiCol.Tab, Header);
-        Set(ImGuiCol.TabHovered, Hover);
-        Set(ImGuiCol.TabSelected, Panel);
+        Set(ImGuiCol.Tab, clear);
+        Set(ImGuiCol.TabHovered, Panel2);
+        Set(ImGuiCol.TabSelected, clear);
         Set(ImGuiCol.TabSelectedOverline, Accent);
-        Set(ImGuiCol.TabDimmed, Header);
-        Set(ImGuiCol.TabDimmedSelected, Panel);
+        Set(ImGuiCol.TabDimmed, clear);
+        Set(ImGuiCol.TabDimmedSelected, clear);
         Set(ImGuiCol.TabDimmedSelectedOverline, Alpha(Accent, .5f));
         Set(ImGuiCol.PlotLines, Muted);
         Set(ImGuiCol.PlotLinesHovered, Accent);
         Set(ImGuiCol.PlotHistogram, Accent);
         Set(ImGuiCol.PlotHistogramHovered, AccentHover);
-        Set(ImGuiCol.TableHeaderBg, Header);
+        Set(ImGuiCol.TableHeaderBg, Panel);
         Set(ImGuiCol.TableBorderStrong, Line);
-        Set(ImGuiCol.TableBorderLight, TableLine);
+        Set(ImGuiCol.TableBorderLight, LineSoft);
         Set(ImGuiCol.TableRowBg, clear);
-        Set(ImGuiCol.TableRowBgAlt, White(.015f));
+        Set(ImGuiCol.TableRowBgAlt, White(.02f));
         Set(ImGuiCol.TextLink, AccentHover);
         Set(ImGuiCol.TextSelectedBg, Selection);
         Set(ImGuiCol.DragDropTarget, Accent);
+        // Keyboard focus stays visible: a 2 px amber ring, as the mockup's :focus-visible outline.
         Set(ImGuiCol.NavCursor, Accent);
         Set(ImGuiCol.NavWindowingHighlight, Accent);
         Set(ImGuiCol.NavWindowingDimBg, new(0, 0, 0, .5f));
-        Set(ImGuiCol.ModalWindowDimBg, new(0, 0, 0, .5f));
+        // The dialog backdrop: hsla(0,0%,0%,.66).
+        Set(ImGuiCol.ModalWindowDimBg, new(0, 0, 0, .66f));
+        // Collapsing headers stay neutral (--panel-2), so only selected rows carry the amber wash.
+        UiAuto.HeaderColors = (Panel2, Grey(16), Pressed);
         style.ScaleAllSizes(Scale);
         ImGui.GetIO().FontGlobalScale = 1;
     }
 
-    // ---- Draw helpers ----
+    // ---- Chamfers ----
 
     /**
-     * Formerly the launcher's chamfer polygon. UE5 shapes are rounded rectangles: the path is a rounded rect whose
-     * radius is cut when it is positive (already scaled), otherwise the control rounding. Callers do not change.
+     * The chamfer outline (the mockup's clip-path polygon): top-left and bottom-right corners cut by cut pixels (already
+     * scaled, clamped to half the short side). A cut of 0 or less is a plain rectangle.
      */
     public static void ChamferPath(ImDrawListPtr draw, Vector2 min, Vector2 max, float cut)
     {
-        float radius = cut > 0 ? cut : Rounding * Scale;
-        radius = Math.Clamp(radius, 0, Math.Min(max.X - min.X, max.Y - min.Y) * .5f);
-        draw.PathRect(min, max, radius);
+        cut = Math.Clamp(cut, 0, Math.Min(max.X - min.X, max.Y - min.Y) * .5f);
+        if (cut <= .5f) { draw.PathRect(min, max); return; }
+        draw.PathLineTo(new(min.X + cut, min.Y));
+        draw.PathLineTo(new(max.X, min.Y));
+        draw.PathLineTo(new(max.X, max.Y - cut));
+        draw.PathLineTo(new(max.X - cut, max.Y));
+        draw.PathLineTo(new(min.X, max.Y));
+        draw.PathLineTo(new(min.X, min.Y + cut));
     }
 
-    /** A rounded box; a zero colour skips the fill or the border. Cut is in unscaled pixels; 0 uses the control rounding. */
+    /** A chamfered box; a zero colour skips the fill or the 1 px frame. Cut is in unscaled pixels; 0 is the control cut (5 px). */
     public static void ChamferFrame(ImDrawListPtr draw, Vector2 min, Vector2 max, float cut, uint fill, uint border = 0)
     {
         if (max.X - min.X < 1 || max.Y - min.Y < 1) return;
-        if (fill != 0) { ChamferPath(draw, min, max, cut * Scale); draw.PathFillConvex(fill); }
+        float pixels = (cut > 0 ? cut : CutTiny) * Scale;
+        if (fill != 0) { ChamferPath(draw, min, max, pixels); draw.PathFillConvex(fill); }
         if (border != 0)
         {
-            // Half-pixel inset keeps the 1 px stroke crisp and inside the box.
-            ChamferPath(draw, min + new Vector2(.5f), max - new Vector2(.5f), cut * Scale);
+            // Half-pixel inset keeps the 1 px stroke crisp and inside the box; the cut shrinks with it so the diagonal stays parallel.
+            ChamferPath(draw, min + new Vector2(.5f), max - new Vector2(.5f), Math.Max(0, pixels - .2f));
             draw.PathStroke(border, ImDrawFlags.Closed, 1);
         }
     }
 
-    /** A rounded box filled with the accent ramp (accent hover -> accent -> accent pressed, left to right). */
+    /** A chamfered box filled with the accent ramp (accent hover -> accent -> accent pressed, left to right). */
     public static void ChamferGradient(ImDrawListPtr draw, Vector2 min, Vector2 max, float cut, float alpha = 1)
     {
         if (max.X - min.X < 1 || max.Y - min.Y < 1) return;
         int first = draw.VtxBuffer.Size;
-        ChamferPath(draw, min, max, cut * Scale);
+        ChamferPath(draw, min, max, (cut > 0 ? cut : CutTiny) * Scale);
         uint opaque = (uint)Math.Clamp(alpha * 255, 0, 255) << 24 | 0x00FFFFFF;
         draw.PathFillConvex(opaque);
         // Recolour the fill's vertices (and its anti-aliased fringe) by x, keeping each vertex's alpha.
@@ -247,15 +323,76 @@ public static unsafe partial class SolTheme
     }
 
     /**
-     * A progress pill: the accent ramp along x (or the brand ramp for the loading card), drawn as slices so the
-     * middle stop holds. A sheen in [0, 1) sweeps a pale band across it; a negative sheen leaves it still.
+     * The panel frame of a tiled area (the mockup's .panel): the corners outside the chamfer painted in the window
+     * background, then the 1 px Line ring. Drawn on the frame overlay, above the area's own windows.
+     */
+    public static void PanelFrame(ImDrawListPtr draw, Vector2 min, Vector2 max)
+    {
+        if (max.X - min.X < 4 || max.Y - min.Y < 4) return;
+        float cut = Math.Min(CutSmall * Scale, Math.Min(max.X - min.X, max.Y - min.Y) * .5f);
+        uint bg = U32(Bg);
+        draw.AddTriangleFilled(min, new(min.X + cut, min.Y), new(min.X, min.Y + cut), bg);
+        draw.AddTriangleFilled(max, new(max.X, max.Y - cut), new(max.X - cut, max.Y), bg);
+        ChamferPath(draw, min + new Vector2(.5f), max - new Vector2(.5f), Math.Max(0, cut - .2f));
+        draw.PathStroke(U32(Line), ImDrawFlags.Closed, 1);
+    }
+
+    /**
+     * Hides the current window's own background (its first rectangle, drawn by Begin) and draws a chamfered fill and a
+     * 1 px frame in its place, under everything drawn after this call. A window whose first primitive is not its
+     * background rectangle keeps it; only the frame is added then. Used by popups (PopupShadow) and toasts.
+     */
+    public static void ChamferWindow(float cut, Vector4 fill, Vector4 frame)
+    {
+        var draw = ImGui.GetWindowDrawList();
+        var min = ImGui.GetWindowPos();
+        var max = min + ImGui.GetWindowSize();
+        bool hidden = HideBackground(draw, min, max);
+        draw.PushClipRectFullScreen();
+        ChamferFrame(draw, min, max, cut, hidden ? U32(fill) : 0, U32(frame));
+        draw.PopClipRect();
+        if (hidden) DrawScrollGrab(draw, min, max);
+    }
+
+    /**
+     * Makes the window's own background transparent: its first four vertices when they are the window rectangle, and the
+     * square 1 px frame Begin drew right after it (the vertices that follow while they lie on the window's outline).
+     */
+    private static bool HideBackground(ImDrawListPtr draw, Vector2 min, Vector2 max)
+    {
+        int count = draw.VtxBuffer.Size;
+        if (count < 4) return false;
+        var vertices = (Vertex*)(void*)draw.VtxBuffer.Data;
+        Vector2 low = vertices[0].Position, high = vertices[0].Position;
+        for (int i = 1; i < 4; i++) { low = Vector2.Min(low, vertices[i].Position); high = Vector2.Max(high, vertices[i].Position); }
+        if (Vector2.Distance(low, min) > 1.5f || Vector2.Distance(high, max) > 1.5f) return false;
+        for (int i = 0; i < 4; i++) vertices[i].Color &= 0x00FFFFFF;
+        bool OnOutline(Vector2 p) => MathF.Abs(p.X - min.X) <= 1.6f || MathF.Abs(p.X - max.X) <= 1.6f
+            || MathF.Abs(p.Y - min.Y) <= 1.6f || MathF.Abs(p.Y - max.Y) <= 1.6f;
+        for (int i = 4; i < Math.Min(count, 4 + 48) && OnOutline(vertices[i].Position); i++) vertices[i].Color &= 0x00FFFFFF;
+        return true;
+    }
+
+    /** The vertical scroll grab of a window whose own scrollbar the chamfered fill covers. */
+    private static void DrawScrollGrab(ImDrawListPtr draw, Vector2 min, Vector2 max)
+    {
+        float scrollMax = ImGui.GetScrollMaxY();
+        if (scrollMax <= 0) return;
+        float height = max.Y - min.Y, visible = height / (height + scrollMax);
+        float grab = Math.Max(16 * Scale, (height - 8 * Scale) * visible);
+        float top = min.Y + 4 * Scale + (height - 8 * Scale - grab) * (ImGui.GetScrollY() / scrollMax);
+        draw.AddRectFilled(new(max.X - 6 * Scale, top), new(max.X - 3 * Scale, top + grab), U32(ScrollGrabHover));
+    }
+
+    /**
+     * The progress bar (the mockup's .bar): a flat accent ramp along x (or the brand ramp for the loading card), drawn as
+     * slices so the middle stop holds. A sheen in [0, 1) sweeps a pale band across it; a negative sheen leaves it still.
      */
     public static void ProgressFill(ImDrawListPtr draw, Vector2 min, Vector2 max, float sheen = -1, bool brand = false)
     {
-        float width = max.X - min.X, height = max.Y - min.Y, radius = height / 2;
+        float width = max.X - min.X, height = max.Y - min.Y;
         if (width < 1 || height < 1) return;
         Vector4 start = brand ? BrandEdge : AccentHover, middle = brand ? Brand : Accent, end = brand ? Brand2 : AccentActive;
-        if (width <= height) { draw.AddRectFilled(min, max, U32(start), radius); return; }
         float band = Math.Max(height * 8, width * .18f), center = min.X - band + (width + band * 2) * sheen;
         Vector4 At(float x)
         {
@@ -263,22 +400,16 @@ public static unsafe partial class SolTheme
             var color = t < .5f ? Vector4.Lerp(start, middle, t * 2) : Vector4.Lerp(middle, end, (t - .5f) * 2);
             return sheen < 0 || u <= -1 || u >= 1 ? color : Vector4.Lerp(color, TextStrong, (1 - u * u) * (1 - u * u) * .45f);
         }
-        float left = min.X + radius, right = max.X - radius, y = min.Y + radius;
-        draw.AddCircleFilled(new(left, y), radius, U32(At(left)), 12);
-        draw.AddCircleFilled(new(right, y), radius, U32(At(right)), 12);
-        int slices = Math.Clamp((int)((right - left) / (3 * Scale)), 1, 128);
+        int slices = Math.Clamp((int)(width / (3 * Scale)), 1, 128);
         for (int i = 0; i < slices; i++)
         {
-            float x0 = left + (right - left) * i / slices, x1 = left + (right - left) * (i + 1) / slices;
+            float x0 = min.X + width * i / slices, x1 = min.X + width * (i + 1) / slices;
             uint a = U32(At(x0)), b = U32(At(x1));
             draw.AddRectFilledMultiColor(new(x0, min.Y), new(x1, max.Y), a, b, b, a);
         }
     }
 
-    /**
-     * The panel fill behind the current window's content. PanelTop and PanelBottom both equal Panel, so this is a
-     * flat fill (UE5 chrome has no gradients). A window that pushed its own background (a splitter, an overlay) keeps it.
-     */
+    /** The panel fill behind the current window's content; a window that pushed its own background (a splitter, an overlay) keeps it. */
     public static void PanelGradient()
     {
         if (ImGui.GetStyle().Colors[(int)ImGuiCol.WindowBg] != Panel) return;
@@ -289,38 +420,125 @@ public static unsafe partial class SolTheme
         else ImGui.GetWindowDrawList().AddRectFilledMultiColor(min, max, top, top, bottom, bottom);
     }
 
-    /** Flat bar fill with a 1 px border line on top: the status bar. */
+    /** The status bar: the panel fill with a 1 px Line on top (the mockup's .statusbar). */
     public static void StatusBackground()
     {
         var min = ImGui.GetWindowPos();
         var max = min + ImGui.GetWindowSize();
         var draw = ImGui.GetWindowDrawList();
         draw.AddRectFilled(min, max, U32(Bar));
-        draw.AddLine(min, new(max.X, min.Y), U32(Border), 1);
+        draw.AddLine(min + new Vector2(0, .5f), new(max.X, min.Y + .5f), U32(Border), 1);
     }
 
     /**
-     * The soft popup shadow: two rings outside the current window (25 % and 10 % black), drawn on its own draw list
-     * with the clip lifted so the ring can sit outside it. Call right after BeginPopup, BeginMenu, BeginCombo or
-     * BeginTooltip returns true.
+     * Turns the current popup into the mockup's menu frame: a chamfered (8 px) panel fill with a 1 px LineStrong frame
+     * in place of ImGui's square background. Call right after BeginPopup, BeginMenu, BeginCombo or BeginTooltip returns
+     * true. (The name is kept from the soft shadow it used to draw.)
      */
-    public static void PopupShadow()
-    {
-        var min = ImGui.GetWindowPos();
-        PopupShadow(ImGui.GetWindowDrawList(), min, min + ImGui.GetWindowSize());
-    }
+    public static void PopupShadow() => ChamferWindow(CutSmall, Popup, LineStrong);
 
-    /** The popup shadow around a rectangle; only the ring outside the rectangle is drawn, so its contents stay clear. */
+    /** The mockup's toast: an 8 px chamfered hsl(0,0%,12%) fill with a 1 px amber frame, in place of the window's background. */
+    public static void ToastFrame() => ChamferWindow(CutSmall, ToastFill, Accent);
+
+    /** A chamfered frame around a rectangle, for a popup drawn by hand. */
     public static void PopupShadow(ImDrawListPtr draw, Vector2 min, Vector2 max)
     {
         if (max.X - min.X < 1 || max.Y - min.Y < 1) return;
-        float s = Scale, radius = RoundingPopup * s;
-        var drop = new Vector2(0, 1 * s);
         draw.PushClipRectFullScreen();
-        draw.AddRect(min - new Vector2(1.5f * s) + drop, max + new Vector2(1.5f * s) + drop, U32(new(0, 0, 0, .25f)), radius + 1.5f * s, ImDrawFlags.None, 2 * s);
-        draw.AddRect(min - new Vector2(3.5f * s) + drop * 2, max + new Vector2(3.5f * s) + drop * 2, U32(new(0, 0, 0, .10f)), radius + 3.5f * s, ImDrawFlags.None, 3 * s);
+        ChamferFrame(draw, min, max, CutSmall, 0, U32(LineStrong));
         draw.PopClipRect();
     }
+
+    // ---- Dialogs ----
+
+    /** Window padding of a dialog's body (the mockup's 14 px 18 px), unscaled. */
+    private const float DialogPadX = 18, DialogPadY = 14;
+
+    /**
+     * BeginPopupModal drawn as the mockup's dialog: a chamfered (14 px) panel with a 1 px LineStrong frame, an upper-case
+     * Chakra Petch title over a hairline and the close cross when open is given. ImGui still owns the window (moving,
+     * the title bar's hit area, the close button's click); its own decorations are drawn transparent and covered.
+     */
+    public static bool BeginDialog(string name, ImGuiWindowFlags flags = ImGuiWindowFlags.None)
+    {
+        PushDialog();
+        bool open = ImGui.BeginPopupModal(name, flags);
+        PopDialog(open, name, closable: false);
+        return open;
+    }
+
+    /** BeginDialog with ImGui's close button (open is set false when it is clicked). */
+    public static bool BeginDialog(string name, ref bool open, ImGuiWindowFlags flags = ImGuiWindowFlags.None)
+    {
+        PushDialog();
+        bool shown = ImGui.BeginPopupModal(name, ref open, flags);
+        PopDialog(shown, name, closable: true);
+        return shown;
+    }
+
+    private const int DialogColors = 9;
+
+    private static void PushDialog()
+    {
+        // The title bar is as tall as the mockup's dialog head: body line plus 2 x 9 px.
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(DialogPadX * Scale, 9 * Scale));
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(DialogPadX * Scale, DialogPadY * Scale));
+        ImGui.PushStyleVar(ImGuiStyleVar.PopupBorderSize, 0f);
+        var clear = Vector4.Zero;
+        ImGui.PushStyleColor(ImGuiCol.PopupBg, clear);
+        ImGui.PushStyleColor(ImGuiCol.TitleBg, clear);
+        ImGui.PushStyleColor(ImGuiCol.TitleBgActive, clear);
+        ImGui.PushStyleColor(ImGuiCol.TitleBgCollapsed, clear);
+        ImGui.PushStyleColor(ImGuiCol.Text, clear);
+        ImGui.PushStyleColor(ImGuiCol.Button, clear);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, clear);
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, clear);
+        ImGui.PushStyleColor(ImGuiCol.Border, clear);
+    }
+
+    private static void PopDialog(bool open, string name, bool closable)
+    {
+        ImGui.PopStyleColor(DialogColors);
+        // The frame padding was read by Begin for the title bar; contents use the normal one.
+        float titleHeight = ImGui.GetFontSize() + 9 * Scale * 2;
+        ImGui.PopStyleVar(3);
+        if (!open) return;
+        // The window padding stays the dialog's for its contents (WindowPadding is read at Begin).
+        var draw = ImGui.GetWindowDrawList();
+        var min = ImGui.GetWindowPos();
+        var max = min + ImGui.GetWindowSize();
+        draw.PushClipRectFullScreen();
+        ChamferFrame(draw, min, max, Cut, U32(Panel), 0);
+        draw.AddLine(new(min.X, min.Y + titleHeight - .5f), new(max.X, min.Y + titleHeight - .5f), U32(Line), 1);
+        string title = UiTitle(name).ToUpperInvariant();
+        bool font = PushFont(LabelFont);
+        float textY = min.Y + (titleHeight - ImGui.GetTextLineHeight()) / 2;
+        float right = max.X - (closable ? titleHeight : 0) - DialogPadX * Scale * .5f;
+        draw.PushClipRect(min, new(right, min.Y + titleHeight), true);
+        TrackedText(draw, new(min.X + DialogPadX * Scale, textY), U32(TextStrong), title, ImGui.GetFontSize() * TrackLabel);
+        draw.PopClipRect();
+        if (font) ImGui.PopFont();
+        if (closable)
+        {
+            // ImGui's close button: FontSize square, FramePadding.x from the right edge of the title bar.
+            float size = ImGui.GetFontSize();
+            var buttonMin = new Vector2(max.X - DialogPadX * Scale - size, min.Y + 9 * Scale);
+            bool hovered = ImGui.IsMouseHoveringRect(buttonMin, buttonMin + new Vector2(size)) && ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows);
+            ImGuiIcons.Draw(draw, StudioIcon.Close, buttonMin, size, U32(hovered ? Accent : Muted));
+        }
+        ChamferFrame(draw, min, max, Cut, 0, U32(LineStrong));
+        draw.PopClipRect();
+        DrawScrollGrab(draw, new(min.X, min.Y + titleHeight), max);
+    }
+
+    /** The text ImGui shows for a window or popup name: before "###" or "##". */
+    private static string UiTitle(string name)
+    {
+        int hash = name.IndexOf("##", StringComparison.Ordinal);
+        return hash < 0 ? name : name[..hash];
+    }
+
+    // ---- Text ----
 
     /** Draws text with letter spacing, as the upper-case labels; returns its width. */
     public static float TrackedText(ImDrawListPtr draw, Vector2 position, uint color, string text, float tracking)
@@ -333,6 +551,32 @@ public static unsafe partial class SolTheme
             x += ImGui.CalcTextSize(glyph).X + (i + 1 < text.Length ? tracking : 0);
         }
         return x - position.X;
+    }
+
+    public static float TrackedWidth(string text, float tracking)
+    {
+        float width = 0;
+        for (int i = 0; i < text.Length; i++)
+            width += ImGui.CalcTextSize(text[i] < Glyphs.Length ? Glyphs[text[i]] : text[i].ToString()).X;
+        return width + tracking * Math.Max(0, text.Length - 1);
+    }
+
+    /** Width of an upper-case Chakra Petch label at the given font and tracking (in em). */
+    public static float LabelWidth(ImFontPtr font, string text, float trackEm)
+    {
+        bool pushed = PushFont(font);
+        float width = TrackedWidth(text.ToUpperInvariant(), ImGui.GetFontSize() * trackEm);
+        if (pushed) ImGui.PopFont();
+        return width;
+    }
+
+    /** Draws an upper-case Chakra Petch label at the given font and tracking (in em); returns its width. */
+    public static float Label(ImDrawListPtr draw, ImFontPtr font, Vector2 position, uint color, string text, float trackEm)
+    {
+        bool pushed = PushFont(font);
+        float width = TrackedText(draw, position, color, text.ToUpperInvariant(), ImGui.GetFontSize() * trackEm);
+        if (pushed) ImGui.PopFont();
+        return width;
     }
 
     /** The brand shimmer at t; the gradient tiles, so moving t sweeps it as the launcher's 6 s shimmer does. */
@@ -362,20 +606,12 @@ public static unsafe partial class SolTheme
         return width;
     }
 
-    public static float TrackedWidth(string text, float tracking)
-    {
-        float width = 0;
-        for (int i = 0; i < text.Length; i++)
-            width += ImGui.CalcTextSize(text[i] < Glyphs.Length ? Glyphs[text[i]] : text[i].ToString()).X;
-        return width + tracking * Math.Max(0, text.Length - 1);
-    }
-
-    /** An 11 px semibold upper-case label in muted grey over a 1 px separator: a group header. */
+    /** A 12 px Chakra Petch upper-case label in --text-dim over a soft hairline: a group header (the mockup's .group > h3). */
     public static void SectionHeader(string text, string tooltip = "")
     {
         bool font = PushFont(LabelFont);
         string label = text.ToUpperInvariant();
-        float tracking = ImGui.GetFontSize() * .08f;
+        float tracking = ImGui.GetFontSize() * TrackLabel;
         var draw = ImGui.GetWindowDrawList();
         ImGui.Dummy(new(0, Space2));
         var start = ImGui.GetCursorScreenPos();
@@ -383,14 +619,14 @@ public static unsafe partial class SolTheme
         float height = ImGui.GetTextLineHeight() + Space3;
         ImGui.Dummy(new(width, height));
         TrackedText(draw, start, U32(Muted), label, tracking);
-        draw.AddLine(new(start.X, start.Y + height - 1), new(start.X + width, start.Y + height - 1), U32(Line), 1);
+        draw.AddLine(new(start.X, start.Y + height - 1), new(start.X + width, start.Y + height - 1), U32(LineSoft), 1);
         if (font) ImGui.PopFont();
         if (tooltip.Length != 0 && ImGui.IsItemHovered()) ImGui.SetTooltip(tooltip);
     }
 
     /**
-     * A collapsing group drawn as a UE5 Details category: a Header strip, an 11 px semibold upper-case label and a
-     * chevron that rotates by animation. The label's id is kept.
+     * A collapsing group: the panel fill, a chevron that rotates by animation and a Chakra Petch upper-case label (the
+     * mockup's collapsible panel head). The label's id is kept.
      */
     public static bool CollapsingSection(string label, ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.None)
     {
@@ -410,26 +646,31 @@ public static unsafe partial class SolTheme
         var min = ImGui.GetItemRectMin();
         var max = ImGui.GetItemRectMax();
         var draw = ImGui.GetWindowDrawList();
+        draw.AddLine(new(min.X, max.Y - .5f), new(max.X, max.Y - .5f), U32(LineSoft), 1);
         float size = ImGui.GetFontSize();
         float arrow = size + ImGui.GetStyle().FramePadding.X * 2;
         float textTop = min.Y + (max.Y - min.Y - ImGui.GetTextLineHeight()) / 2;
         var chevronCenter = new Vector2(min.X + ImGui.GetStyle().FramePadding.X + size * .5f, (min.Y + max.Y) * .5f);
-        var tint = UiMotion.EaseColor(UiMotion.Mix(id, 0x7E11u), hovered ? TextStrong : Text);
-        UiMotion.DrawChevron(draw, chevronCenter, size * .5f, UiMotion.Chevron(id, open), U32(tint));
-        TrackedText(draw, new(min.X + arrow, textTop), U32(tint), shown, size * .08f);
+        var tint = UiMotion.EaseColor(UiMotion.Mix(id, 0x7E11u), hovered ? TextStrong : Muted);
+        UiMotion.DrawChevron(draw, chevronCenter, size * .45f, UiMotion.Chevron(id, open), U32(tint));
+        TrackedText(draw, new(min.X + arrow, textTop), U32(tint), shown, size * TrackLabel);
         if (font) ImGui.PopFont();
         return open;
     }
 
-    /** The primary button: rounded Accent fill, white semibold label; its fill eases between rest, hover and pressed. */
+    /**
+     * The primary button (the mockup's .tb-btn.primary): a chamfered amber fill with an upper-case Chakra Petch label in
+     * --accent-ink; its fill eases between rest, hover (--accent-hi) and pressed.
+     */
     public static bool PrimaryButton(string label, Vector2 size = default)
     {
         int split = label.IndexOf("##", StringComparison.Ordinal);
-        string shown = split < 0 ? label : label[..split];
+        string shown = (split < 0 ? label : label[..split]).ToUpperInvariant();
         // One body-font frame tall, like the controls beside it; the smaller button face would make it shorter.
         if (size.Y <= 0) size.Y = ImGui.GetFrameHeight();
         bool font = PushFont(ButtonFont);
-        float textWidth = ImGui.CalcTextSize(shown).X;
+        float tracking = ImGui.GetFontSize() * TrackButton;
+        float textWidth = TrackedWidth(shown, tracking);
         if (size.X <= 0) size.X = textWidth + PrimaryPadding * 2 * Scale;
         bool clicked = UiAuto.InvisibleButton(label, Vector2.Max(size, Vector2.One));
         bool hovered = ImGui.IsItemHovered(), held = ImGui.IsItemActive();
@@ -437,68 +678,81 @@ public static unsafe partial class SolTheme
         var max = ImGui.GetItemRectMax();
         var draw = ImGui.GetWindowDrawList();
         var fill = UiMotion.EaseColor(ImGui.GetItemID(), held ? AccentActive : hovered ? AccentHover : Accent, 35f);
-        ChamferFrame(draw, min, max, 0, U32(fill));
-        var textPosition = new Vector2(min.X + (max.X - min.X - textWidth) / 2, min.Y + (max.Y - min.Y - ImGui.GetTextLineHeight()) / 2);
-        draw.AddText(textPosition, U32(AccentInk), shown);
+        ChamferFrame(draw, min, max, CutTiny, U32(fill));
+        var textPosition = new Vector2(MathF.Round(min.X + (max.X - min.X - textWidth) / 2), MathF.Round(min.Y + (max.Y - min.Y - ImGui.GetTextLineHeight()) / 2));
+        TrackedText(draw, textPosition, U32(AccentInk), shown, tracking);
         if (font) ImGui.PopFont();
         return clicked;
     }
 
-    /** Horizontal padding each side of a PrimaryButton label, in unscaled pixels. */
-    private const float PrimaryPadding = 14;
+    /** Horizontal padding each side of a PrimaryButton label, in unscaled pixels (the mockup's 12 px). */
+    private const float PrimaryPadding = 12;
 
     /** The width PrimaryButton gives the label, for laying out a row before drawing it. */
     public static float PrimaryButtonWidth(string label)
     {
         int split = label.IndexOf("##", StringComparison.Ordinal);
-        string shown = split < 0 ? label : label[..split];
+        string shown = (split < 0 ? label : label[..split]).ToUpperInvariant();
         bool font = PushFont(ButtonFont);
-        float width = ImGui.CalcTextSize(shown).X + PrimaryPadding * 2 * Scale;
+        float width = TrackedWidth(shown, ImGui.GetFontSize() * TrackButton) + PrimaryPadding * 2 * Scale;
         if (font) ImGui.PopFont();
         return width;
     }
 
-    /** A small mode button (Object / Asset): no fill, its label easing to strong text and an accent underline when active. */
+    /** A small mode button (Object / Asset): no fill, its label easing to strong text and the amber underline when active. */
     public static bool ModeButton(string label, bool active)
     {
         bool font = PushFont(HeadingFont);
         uint id = ImGui.GetID(label);
         var text = UiMotion.EaseColor(UiMotion.Mix(id, 0x40DEu), active ? TextStrong : Muted);
         ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
+        ImGui.PushStyleColor(ImGuiCol.Border, Vector4.Zero);
         ImGui.PushStyleColor(ImGuiCol.Text, text);
         bool clicked = UiAuto.SmallButton(label);
-        ImGui.PopStyleColor(2);
+        ImGui.PopStyleColor(3);
         if (font) ImGui.PopFont();
         if (active) Underline();
         return clicked;
     }
 
-    /** A 2 px accent line under the last item: the active tab or mode. */
+    /** The amber underline under the last item: the active tab or mode. */
     public static void Underline()
     {
         var min = ImGui.GetItemRectMin();
         var max = ImGui.GetItemRectMax();
-        ImGui.GetWindowDrawList().AddRectFilled(new(min.X, max.Y - 2 * Scale), max, U32(Accent));
+        AngledUnderline(ImGui.GetWindowDrawList(), min.X, max.X, max.Y, 0);
     }
 
-    /** A 2 px accent bar on the left of a row: the selected list row. */
+    /**
+     * The mockup's active-tab mark: a 2 px amber bar on the bottom edge whose ends slope in by 2 px (clip-path
+     * polygon(0 100%, 2px 0, calc(100% - 2px) 0, 100% 100%)), inset from both sides of the tab.
+     */
+    public static void AngledUnderline(ImDrawListPtr draw, float left, float right, float bottom, float inset, float alpha = 1)
+    {
+        float x0 = left + inset * Scale, x1 = right - inset * Scale, height = 2 * Scale, slope = 2 * Scale;
+        if (x1 - x0 < slope * 2 + 1) return;
+        uint color = U32(Alpha(Accent, alpha));
+        draw.AddQuadFilled(new(x0, bottom), new(x0 + slope, bottom - height), new(x1 - slope, bottom - height), new(x1, bottom), color);
+    }
+
+    /** A 2 px accent bar on the left of a row: the selected list row (the mockup's border-left). */
     public static void LeftBar(ImDrawListPtr draw, Vector2 min, Vector2 max)
         => draw.AddRectFilled(min, new(min.X + 2 * Scale, max.Y), U32(Accent));
 
-    /** Formerly the launcher's title notch; UE5 headers carry a thin accent tick instead. */
+    /** A thin accent tick at the start of a header. */
     public static void TitleNotch(ImDrawListPtr draw, Vector2 min, float height)
-        => draw.AddRectFilled(min, new(min.X + 2 * Scale, min.Y + height), U32(Accent), Scale);
+        => draw.AddRectFilled(min, new(min.X + 2 * Scale, min.Y + height), U32(Accent));
 
     /** Space a panel header leaves before its title. */
-    public static float HeaderIndent => Space3;
+    public static float HeaderIndent => Space5;
 
-    /** The compact panel header height (22 px at 100 %). */
+    /** The panel header height (30 px at 100 %). */
     public static float PanelHeaderHeight => PanelHeaderSize * Scale;
 
     /**
-     * A compact UE5 panel header: the header window reads as a Header strip with one active tab (Panel fill, 2 px
-     * Accent top line, joined to the body) holding the 11 px semibold title. The title is drawn where the next item
-     * (an editor combo with an empty preview) sits, clipped to itemWidth.
+     * A panel header (the mockup's .panel-head): the panel fill with a hairline under it and the title in upper-case
+     * Chakra Petch, --text-dim, tracked .1 em. The title is drawn where the next item (an editor combo with an empty
+     * preview) sits, clipped to itemWidth.
      */
     public static void PanelHeader(string title, float itemWidth)
     {
@@ -506,41 +760,36 @@ public static unsafe partial class SolTheme
         var windowMin = ImGui.GetWindowPos();
         var windowMax = windowMin + ImGui.GetWindowSize();
         draw.AddRectFilled(windowMin, windowMax, U32(Header));
+        draw.AddLine(new(windowMin.X, windowMax.Y - .5f), new(windowMax.X, windowMax.Y - .5f), U32(Line), 1);
         var at = ImGui.GetCursorScreenPos();
-        bool font = PushFont(LabelFont);
-        float textWidth = ImGui.CalcTextSize(title).X;
-        float tabWidth = Math.Min(textWidth + Space4 * 2, Math.Max(Space4 * 2, itemWidth + HeaderIndent));
-        var tabMin = new Vector2(windowMin.X + Math.Max(0, at.X - windowMin.X - Space2), windowMin.Y);
-        var tabMax = new Vector2(tabMin.X + tabWidth, windowMax.Y);
-        draw.AddRectFilled(tabMin, tabMax, U32(Panel), RoundingTab * Scale, ImDrawFlags.RoundCornersTop);
-        draw.AddRectFilled(tabMin, new(tabMax.X, tabMin.Y + 2 * Scale), U32(Accent), RoundingTab * Scale, ImDrawFlags.RoundCornersTop);
         float frame = ImGui.GetFrameHeight();
-        var textAt = new Vector2(tabMin.X + Space4, at.Y + (frame - ImGui.GetTextLineHeight()) / 2);
-        draw.PushClipRect(tabMin, tabMax, true);
-        draw.AddText(textAt, U32(TextStrong), title);
+        bool font = PushFont(LabelFont);
+        var textAt = new Vector2(at.X, at.Y + (frame - ImGui.GetTextLineHeight()) / 2);
+        draw.PushClipRect(windowMin, new(Math.Min(windowMax.X, at.X + itemWidth + HeaderIndent), windowMax.Y), true);
+        TrackedText(draw, textAt, U32(Muted), title.ToUpperInvariant(), ImGui.GetFontSize() * TrackLabel);
         draw.PopClipRect();
         if (font) ImGui.PopFont();
         ImGui.SetCursorScreenPos(new(at.X + HeaderIndent, at.Y));
     }
 
     /**
-     * One compact tab of a tabbed area header: Header fill and muted label when inactive, Panel fill with a 2 px Accent
-     * top line and strong label when active. hover in [0, 1] (an eased value) lifts an inactive tab toward Hover.
-     * accentLine false leaves the top line to the caller (area tabs draw one sprung line that slides between tabs);
-     * activeBlend in [0, 1], when given, eases the fill from the inactive fill to Panel instead of switching it.
+     * One tab of an area header (the mockup's .tablist tab): no fill, an upper-case Chakra Petch label in --text-dim, or
+     * --text when active or hovered, and the amber angled underline under the active tab. hover in [0, 1] (an eased
+     * value) lifts an inactive label toward --text. accentLine false leaves the underline to the caller (area tabs draw
+     * one sprung line that slides between tabs); activeBlend in [0, 1] eases the label colour instead of switching it.
      */
     public static void PanelTab(ImDrawListPtr draw, Vector2 min, Vector2 max, string label, bool active, float hover = 0,
         bool accentLine = true, float activeBlend = -1)
     {
-        float radius = RoundingTab * Scale;
-        var resting = Vector4.Lerp(Header, Hover, Math.Clamp(hover, 0, 1));
-        var fill = activeBlend >= 0 ? Vector4.Lerp(resting, Panel, Math.Clamp(activeBlend, 0, 1)) : active ? Panel : resting;
-        draw.AddRectFilled(min, max, U32(fill), radius, ImDrawFlags.RoundCornersTop);
-        if (active && accentLine) draw.AddRectFilled(min, new(max.X, min.Y + 2 * Scale), U32(Accent), radius, ImDrawFlags.RoundCornersTop);
+        float on = activeBlend >= 0 ? Math.Clamp(activeBlend, 0, 1) : active ? 1 : 0;
+        if (hover > 0 && on < 1) draw.AddRectFilled(min, max, U32(Alpha(Panel2, Math.Clamp(hover, 0, 1) * (1 - on) * .6f)));
+        if (active && accentLine) AngledUnderline(draw, min.X, max.X, max.Y, 10);
+        if (label.Length == 0) return;
         bool font = PushFont(LabelFont);
-        var textAt = new Vector2(min.X + Space4, min.Y + (max.Y - min.Y - ImGui.GetTextLineHeight()) / 2);
+        var textAt = new Vector2(min.X + Space5, MathF.Round(min.Y + (max.Y - min.Y - ImGui.GetTextLineHeight()) / 2));
+        var color = Vector4.Lerp(Vector4.Lerp(Muted, Text, Math.Clamp(hover, 0, 1)), TextStrong, on);
         draw.PushClipRect(min, max, true);
-        draw.AddText(textAt, U32(active ? TextStrong : Vector4.Lerp(Muted, Text, Math.Clamp(hover, 0, 1))), label);
+        TrackedText(draw, textAt, U32(color), label.ToUpperInvariant(), ImGui.GetFontSize() * TrackLabel);
         draw.PopClipRect();
         if (font) ImGui.PopFont();
     }
@@ -553,13 +802,13 @@ public static unsafe partial class SolTheme
         ImGui.PushStyleColor(ImGuiCol.Button, Vector4.Zero);
     }
 
-    /** A viewport label chip: translucent panel fill, highlight border, accent border when the pointer is over it. */
+    /** A viewport label chip (the mockup's .vp-title): translucent panel fill, chamfered, amber frame when the pointer is over it. */
     public static void Chip(ImDrawListPtr draw, Vector2 min, Vector2 max, bool hovered)
-        => ChamferFrame(draw, min, max, 0, U32(Alpha(Panel, .92f)), U32(hovered ? Accent : BorderHi));
+        => ChamferFrame(draw, min, max, CutTiny, U32(Alpha(Panel, .94f)), U32(hovered ? Accent : Line));
 
-    /** Icon tint: text at rest, strong text on hover, accent when toggled on. */
+    /** Icon tint: text at rest, amber on hover and when toggled on (the mockup's .icon-btn). */
     public static uint IconTint(bool active, bool hovered) => U32(IconTintColor(active, hovered));
 
     /** The icon tint as a colour, for easing between states. */
-    public static Vector4 IconTintColor(bool active, bool hovered) => active ? Accent : hovered ? TextStrong : Text;
+    public static Vector4 IconTintColor(bool active, bool hovered) => active || hovered ? Accent : Text;
 }

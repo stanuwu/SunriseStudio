@@ -37,6 +37,18 @@ public sealed partial class CuiTypeRegistry
     /** True when the default size is known and the type has verified constructor defaults (or is text or bitmap). */
     public bool HasVerifiedDefaults(uint type, uint auxiliary) => DefaultSize is not null
         && (defaults.Contains(Key(type, auxiliary)) || Key(type, auxiliary) is TextType or BitmapType);
+    /** The type itself followed by its known ancestors, nearest first; just the type for an unregistered one. */
+    public IReadOnlyList<ulong> Lineage(uint type, uint auxiliary)
+    {
+        List<ulong> chain = [];
+        ulong current = Key(type, auxiliary);
+        while (current != 0 && chain.Count < 32 && !chain.Contains(current))
+        {
+            chain.Add(current);
+            if (!parents.TryGetValue(current, out current)) break;
+        }
+        return chain;
+    }
     private static ulong Key(uint type, uint auxiliary) => ((ulong)auxiliary << 32) | type;
 
     private bool Derives(ulong type, ulong target)

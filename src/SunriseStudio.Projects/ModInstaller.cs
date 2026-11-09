@@ -21,6 +21,8 @@ public sealed record ModFolderContents(byte[] Manifest, IReadOnlyDictionary<stri
     IReadOnlyDictionary<string, byte[]>? Scripts)
 {
     public IReadOnlyDictionary<string, string>? Sdk { get; init; }
+    /** Mod data files (`ui/`, `textures/`, `data/`, `resources/` below the mod folder) by path, as SHA-256. */
+    public IReadOnlyDictionary<string, string>? Files { get; init; }
     public IReadOnlySet<string>? OwnedScripts { get; init; }
     public byte[]? SourceReceiptBytes { get; init; }
 }
@@ -33,9 +35,17 @@ public sealed record ModUpdateResult(string ModId, string ModDirectory, int Writ
 /** Installs a project as a Sunrise mod. It writes only below `bin/x64/Sunrise/mods` in the installation. */
 public static partial class ModInstaller
 {
-    /** Folder holding installed mods under a game root. */
-    public static string ModsDirectory(string gameRoot) =>
-        Path.Combine(Path.GetFullPath(gameRoot), "bin", "x64", "Sunrise", "mods");
+    /**
+     * Folder holding installed mods under a game root. A client whose Sunrise loader sits beside destiny2.exe
+     * (the Project Sol client: `<root>\Sunrise\mods`) reads mods there, so that folder wins when it exists;
+     * otherwise the loader lives in bin\x64.
+     */
+    public static string ModsDirectory(string gameRoot)
+    {
+        string root = Path.GetFullPath(gameRoot);
+        string beside = Path.Combine(root, "Sunrise", "mods");
+        return Directory.Exists(beside) ? beside : Path.Combine(root, "bin", "x64", "Sunrise", "mods");
+    }
 
     /** Progress receives each stage name before that stage starts. */
     public static ModInstallResult BuildAndInstall(StudioProject project, PackageCatalog catalog,
@@ -44,13 +54,14 @@ public static partial class ModInstaller
         progress?.Invoke("Checking mod details");
         scripts = ProjectScripts(project, scripts);
         var sdk = ProjectSources(project, "sdk");
+        var files = ProjectModFiles(project);
         // One cache clear here lets the build reuse the object edits Check compiled.
         catalog.InvalidateReadCache();
-        var (metadata, native) = Check(project, catalog, scripts, sdk);
+        var (metadata, native) = Check(project, catalog, scripts, sdk, files);
         if (native) progress?.Invoke("Building packages");
         var build = native ? project.Build(catalog, invalidate: false) : null;
         progress?.Invoke("Copying files into the mods folder");
-        var staged = Stage(metadata, build, scripts, catalog.GameRoot, catalog.ContainsInstalledPackage, sdk);
+        var staged = Stage(metadata, build, scripts, catalog.GameRoot, catalog.ContainsInstalledPackage, sdk, files);
         progress?.Invoke("Replacing the installed mod");
         Swap(staged.StagingDirectory, staged.ModDirectory);
         return new(staged.ModDirectory, staged.PackageFiles, staged.PatchFiles, staged.ScriptFiles, build) { SdkFiles = staged.SdkFiles };
@@ -58,7 +69,7 @@ public static partial class ModInstaller
 
     /** Metadata, startup-package and script checks run before the build writes any output. */
     private static (ModMetadata Metadata, bool Native) Check(StudioProject project, PackageCatalog catalog,
-        IReadOnlyList<ModScriptFile> scripts, IReadOnlyList<ModScriptFile> sdk)
+        IReadOnlyList<ModScriptFile> scripts, IReadOnlyList<ModScriptFile> sdk, IReadOnlyList<ModScriptFile>? files = null)
     {
         var metadata = project.Mod ?? throw new InvalidOperationException("Set the mod details before installing.");
         ModManifest.Require(metadata);
@@ -73,7 +84,7 @@ public static partial class ModInstaller
         if (startup.Length > 0) throw StartupRefusal(startup);
         bool native = project.Changes.Count > 0 || objectTags.Any()
             || project.AddedAssets.Any(asset => asset.Native is not null);
-        if (!native && scripts.Count == 0 && sdk.Count == 0) throw new InvalidOperationException("The project has nothing to install.");
+        if (!native && scripts.Count == 0 && sdk.Count == 0 && (files?.Count ?? 0) == 0) throw new InvalidOperationException("The project has nothing to install.");
         return (metadata, native);
     }
 
@@ -87,8 +98,9 @@ public static partial class ModInstaller
         progress?.Invoke("Checking mod details");
         scripts = ProjectScripts(project, scripts);
         var sdk = ProjectSources(project, "sdk");
+        var files = ProjectModFiles(project);
         catalog.InvalidateReadCache();
-        var (metadata, native) = Check(project, catalog, scripts, sdk);
+        var (metadata, native) = Check(project, catalog, scripts, sdk, files);
         string target = Path.Combine(ModsDirectory(catalog.GameRoot), metadata.Id);
         ProjectPaths.RejectLinks(target, "The mods folder path cannot contain links or junctions.");
         if (!File.Exists(Path.Combine(target, ModManifest.FileName)))
@@ -97,7 +109,7 @@ public static partial class ModInstaller
         var build = native ? project.Build(catalog, invalidate: false) : null;
         progress?.Invoke("Writing changed scripts");
         var installed = ReadInstalled(target);
-        var plan = PlanUpdate(installed, Planned(metadata, build, scripts, catalog.ContainsInstalledPackage, sdk));
+        var plan = PlanUpdate(installed, Planned(metadata, build, scripts, catalog.ContainsInstalledPackage, sdk, files));
         if (plan.Restart is { } restart) throw new InvalidOperationException(restart);
         ApplyUpdate(target, plan, installed.Scripts ?? new Dictionary<string, byte[]>(),
             scripts.Select(file => file.RelativePath), installed.SourceReceiptBytes);
@@ -118,6 +130,7 @@ public static partial class ModInstaller
             && (previousSdk.Count != nextSdk.Count || previousSdk.Any(file => !nextSdk.TryGetValue(file.Key, out string? hash)
                 || !file.Value.Equals(hash, StringComparison.OrdinalIgnoreCase))))
             changed.Add("The mod SDK changed");
+        if (!SameHashes(installed.Files, next.Files)) changed.Add("The mod data files changed");
         if (changed.Count > 0)
             return new(string.Join(". ", changed) + ". Close the game and use Build and install.", [], []);
         var before = installed.Scripts ?? new Dictionary<string, byte[]>();
@@ -151,13 +164,18 @@ public static partial class ModInstaller
         var sdk = Directory.Exists(sdkRoot) ? UnlinkedFiles(sdkRoot)
             .ToDictionary(file => Relative(sdkRoot, file), Hash, StringComparer.OrdinalIgnoreCase) : null;
         var receipt = ReadSourceReceipt(target);
+        var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string folder in ModFileFolders.Select(name => Path.Combine(target, name)).Where(Directory.Exists))
+            foreach (string file in UnlinkedFiles(folder))
+                files[Relative(target, file)] = Hash(file);
         return new(File.ReadAllBytes(Path.Combine(target, ModManifest.FileName)), packages, scripts)
-        { Sdk = sdk, OwnedScripts = receipt.Paths, SourceReceiptBytes = receipt.Bytes };
+        { Sdk = sdk, Files = files.Count == 0 ? null : files, OwnedScripts = receipt.Paths, SourceReceiptBytes = receipt.Bytes };
     }
 
     /** The same layout Stage writes: installed ids go to `patches`, new ids to `packages`. */
     private static ModFolderContents Planned(ModMetadata metadata, ProjectBuildResult? build,
-        IReadOnlyList<ModScriptFile> scripts, Func<ushort, bool> isInstalled, IReadOnlyList<ModScriptFile> sdk)
+        IReadOnlyList<ModScriptFile> scripts, Func<ushort, bool> isInstalled, IReadOnlyList<ModScriptFile> sdk,
+        IReadOnlyList<ModScriptFile>? modFiles = null)
     {
         var packages = new Dictionary<string, string>(StringComparer.Ordinal);
         BuiltPackage[] built = build is null ? [] : ReadBuiltPackages(build);
@@ -171,6 +189,8 @@ public static partial class ModInstaller
             : scripts.ToDictionary(script => script.RelativePath, script => script.Data, StringComparer.OrdinalIgnoreCase);
         return new(ModManifest.Serialize(metadata, build?.ConfigBindings), packages, files)
         { Sdk = sdk.Count == 0 ? null : sdk.ToDictionary(file => file.RelativePath,
+            file => Convert.ToHexString(SHA256.HashData(file.Data)), StringComparer.OrdinalIgnoreCase),
+          Files = modFiles is null || modFiles.Count == 0 ? null : modFiles.ToDictionary(file => file.RelativePath,
             file => Convert.ToHexString(SHA256.HashData(file.Data)), StringComparer.OrdinalIgnoreCase) };
     }
 
@@ -182,9 +202,9 @@ public static partial class ModInstaller
     /** Packages whose id is installed are patches; every other package is new. */
     public static ModInstallResult Install(ModMetadata metadata, ProjectBuildResult? build,
         IReadOnlyList<ModScriptFile> scripts, string gameRoot, Func<ushort, bool> isInstalled,
-        IReadOnlyList<ModScriptFile>? sdk = null)
+        IReadOnlyList<ModScriptFile>? sdk = null, IReadOnlyList<ModScriptFile>? files = null)
     {
-        var staged = Stage(metadata, build, scripts, gameRoot, isInstalled, sdk);
+        var staged = Stage(metadata, build, scripts, gameRoot, isInstalled, sdk, files);
         Swap(staged.StagingDirectory, staged.ModDirectory);
         return new(staged.ModDirectory, staged.PackageFiles, staged.PatchFiles, staged.ScriptFiles, build) { SdkFiles = staged.SdkFiles };
     }
@@ -192,9 +212,11 @@ public static partial class ModInstaller
     /** The loader ignores folders that start with a dot, so the staged copy stays inert until the swap. */
     internal static StagedMod Stage(ModMetadata metadata, ProjectBuildResult? build,
         IReadOnlyList<ModScriptFile> scripts, string gameRoot, Func<ushort, bool> isInstalled,
-        IReadOnlyList<ModScriptFile>? sdk = null)
+        IReadOnlyList<ModScriptFile>? sdk = null, IReadOnlyList<ModScriptFile>? files = null)
     {
         ModManifest.Require(metadata);
+        files ??= [];
+        foreach (var file in files) RequireModFilePath(file.RelativePath);
         CheckScripts(scripts);
         sdk ??= [];
         CheckScripts(sdk, controllers: false);
@@ -231,6 +253,12 @@ public static partial class ModInstaller
                 string path = Path.Combine(staging, "sdk", module.RelativePath.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.WriteAllBytes(path, module.Data);
+            }
+            foreach (var file in files)
+            {
+                string path = Path.Combine(staging, file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllBytes(path, file.Data);
             }
             File.WriteAllBytes(Path.Combine(staging, SourceReceiptName), SourceReceipt(scripts.Select(file => file.RelativePath)));
         }

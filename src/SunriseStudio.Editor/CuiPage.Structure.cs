@@ -29,7 +29,7 @@ public sealed partial class CuiPage
     private AddedProjectAsset? labelAsset;
     private WidgetLabels? labels;
 
-    private string StructureName(CuiComposedNode node) => labels?.Names.GetValueOrDefault((ushort)node.Id) ?? node.Definition.Name;
+    private string StructureName(CuiComposedNode node) => labels?.Names.GetValueOrDefault((ushort)node.Id) ?? SceneNode(node.Id)?.Label ?? node.Definition.Name;
 
     /** Structural edits are scoped to the open hierarchy, with a private root resource when needed. */
     private void DrawStructureToolbar(StudioPageContext context, CuiComposition scene)

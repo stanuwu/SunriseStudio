@@ -40,14 +40,25 @@ public static class PlayerSources
     /** Unit facing vector (Z = 0) for a yaw in degrees. */
     public static Vector3 Facing(float yaw) => new(MathF.Cos(yaw * MathF.PI / 180), MathF.Sin(yaw * MathF.PI / 180), 0);
 
-    /** Where test-recorder sessions are written: SOLFORGE_RECORDER, else the client's bin\x64\Sunrise\logs\recorder. */
+    /** Recorder overrides shared with testkit, followed by the client install and the open game's recorder folders. */
     public static IEnumerable<string> RecorderRoots(string? gameRoot)
     {
         if (Environment.GetEnvironmentVariable("SOLFORGE_RECORDER") is { Length: > 0 } custom) yield return custom;
+        if (Environment.GetEnvironmentVariable("SOL_RECORDER_ROOT") is { Length: > 0 } recorder) yield return recorder;
+        if (Environment.GetEnvironmentVariable("SOL_CLIENT_DIR") is { Length: > 0 } client)
+            yield return Path.Combine(client, "Sunrise", "logs", "recorder");
         if (string.IsNullOrWhiteSpace(gameRoot)) yield break;
         yield return Path.Combine(gameRoot, "bin", "x64", "Sunrise", "logs", "recorder");
         yield return Path.Combine(gameRoot, "Sunrise", "logs", "recorder");
     }
+
+    /** Selects the most recently written recorder file across roots, including a menu snapshot that clears an old position. */
+    public static string? LatestRecorderRoot(IEnumerable<string> roots) => roots.Distinct(StringComparer.OrdinalIgnoreCase)
+        .Where(Directory.Exists)
+        .SelectMany(root => new DirectoryInfo(root).EnumerateDirectories()
+            .Select(session => new FileInfo(Path.Combine(session.FullName, "snapshots.jsonl")))
+            .Where(file => file.Exists).Select(file => (Root: root, File: file)))
+        .OrderByDescending(row => row.File.LastWriteTimeUtc).Select(row => row.Root).FirstOrDefault();
 
     /**
      * One recorder snapshot line. pos is player::position::snapshot(), the physics body position, the same map
@@ -96,8 +107,10 @@ public static class PlayerSources
     public static PlayerFix? LatestRecorder(string root)
     {
         if (!Directory.Exists(root)) return null;
-        var session = new DirectoryInfo(root).EnumerateDirectories().OrderByDescending(folder => folder.LastWriteTimeUtc).FirstOrDefault();
-        string? file = session is null ? null : Path.Combine(session.FullName, "snapshots.jsonl");
+        string? file = new DirectoryInfo(root).EnumerateDirectories()
+            .Select(folder => new FileInfo(Path.Combine(folder.FullName, "snapshots.jsonl")))
+            .Where(snapshot => snapshot.Exists).OrderByDescending(snapshot => snapshot.LastWriteTimeUtc)
+            .Select(snapshot => snapshot.FullName).FirstOrDefault();
         if (file is null || !File.Exists(file)) return null;
         using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         long start = Math.Max(0, stream.Length - 16384);

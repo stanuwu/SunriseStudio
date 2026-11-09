@@ -10,8 +10,14 @@ $flavor = 'publish'
 if (-not $Output) { $Output = Join-Path $PSScriptRoot $flavor }
 # Source paths in the embedded PDBs become /_/ so no local folder names ship.
 $buildProperties = @("-p:PathMap=$PSScriptRoot\=/_/")
-# A stale folder could hide or add files, so each run starts from an empty one.
-if (Test-Path -LiteralPath $Output) { Remove-Item -LiteralPath $Output -Recurse -Force }
+# Never erase an existing install; publish output must be a new or empty folder.
+$Output = [IO.Path]::GetFullPath($Output)
+if (Test-Path -LiteralPath $Output) {
+    if (-not (Test-Path -LiteralPath $Output -PathType Container) -or
+        (Get-ChildItem -LiteralPath $Output -Force | Select-Object -First 1)) {
+        throw "Publish output must be a new or empty folder. Existing files were preserved: $Output. Use -Output with a new staging folder."
+    }
+}
 # One self-contained exe that needs no .NET install, with the runtime and the license notices inside.
 # The build gets its own folder, so a running developer build does not lock it.
 # A trailing backslash would escape the closing quote of the quoted argument.

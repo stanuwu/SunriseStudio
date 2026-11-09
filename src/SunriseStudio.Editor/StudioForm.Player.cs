@@ -117,9 +117,8 @@ public sealed partial class StudioForm
             {
                 try
                 {
-                    foreach (string root in roots)
+                    if (PlayerSources.LatestRecorderRoot(roots) is { } root)
                     {
-                        if (!Directory.Exists(root)) continue;
                         var fix = PlayerSources.LatestRecorder(root);
                         playerRecorder = fix;
                         playerRecorderNote = fix is null ? "no in-world snapshot (menu, loading or not recording) in " + root

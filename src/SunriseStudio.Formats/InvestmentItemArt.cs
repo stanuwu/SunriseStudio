@@ -6,13 +6,15 @@ namespace SunriseStudio.Formats;
 public static class InvestmentItemArt
 {
     public const uint TableTag = 0x81A28B23, ClassId = 0x808056CC;
-    private const int HandlesField = 8, IntegersField = 24, FieldsField = 40, ItemsField = 56;
-    private const int ItemStride = 16, FieldStride = 8;
-    private const uint HandleClass = 0x80800014, IntegerClass = 0x80800007, FieldClass = 0x808056D6, ItemClass = 0x808056D1;
-    // The four pools in descriptor order; none of their rows holds a pointer.
+    private const int HandlesField = 8, IntegersField = 24, FieldsField = 40, ItemsField = 56, ListsField = 72;
+    private const int ItemStride = 16, FieldStride = 8, ListStride = 8;
+    private const uint HandleClass = 0x80800014, IntegerClass = 0x80800007, FieldClass = 0x808056D6, ItemClass = 0x808056D1,
+        ListClass = 0x808056D5;
+    // The five pools in descriptor order; none of their rows holds a pointer. The last holds one {first field, field count}
+    // row per socket-entry list, read by list index (Parhelion append_dense_list_presentation).
     private static readonly (int Field, uint Class, int Stride)[] Pools =
         [(HandlesField, HandleClass, 4), (IntegersField, IntegerClass, 4), (FieldsField, FieldClass, FieldStride),
-         (ItemsField, ItemClass, ItemStride)];
+         (ItemsField, ItemClass, ItemStride), (ListsField, ListClass, ListStride)];
 
     /** Number of item rows in the table. */
     public static int Count(ReadOnlyMemory<byte> table) => new TagReader(table).Array(ItemsField, ItemClass, ItemStride).Count;
@@ -108,6 +110,118 @@ public static class InvestmentItemArt
         return Append(table, items: [table.Span.Slice(row, ItemStride).ToArray()]);
     }
 
+    /** Number of per-list presentation rows (one per socket-entry list, by list index). */
+    public static int ListCount(ReadOnlyMemory<byte> table) => new TagReader(table).Array(ListsField, ListClass, ListStride).Count;
+
+    /** The raw {first field, field count} of one list's presentation row. */
+    public static (int First, int Count) ReadListRow(ReadOnlyMemory<byte> table, int list)
+    {
+        var reader = new TagReader(table);
+        var lists = reader.Array(ListsField, ListClass, ListStride);
+        if (list < 0 || list >= lists.Count) throw new InvalidDataException($"List {list} has no presentation row.");
+        return (reader.I32(lists.Data + list * ListStride), reader.I32(lists.Data + list * ListStride + 4));
+    }
+
+    /**
+     * Appends presentation rows for new socket-entry lists, each a copy of its base list's row (sharing its fields), as
+     * Parhelion's append_dense_list_presentation does. Rows must follow the existing ones without gaps.
+     */
+    public static byte[] AppendListRows(ReadOnlyMemory<byte> table, IReadOnlyList<(int List, int Base)> rows)
+    {
+        var reader = new TagReader(table);
+        var lists = reader.Array(ListsField, ListClass, ListStride);
+        var fields = reader.Array(FieldsField, FieldClass, FieldStride);
+        var copies = new List<byte[]>();
+        for (int index = 0; index < rows.Count; index++)
+        {
+            var (list, source) = rows[index];
+            if (list != lists.Count + index)
+                throw new InvalidDataException($"List row {list} must follow the {lists.Count + index} existing rows.");
+            if (source < 0 || source >= lists.Count)
+                throw new InvalidDataException($"Base list {source} has no presentation row.");
+            int at = lists.Data + source * ListStride;
+            int first = reader.I32(at), count = reader.I32(at + 4);
+            if (first < 0 || count < 0 || first > fields.Count - count)
+                throw new InvalidDataException($"Base list {source}'s row leaves the field pool.");
+            copies.Add(table.Span.Slice(at, ListStride).ToArray());
+        }
+        return copies.Count == 0 ? table.ToArray() : Append(table, lists: copies);
+    }
+
+    /** The handles of one list's handle fields (type 1 = node icons, type 9 = text banks), in field order. */
+    public static IReadOnlyList<(byte Type, uint Handle)> ReadListHandles(ReadOnlyMemory<byte> table, int list)
+    {
+        var reader = new TagReader(table);
+        var (first, count) = ReadListRow(table, list);
+        var fields = reader.Array(FieldsField, FieldClass, FieldStride);
+        var handles = reader.Array(HandlesField, HandleClass, 4);
+        if (first < 0 || count < 0 || first > fields.Count - count)
+            throw new InvalidDataException($"List {list}'s row leaves the field pool.");
+        var result = new List<(byte, uint)>();
+        for (int index = 0; index < count; index++)
+        {
+            int at = fields.Data + (first + index) * FieldStride;
+            byte type = reader.U8(at + 4);
+            if (type is not (1 or 9)) continue;
+            int start = reader.I32(at), length = reader.U8(at + 5);
+            if (start < 0 || start > handles.Count - length) throw new InvalidDataException($"List {list}'s handles leave their pool.");
+            for (int element = 0; element < length; element++) result.Add((type, reader.U32(handles.Data + (start + element) * 4)));
+        }
+        return result;
+    }
+
+    /**
+     * Gives one added list its own field list: every field is copied, and each handle field (type 1 node icons, type 9
+     * text banks) that names a mapped handle gets its own handle copies with the map applied. Other lists, including the
+     * base list whose fields this list shared, keep theirs. Shipped rows (list &lt; installedLists) are refused.
+     */
+    public static byte[] ForkListFields(ReadOnlyMemory<byte> table, int installedLists, int list, IReadOnlyDictionary<uint, uint> handleMap)
+    {
+        if (list < installedLists)
+            throw new InvalidDataException($"List {list} is a shipped list (the installed table has {installedLists}); only added lists can change.");
+        var reader = new TagReader(table);
+        var lists = reader.Array(ListsField, ListClass, ListStride);
+        if (list >= lists.Count) throw new InvalidDataException($"List {list} has no presentation row.");
+        int row = lists.Data + list * ListStride;
+        int first = reader.I32(row), count = reader.I32(row + 4);
+        var fields = reader.Array(FieldsField, FieldClass, FieldStride);
+        var handles = reader.Array(HandlesField, HandleClass, 4);
+        if (first < 0 || count < 0 || count > byte.MaxValue || first > fields.Count - count)
+            throw new InvalidDataException($"List {list}'s row leaves the field pool.");
+        var newHandles = new List<byte[]>();
+        var newFields = new List<byte[]>();
+        int mapped = 0;
+        for (int index = 0; index < count; index++)
+        {
+            int at = fields.Data + (first + index) * FieldStride;
+            byte[] field = table.Span.Slice(at, FieldStride).ToArray();
+            if (field[4] is 1 or 9)
+            {
+                int start = BinaryPrimitives.ReadInt32LittleEndian(field), length = field[5];
+                if (start < 0 || start > handles.Count - length) throw new InvalidDataException($"List {list}'s handles leave their pool.");
+                var values = Enumerable.Range(0, length).Select(element => reader.U32(handles.Data + (start + element) * 4)).ToArray();
+                if (values.Any(handleMap.ContainsKey))
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(field, handles.Count + newHandles.Count);
+                    foreach (uint value in values)
+                    {
+                        uint next = handleMap.TryGetValue(value, out uint swapped) ? swapped : value;
+                        if (next != value) mapped++;
+                        byte[] handle = new byte[4];
+                        BinaryPrimitives.WriteUInt32LittleEndian(handle, next);
+                        newHandles.Add(handle);
+                    }
+                }
+            }
+            newFields.Add(field);
+        }
+        if (mapped == 0) throw new InvalidDataException($"None of the given handles is in list {list}'s icon or text fields; nothing changed.");
+        byte[] output = Append(table, handles: newHandles, fields: newFields);
+        var after = new TagReader(output).Array(ListsField, ListClass, ListStride);
+        BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(after.Data + list * ListStride), fields.Count);
+        return output;
+    }
+
     /** A static item icon is one type-one field containing one container handle. */
     public static uint ReadPrimaryIcon(ReadOnlyMemory<byte> table, int itemIndex)
     {
@@ -188,9 +302,10 @@ public static class InvestmentItemArt
 
     /** Grows several pools in one step, each moved at most once; Rebuild drops old copies. */
     private static byte[] Append(ReadOnlyMemory<byte> table, IReadOnlyList<byte[]>? handles = null,
-        IReadOnlyList<byte[]>? integers = null, IReadOnlyList<byte[]>? fields = null, IReadOnlyList<byte[]>? items = null)
+        IReadOnlyList<byte[]>? integers = null, IReadOnlyList<byte[]>? fields = null, IReadOnlyList<byte[]>? items = null,
+        IReadOnlyList<byte[]>? lists = null)
     {
-        IReadOnlyList<byte[]>[] rows = [handles ?? [], integers ?? [], fields ?? [], items ?? []];
+        IReadOnlyList<byte[]>[] rows = [handles ?? [], integers ?? [], fields ?? [], items ?? [], lists ?? []];
         return InvestmentItemClone.AppendRows(table, Pools.Select((pool, index) => new RowAppend(pool.Field, pool.Stride, rows[index]))
             .Where(append => append.Rows.Count > 0).ToArray()).Table;
     }

@@ -39,11 +39,54 @@ public static class InvestmentPerkDisplayEdits
         int header = checked((display.Length + 19) & ~15);
         byte[] output = new byte[checked(header + 16 + perkCount * Stride)];
         display.Span.CopyTo(output);
-        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(header - 4), ArrayMarker);
-        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(header), perkCount);
-        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(header + 8), RowClass);
+        TagArrayRelocation.WriteHeader(output, header, perkCount, RowClass);
         for (int index = 0; index < perkCount; index++) empty.CopyTo(output, header + 16 + index * Stride);
         BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(rows.Field), perkCount);
+        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(rows.Field + 8), header - rows.Field - 8L);
+        BinaryPrimitives.WriteInt64LittleEndian(output, output.Length);
+        return output;
+    }
+
+    /**
+     * Resizes the display rows to newCount, keeping authored rows (text overrides, visibility and unlock expressions).
+     * The row at removedIndex is dropped, then the array is trimmed or padded with empty rows at the end.
+     */
+    public static byte[] Resize(byte[] display, int newCount, int? removedIndex = null)
+    {
+        if (newCount < 0 || newCount > 4096)
+            throw new InvalidDataException("The item has too many perk display rows.");
+        var rows = Read(display);
+        if (rows.Field < 0)
+            throw new InvalidDataException("The item display has no perk display block, so its perk rows cannot be kept in step.");
+        if (removedIndex is { } gone && (gone < 0 || gone >= rows.Count))
+            throw new InvalidDataException("The removed perk display row is outside its array.");
+        if (removedIndex is null && rows.Count == newCount) return (byte[])display.Clone();
+        if (newCount == 0)
+        {
+            byte[] cleared = (byte[])display.Clone();
+            cleared.AsSpan(rows.Field, 16).Clear();
+            return cleared;
+        }
+        var data = new TagReader(display);
+        int header = checked((display.Length + 19) & ~15);
+        byte[] output = new byte[checked(header + 16 + newCount * Stride)];
+        display.CopyTo(output, 0);
+        TagArrayRelocation.WriteHeader(output, header, newCount, RowClass);
+        int target = header + 16;
+        for (int index = 0; index < rows.Count && target < output.Length; index++)
+        {
+            if (index == removedIndex) continue;
+            int source = rows.Data + index * Stride;
+            display.AsSpan(source, Stride).CopyTo(output.AsSpan(target));
+            TagArrayRelocation.Rebase(data, output, source + 16, target + 16);
+            target += Stride;
+        }
+        for (; target < output.Length; target += Stride)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(target), ushort.MaxValue);
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(target + 4), InvestmentItemClone.EmptyStringHash);
+        }
+        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(rows.Field), newCount);
         BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(rows.Field + 8), header - rows.Field - 8L);
         BinaryPrimitives.WriteInt64LittleEndian(output, output.Length);
         return output;

@@ -44,8 +44,8 @@ public static partial class SolforgeTools
             "reviewers -> Reviewer (one targeted SmallFix and re-review when the review has findings), or SmallFix -> Reviewer with " +
             "small_fix. Uses ONLY the ordered models configured per role in Solforge (Settings > Models & workflows) and may consume " +
             "the user's subscription or API quota. Solforge always asks the user to confirm (task and routed models); returns a run_id, " +
-            "not a result: read get_model_workflow for real progress. Edits still need the user's before/after review; nothing is saved " +
-            "automatically. Read the solforge-model-workflow skill first.",
+            "not a result: read get_model_workflow for real progress. Permitted project edits and actions follow the editor's user-controlled " +
+            "Auto-approve AI requests preference and are audited. Read the solforge-model-workflow skill first.",
             McpJson.Schema(("task", "string", "Self-contained task with concrete acceptance criteria (1..32768 characters)", true),
                 ("small_fix", "boolean", "One bounded fix: SmallFix -> Reviewer, no planner (default false)", false)),
             true, async (args, cancel) =>

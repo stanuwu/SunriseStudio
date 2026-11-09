@@ -2,6 +2,7 @@
 bin/
 obj/
 /publish/
+/publish-*/
 
 # The .NET home and package cache the scripts keep here, and local tool sources.
 /.dotnet/

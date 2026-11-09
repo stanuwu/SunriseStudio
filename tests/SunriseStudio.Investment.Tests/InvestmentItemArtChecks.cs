@@ -48,6 +48,49 @@ internal static class InvestmentItemArtChecks
         Console.WriteLine("item_art clone=pass native_index=pass shared_source=preserved repeat=stable bounds=reject");
         IconPasses();
         TailAppends();
+        ListRows();
+    }
+
+    /** Per-list rows: a new list copies its base row (sharing fields); installed rows and gaps are refused. */
+    private static void ListRows()
+    {
+        byte[] fixture = Fixture(4);
+        byte[] stock = new byte[fixture.Length + 48]; fixture.CopyTo(stock, 0);
+        int header = (fixture.Length + 19) & ~15;
+        Array(stock, 72, header, 2, 0x808056D5);
+        I(stock, header + 16, 0); I(stock, header + 20, 1); I(stock, header + 24, 0); I(stock, header + 28, 0);
+        Q(stock, 0, stock.Length);
+        Check(InvestmentItemArt.ListCount(stock) == 2, "The list rows were not read.");
+        byte[] grown = InvestmentItemArt.AppendListRows(stock, [(2, 0), (3, 1)]);
+        Check(InvestmentItemArt.ListCount(grown) == 4 && InvestmentItemArt.ReadListRow(grown, 2) == (0, 1)
+            && InvestmentItemArt.ReadListRow(grown, 3) == (0, 0), "New list rows did not copy their base rows.");
+        Check(InvestmentItemArt.ReadListRow(grown, 0) == (0, 1) && InvestmentItemArt.ReadPrimaryIcon(grown, 2) == 0x81326128,
+            "Appending list rows changed an installed row.");
+        byte[] rebuilt = InvestmentItemArt.Rebuild(stock, grown);
+        Check(InvestmentItemArt.ListCount(rebuilt) == 4 && InvestmentItemArt.ReadListRow(rebuilt, 2) == (0, 1)
+            && OnlyPoolsChanged(stock, rebuilt), "Rebuild lost the list rows or shifted installed bytes.");
+        Reject(() => InvestmentItemArt.AppendListRows(stock, [(3, 0)]));
+        Reject(() => InvestmentItemArt.AppendListRows(stock, [(2, 2)]));
+        Console.WriteLine("item_art list_rows=copy rebuild=pass gaps=reject");
+        ForkListFields(stock, grown);
+    }
+
+    /** A forked added list reads its own handle copies; the base list, items and shipped lists keep theirs. */
+    private static void ForkListFields(byte[] stock, byte[] grown)
+    {
+        var map = new Dictionary<uint, uint> { [0x81326128] = 0x81E00001 };
+        byte[] forked = InvestmentItemArt.ForkListFields(grown, 2, 2, map);
+        Check(InvestmentItemArt.ReadListHandles(forked, 2).SequenceEqual(new (byte, uint)[] { (1, 0x81E00001) }),
+            "The forked list does not read its own handle.");
+        Check(InvestmentItemArt.ReadListHandles(forked, 0).SequenceEqual(new (byte, uint)[] { (1, 0x81326128) }),
+            "Forking a list changed its base list's handles.");
+        Check(InvestmentItemArt.ReadPrimaryIcon(forked, 2) == 0x81326128, "Forking a list changed an item's icon.");
+        byte[] rebuilt = InvestmentItemArt.Rebuild(stock, forked);
+        Check(InvestmentItemArt.ReadListHandles(rebuilt, 2).SequenceEqual(new (byte, uint)[] { (1, 0x81E00001) })
+            && OnlyPoolsChanged(stock, rebuilt), "Rebuild lost the forked list or shifted installed bytes.");
+        Reject(() => InvestmentItemArt.ForkListFields(grown, 2, 0, map));
+        Reject(() => InvestmentItemArt.ForkListFields(grown, 2, 2, new Dictionary<uint, uint> { [0x11111111] = 0x81E00001 }));
+        Console.WriteLine("item_art list_fork=own_handles base=preserved rebuild=pass shipped=reject");
     }
 
     /** Icon passes keep one copy of each grown pool; a repeated pass changes nothing. */
@@ -94,7 +137,7 @@ internal static class InvestmentItemArtChecks
             again = InvestmentItemArt.SetSandboxPerks(again, 4 + item, [(ushort)(2481 + item), (ushort)(passes - 1)]);
         }
         Check(InvestmentItemArt.Rebuild(stock, again).SequenceEqual(table), "A repeated icon pass changed the art table.");
-        byte[] outside = table.ToArray(); outside[80] ^= 1;
+        byte[] outside = table.ToArray(); outside[88] ^= 1;
         Reject(() => InvestmentItemArt.Rebuild(stock, outside));
         Console.WriteLine($"item_art passes={passes} items={items} size={table.Length} bound={bound} repeat=unchanged");
     }
@@ -146,20 +189,20 @@ internal static class InvestmentItemArtChecks
         if (table.Length < stock.Length) return false;
         var free = new bool[stock.Length];
         free.AsSpan(0, 8).Fill(true);
-        foreach (int field in new[] { 8, 24, 40, 56 })
+        foreach (int field in new[] { 8, 24, 40, 56, 72 })
         {
             free.AsSpan(field, 16).Fill(true);
             var (count, data) = ReadArray(stock, field);
-            int stride = field == 56 ? 16 : field == 40 ? 8 : 4;
+            int stride = field == 56 ? 16 : field is 40 or 72 ? 8 : 4;
             if (count > 0) free.AsSpan(data - 20, 20 + count * stride).Fill(true);
         }
         for (int offset = 0; offset < stock.Length; offset++)
             if (!free[offset] && stock[offset] != table[offset]) return false;
         // A pool that kept its rows in place must hold its installed rows unchanged.
-        foreach (int field in new[] { 8, 24, 40, 56 })
+        foreach (int field in new[] { 8, 24, 40, 56, 72 })
         {
             var (count, data) = ReadArray(stock, field);
-            int stride = field == 56 ? 16 : field == 40 ? 8 : 4;
+            int stride = field == 56 ? 16 : field is 40 or 72 ? 8 : 4;
             if (count > 0 && ReadArray(table, field).Data == data
                 && !stock.AsSpan(data, count * stride).SequenceEqual(table.AsSpan(data, count * stride))) return false;
         }

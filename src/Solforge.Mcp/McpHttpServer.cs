@@ -130,7 +130,7 @@ public sealed partial class McpHttpServer : IAsyncDisposable
         string? reply = Refuse(caller, method, callId, toolName) ?? await dispatcher.HandleAsync(body, stop.Token).ConfigureAwait(false);
         if (method == "tools/call" && toolName is "open_project" or "create_project" or "close_project")
             Sessions?.Rebind(caller, CurrentProject?.Invoke());
-        if (method == "tools/list" && caller is { IsWorker: true } && reply is not null) reply = WorkerToolList(reply);
+        if (method == "tools/list" && caller is { IsWorker: true } && reply is not null) reply = WorkerToolList(reply, caller.IsReadOnlyWorker);
         var headers = new List<(string, string)>();
         if (initialize && reply is not null && reply.Contains("\"result\"", StringComparison.Ordinal))
         {
@@ -139,7 +139,8 @@ public sealed partial class McpHttpServer : IAsyncDisposable
             headers.Add(("Mcp-Session-Id", session));
             var (client, version) = ClientInfo(body);
             if (Sessions?.Register(session, client, version, pid) is { } registered)
-                Sessions.Bind(registered, CurrentProject?.Invoke(), request.Header(McpSessionRegistry.WorkerHeader) is "1" or "true");
+                Sessions.Bind(registered, CurrentProject?.Invoke(), request.Header(McpSessionRegistry.WorkerHeader) is "1" or "true",
+                    request.Header(McpSessionRegistry.ReadOnlyWorkerHeader) is "1" or "true");
         }
         if (reply is null) { await Write(stream, 202, "text/plain", "", headers).ConfigureAwait(false); return; }
         // A client that accepts only SSE gets the reply as one event; everyone else gets plain JSON.
@@ -255,7 +256,7 @@ public sealed partial class McpHttpServer : IAsyncDisposable
         if (caller.IsWorker)
         {
             var target = dispatcher.Tools.FirstOrDefault(item => item.Name == tool);
-            if (WorkerSessionPolicy.Refusal(tool, target?.RequiresApproval ?? true) is { } refusal)
+            if (WorkerSessionPolicy.Refusal(tool, target?.RequiresApproval ?? true, caller.IsReadOnlyWorker) is { } refusal)
                 return new JsonObject
                 {
                     ["jsonrpc"] = "2.0", ["id"] = JsonNode.Parse(id), ["result"] = McpToolResult.Error(refusal).ToJson()
@@ -270,7 +271,7 @@ public sealed partial class McpHttpServer : IAsyncDisposable
     }
 
     /** A worker's tools/list without the tools it may not call. */
-    private string WorkerToolList(string reply)
+    private string WorkerToolList(string reply, bool readOnly)
     {
         try
         {
@@ -279,7 +280,7 @@ public sealed partial class McpHttpServer : IAsyncDisposable
             {
                 string name = node["name"]?.ToString() ?? "";
                 bool approval = dispatcher.Tools.FirstOrDefault(tool => tool.Name == name)?.RequiresApproval ?? true;
-                if (!WorkerSessionPolicy.Allows(name, approval)) tools.Remove(node);
+                if (!WorkerSessionPolicy.Allows(name, approval, readOnly)) tools.Remove(node);
             }
             return message.ToJsonString(McpJson.Compact);
         }

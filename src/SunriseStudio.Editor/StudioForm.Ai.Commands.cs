@@ -249,7 +249,7 @@ public sealed partial class StudioForm
             case "window.content_editors": return AiShowPanel("content_editors");
             case "window.panel":
             {
-                var kind = StudioLayout.Pickable.Where(item => item != StudioPanelKind.Empty)
+                var kind = VisiblePanelChoices
                     .FirstOrDefault(item => string.Equals(PanelTitle(item), value, StringComparison.OrdinalIgnoreCase)
                         || string.Equals(DisplayTitle(item), value, StringComparison.OrdinalIgnoreCase), StudioPanelKind.Empty);
                 return kind == StudioPanelKind.Empty ? Refused + $"No panel '{value}'." : AiShowLayoutPanel(kind);
@@ -297,7 +297,9 @@ public sealed partial class StudioForm
             case "object_tree": return AiShowLayoutPanel(StudioPanelKind.ObjectTree);
             case "workspace": return AiShowLayoutPanel(StudioPanelKind.Workspace);
             // Shows the Solforge AI panel; it never launches the Solforge AI app (launching a GUI app is a user action).
-            case "ai_workspace": OpenAiWorkspace(); return "Showing the Solforge AI panel (the in-editor console is gone; Solforge AI is a separate app the user launches).";
+            case "ai_workspace":
+                OpenAiWorkspace();
+                return McpOnlyUi ? "The assistant interface is not part of this build; Solforge MCP remains available." : "Showing the Solforge AI panel.";
             case "settings": preferencesOpen = true; return "Opened Settings.";
             case "keybinds": helpDialog = true; return "Opened Keybinds & Tips.";
             case "shortcuts": shortcutsDialog = true; return "Opened Shortcuts.";

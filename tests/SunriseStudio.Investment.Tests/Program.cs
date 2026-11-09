@@ -12,7 +12,11 @@ try
 {
     InvestmentDisplayChecks.Run(root);
     InvestmentItemArtChecks.Run();
+    SubclassPresentationChecks.Run();
+    SubclassPresentationChecks.TalentDisplayRows();
+    SubclassPresentationChecks.LoreRows();
     InvestmentArrayChecks.StatGroups();
+    InvestmentArrayChecks.PerkDisplayRows();
     InvestmentArrayChecks.Collectibles();
     InvestmentArrayChecks.SocketTypes();
     InvestmentArrayChecks.PerkDisplays();

@@ -1036,9 +1036,16 @@ public sealed class ItemWorkflow : CreationWorkflow
             definition = InvestmentWeaponType.SetType(definition, weaponType.Text.Trim(),
                 packages.Read(InvestmentWeaponType.TraitTableTag), packages.Read(InvestmentWeaponType.TraitCategoryTableTag)).Definition;
         byte[] display = packages.Read(source.DisplayTag);
-        // Display perk rows pair by index with the definition's perk rows.
+        // Display perk rows pair by index with the definition's perk rows; authored rows survive, removals drop their own row.
         if (PerksChanged)
-            display = InvestmentPerkDisplayEdits.Reset(display, investment.ReadItem(source.Tag, definition).Perks.Count);
+        {
+            foreach (int position in perkDrafts.Where(draft => draft.Source >= 0 && draft.Remove).Select(draft => draft.Source).OrderDescending())
+                if (position < InvestmentPerkDisplayEdits.ReadCount(display))
+                    display = InvestmentPerkDisplayEdits.Resize(display, InvestmentPerkDisplayEdits.ReadCount(display) - 1, position);
+            int perkCount = investment.ReadItem(source.Tag, definition).Perks.Count;
+            if (perkCount != 0 || InvestmentPerkDisplayEdits.ReadCount(display) != 0)
+                display = InvestmentPerkDisplayEdits.Resize(display, perkCount);
+        }
         var additions = new List<ProjectAssetAddition>();
         var expected = new List<uint>();
         var edits = new Dictionary<uint, byte[]>();

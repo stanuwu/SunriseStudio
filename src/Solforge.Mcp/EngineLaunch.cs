@@ -20,17 +20,7 @@ public static class EngineLaunch
         "'here' or 'what I'm looking at', they mean Solforge's live context: call the sol MCP tools get_context and " +
         "get_open_documents before searching files. .solforge/SESSION.md in the project holds the session context, and the " +
         "solforge-* skills are playbooks for common jobs (new weapon or armor, map bounds, patrol content, enemies, missions): " +
-        "read the matching one first.";
-
-    /** Added when the gemini delegate is an upstream of sol (agy installed). Safe through cmd. */
-    public const string GeminiPrompt =
-        "The sol MCP tool ask_gemini hands a self-contained task to Gemini on the user's own Antigravity CLI login; " +
-        "use it when the user asks for Gemini, a second opinion or a very large read.";
-
-    /** Added when the clinepass delegate is an upstream of sol (cline installed). Safe through cmd. */
-    public const string ClinePassPrompt =
-        "The sol MCP tool ask_clinepass hands a self-contained task to an open-weight ClinePass model on the user's own Cline login; " +
-        "use it when the user asks for ClinePass, Cline or one of its models, or for a cheap second opinion.";
+        "read the matching one first. Before doing a task by hand, check for a matching skill or available MCP tool.";
 
     /** The custom Pi harness prompt: the same live Solforge context, with Pi's MCP tool names. Safe through cmd. */
     public const string PiSystemPrompt =
@@ -46,30 +36,21 @@ public static class EngineLaunch
         "Solforge handed this project over from another AI engine. Read .solforge/HANDOFF.md and .solforge/SESSION.md, " +
         "then say in a few lines what you are picking up and wait for the user to go ahead.";
 
-    /**
-     * @param Gemini True when the config also holds the gemini (ask_gemini) server.
-     * @param ClinePass True when it also holds the clinepass (ask_clinepass) server.
-     */
+    /** Launch files; legacy delegate flags remain false for settings compatibility. */
     public sealed record ClaudeFiles(string McpConfig, string Settings, bool Gemini = false, bool ClinePass = false);
 
     /**
      * Writes the MCP config and the UserPromptSubmit hook settings for the project; @param folder defaults to the
-     * discovery folder; @param gemini also adds the shim's --gemini server (ask_gemini runs the user's own agy);
-     * @param clinePass also adds its --clinepass server (ask_clinepass runs the user's own cline on ClinePass);
+     * discovery folder; legacy delegate switches are ignored.
      * @param servers when given, the config holds exactly this Sol MCP set (SolMcpServers.Collect) instead.
      */
     public static ClaudeFiles WriteClaudeFiles(string projectRoot, string shimPath, string? folder = null, bool gemini = false, bool clinePass = false,
         IReadOnlyList<SolMcpServers.Server>? servers = null)
     {
-        if (servers is not null)
-        {
-            gemini = servers.Any(server => server.Name == AgyDelegate.ServerName);
-            clinePass = servers.Any(server => server.Name == ClineDelegate.ServerName);
-        }
         folder ??= McpDiscovery.Folder;
         Directory.CreateDirectory(folder);
         string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(projectRoot).ToUpperInvariant())))[..12];
-        var files = new ClaudeFiles(Path.Combine(folder, $"claude-mcp-{key}.json"), Path.Combine(folder, $"claude-settings-{key}.json"), gemini, clinePass);
+        var files = new ClaudeFiles(Path.Combine(folder, $"claude-mcp-{key}.json"), Path.Combine(folder, $"claude-settings-{key}.json"), false, false);
         string? upstreams = servers is null ? null : SolMcpServers.WriteUpstreams(projectRoot, servers);
         var sol = SolMcpServers.ClientEntry(projectRoot, shimPath, upstreams);
         Write(files.McpConfig, new JsonObject
@@ -190,8 +171,6 @@ public static class EngineLaunch
         var args = new List<string>();
         if (files is not null) args.AddRange(["--mcp-config", files.McpConfig, "--settings", files.Settings]);
         string prompt = SystemPrompt;
-        if (files is { Gemini: true }) prompt += " " + GeminiPrompt;
-        if (files is { ClinePass: true }) prompt += " " + ClinePassPrompt;
         args.AddRange(["--append-system-prompt", prompt]);
         foreach (string folder in addDirs) { args.Add("--add-dir"); args.Add(folder); }
         return string.Join(' ', args.Select(Quote));

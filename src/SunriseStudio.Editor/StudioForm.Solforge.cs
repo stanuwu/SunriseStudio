@@ -20,7 +20,7 @@ public sealed partial class StudioForm
 
     /**
      * Right-aligned profile, package/key/cache health and memory (recomputed at most once a second), then the MCP fact:
-     * a status dot and the call count of the editor's MCP server; clicking it opens the Solforge AI panel.
+     * a status dot and the call count of the editor's MCP server.
      */
     private void DrawStatusFacts()
     {
@@ -44,11 +44,11 @@ public sealed partial class StudioForm
         draw.AddLine(at + new Vector2(0, line * .1f), at + new Vector2(0, line * .9f), SolTheme.U32(SolTheme.BorderHi), 1);
         ImGui.SetCursorScreenPos(at + new Vector2(spacing * 2, 0));
         var start = ImGui.GetCursorScreenPos();
-        if (UiAuto.InvisibleButton("status-mcp", "MCP", new(mcpWidth, line))) OpenAiWorkspace();
+        ImGui.Dummy(new(mcpWidth, line));
         bool hovered = ImGui.IsItemHovered();
         UiMotion.Dot(draw, start + new Vector2(line * .4f, line * .5f), line * .22f, ImGui.GetItemID(), mcpColor);
         draw.AddText(start + new Vector2(line, 0), SolTheme.U32(hovered ? SolTheme.TextStrong : SolTheme.Muted), mcpText);
-        if (hovered) ImGui.SetTooltip(mcpStatus + "\nClick to open the Solforge AI panel.");
+        if (hovered) ImGui.SetTooltip(mcpStatus);
     }
 
     /** The MCP fact's short text and dot colour from the AiServiceStatus line. */

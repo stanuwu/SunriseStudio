@@ -15,28 +15,27 @@ using Solforge.Mcp.Headless;
 using Solforge.Mcp.Shim;
 
 string? project = null, upstreams = null;
-bool context = false, gemini = false, clinePass = false, sol = false, fromEnv = false, worker = false;
+bool context = false, sol = false, fromEnv = false, worker = false, workerReadOnly = false;
 for (int i = 0; i < args.Length; i++)
     if (args[i] == "--project" && i + 1 < args.Length) project = args[++i];
     else if (args[i] == "--upstreams" && i + 1 < args.Length) upstreams = args[++i];
     else if (args[i] == "--pipe" && i + 1 < args.Length) i++; // solforge-next's worker argument; the shim finds the editor through discovery
     else if (args[i] == "--context") context = true;
-    else if (args[i] == "--gemini") gemini = true;
-    else if (args[i] == "--clinepass") clinePass = true;
+    else if (args[i] is "--gemini" or "--clinepass") { Console.Error.WriteLine("This provider has been retired. Use Claude or Codex."); return 2; }
     else if (args[i] == "--sol") sol = true;
     else if (args[i] == "--from-env") fromEnv = true;
     else if (args[i] == "--worker") worker = true;
+    else if (args[i] == "--worker-readonly") { worker = true; workerReadOnly = true; }
     else if (args[i] is "--help" or "-h")
     {
-        Console.Error.WriteLine("solforge-mcp [--sol [--upstreams <file>]] [--project <folder>] [--from-env] [--worker] [--context] [--gemini] [--clinepass]");
+        Console.Error.WriteLine("solforge-mcp [--sol [--upstreams <file>]] [--project <folder>] [--from-env] [--worker] [--context]");
         Console.Error.WriteLine("  --sol serves the one aggregated `sol` MCP server (tools, resources, templates and prompts from Solforge, sol-testkit, tiger-mcp and delegates).");
         Console.Error.WriteLine("        Solforge's tools come from the running editor, or from the standalone headless host when no editor runs.");
         Console.Error.WriteLine("  --project serves Solforge's tools for that project (editor when running, headless otherwise).");
         Console.Error.WriteLine("  --from-env is --sol with the project from SOLFORGE_NEXT_PROJECT (unset: no project); it never fails on a missing variable.");
-        Console.Error.WriteLine("  --worker marks a model-workflow worker session: reads and reviewed project edits only.");
+        Console.Error.WriteLine("  --worker marks a model-workflow worker session: reads and explicit project-authoring actions, subject to editor approval policy.");
+        Console.Error.WriteLine("  --worker-readonly marks a planning/review worker: read tools only, even with automatic approval enabled.");
         Console.Error.WriteLine("  --context prints its live context as plain text and exits.");
-        Console.Error.WriteLine("  --gemini serves only ask_gemini (runs the Antigravity CLI, agy -p, on your own agy login).");
-        Console.Error.WriteLine("  --clinepass serves only ask_clinepass (runs the Cline CLI, cline -P cline-pass, on your own Cline login).");
         return 0;
     }
 if (fromEnv)
@@ -52,15 +51,7 @@ if (fromEnv)
     sol = true;
 }
 if (context) return await PrintContext(project);
-if (sol) return await SolAggregator.Serve(project, upstreams, worker);
-if (gemini || clinePass)
-{
-    // Works without Solforge running, so any Claude Code session can add it (claude mcp add --scope user).
-    var output = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
-    var reader = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
-    await (gemini ? AgyDelegate.Serve(reader, output) : ClineDelegate.Serve(reader, output));
-    return 0;
-}
+if (sol) return await SolAggregator.Serve(project, upstreams, worker, workerReadOnly);
 
 string? explicitProject = string.IsNullOrWhiteSpace(project) ? null : Path.GetFullPath(project);
 using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
@@ -172,7 +163,7 @@ async Task<EditorLink?> Route()
     try
     {
         if (entry is null) editor = null;
-        else if (editor?.Key != key) { editor = new EditorLink(http, entry, worker); lastEditorProject = entry.Project ?? lastEditorProject; }
+        else if (editor?.Key != key) { editor = new EditorLink(http, entry, worker, workerReadOnly); lastEditorProject = entry.Project ?? lastEditorProject; }
         changed = routeKey is not null && routeKey != key;
         routeKey = key;
         current = editor;
@@ -203,7 +194,7 @@ McpDispatcher Headless()
     string? wanted = explicitProject ?? lastEditorProject;
     if (headless is { } current && string.Equals(current.Project, wanted, StringComparison.OrdinalIgnoreCase)) return current.Dispatcher;
     var created = HeadlessSolforgeHost.CreateDispatcher(new HeadlessSolforgeHost(wanted),
-        typeof(SolforgeRoute).Assembly.GetName().Version?.ToString(3) ?? "0", worker);
+        typeof(SolforgeRoute).Assembly.GetName().Version?.ToString(3) ?? "0", worker, workerReadOnly);
     headless = (wanted, created);
     return created;
 }

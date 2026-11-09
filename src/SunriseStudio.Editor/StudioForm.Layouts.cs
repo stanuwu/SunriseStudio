@@ -47,33 +47,6 @@ public sealed partial class StudioForm
         layoutDirty = true;
     }
 
-    private void DrawWindowMenu()
-    {
-        if (!UiAuto.BeginMenu("Window")) return;
-        SolTheme.PopupShadow();
-        if (UiAuto.BeginMenu("Layouts"))
-        {
-            SolTheme.PopupShadow();
-            foreach (string name in StudioLayout.PresetNames)
-                if (UiAuto.MenuItem(name)) ApplyLayoutPreset(name);
-            UiAuto.EndMenu();
-        }
-        if (UiAuto.MenuItem("Content Browser drawer", ShortcutInput.Text(ShortcutActions.ToggleBrowser))) ToggleBrowserDrawer();
-        // The old "AI workspace" item is two now: the separate app (launch or focus) and the in-editor panel.
-        UiAuto.PushBlocked();
-        try
-        {
-            if (UiAuto.MenuItem("Solforge AI", ShortcutInput.Text(ShortcutActions.OpenAiWorkspace))) LaunchOrFocusSolforgeAi();
-            StudioUi.Tip("Launch the Solforge AI app for this project, or bring it to the front.");
-        }
-        finally { UiAuto.PopBlocked(); }
-        if (UiAuto.MenuItem("Solforge AI panel")) OpenAiWorkspace();
-        DrawContentEditorsMenuItem();
-        ImGui.Separator();
-        DrawLayoutMenu();
-        UiAuto.EndMenu();
-    }
-
     private void HandleLayoutShortcuts()
     {
         // Popout windows run the same handler; one press toggles once.

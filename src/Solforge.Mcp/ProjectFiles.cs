@@ -19,7 +19,8 @@ public static class ProjectFiles
         { ".pkg", ".exe", ".dll", ".pdb", ".bak" };
 
     /** The full path for a project path ("scripts/a.lua") or SDK doc path ("sdk:api.md"); null when it leaves its root. */
-    public static string? Resolve(string? projectRoot, IReadOnlyList<string> sdkRoots, string relative, string? scriptsRoot = null)
+    public static string? Resolve(string? projectRoot, IReadOnlyList<string> sdkRoots, string relative, string? scriptsRoot = null,
+        IReadOnlyList<string>? readFolders = null)
     {
         relative = relative.Replace('\\', '/').Trim();
         if (relative.StartsWith(ScriptsPrefix, StringComparison.OrdinalIgnoreCase))
@@ -31,7 +32,13 @@ public static class ProjectFiles
                 if (Inside(sdk, rest) is { } path && File.Exists(path)) return path;
             return sdkRoots.Count > 0 ? Inside(sdkRoots[0], rest) : null;
         }
-        return projectRoot is null ? null : Inside(projectRoot, relative);
+        if (projectRoot is not null && Inside(projectRoot, relative) is { } projectPath) return projectPath;
+        // A folder grant includes every descendant. Absolute paths keep references to separate roots unambiguous;
+        // a sibling whose name happens to start with the allowed folder's name does not inherit permission.
+        if (Path.IsPathFullyQualified(relative) && readFolders is not null)
+            foreach (string folder in readFolders)
+                if (Inside(folder, relative) is { } allowed) return allowed;
+        return null;
     }
 
     /** Refuses absolute paths, "..", other drives and anything the build writes or the game reads directly. */
@@ -101,15 +108,29 @@ public static class ProjectFiles
         Search(projectRoot, sdkRoots, query, extension, limit, Solforge.Harness.Credentials.CredentialGuard.IsCredentialPath);
 
     /** Text search that never opens a file skip returns true for (the credential file guard). */
-    public static JsonArray Search(string? projectRoot, IReadOnlyList<string> sdkRoots, string query, string? extension, int limit, Func<string, bool> skip)
+    public static JsonArray Search(string? projectRoot, IReadOnlyList<string> sdkRoots, string query, string? extension, int limit, Func<string, bool> skip,
+        IReadOnlyList<string>? readFolders = null, string? folder = null)
     {
         var results = new JsonArray();
         var roots = new List<(string Root, string Prefix)>();
-        if (projectRoot is not null) roots.Add((projectRoot, ""));
-        roots.AddRange(sdkRoots.Where(Directory.Exists).Select(root => (root, SdkPrefix)));
+        if (folder is { Length: > 0 })
+        {
+            string? probe = Resolve(projectRoot, sdkRoots, Path.Combine(folder, ".solforge-search-scope"), readFolders: readFolders);
+            string? scoped = probe is null ? null : Path.GetDirectoryName(probe);
+            if (scoped is null || !Directory.Exists(scoped)) throw new IOException("The search folder is missing or outside the project and enabled AI folders.");
+            roots.Add((scoped, Path.GetFullPath(scoped).TrimEnd('\\', '/') + Path.DirectorySeparatorChar));
+        }
+        else
+        {
+            if (projectRoot is not null) roots.Add((projectRoot, ""));
+            roots.AddRange(sdkRoots.Where(Directory.Exists).Select(root => (root, SdkPrefix)));
+            if (readFolders is not null) roots.AddRange(readFolders.Where(Directory.Exists).Select(root => (root, Path.GetFullPath(root).TrimEnd('\\', '/') + Path.DirectorySeparatorChar)));
+        }
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (root, prefix) in roots)
             foreach (string file in Files(root))
             {
+                if (!seen.Add(Path.GetFullPath(file))) continue;
                 if (extension is { Length: > 0 } && !file.EndsWith(extension.StartsWith('.') ? extension : "." + extension, StringComparison.OrdinalIgnoreCase)) continue;
                 if (skip(file)) continue;
                 string relative = prefix + Path.GetRelativePath(root, file).Replace('\\', '/');
@@ -139,9 +160,10 @@ public static class ProjectFiles
             string[] files, folders;
             try { files = Directory.GetFiles(folder); folders = Directory.GetDirectories(folder); }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { continue; }
-            foreach (string file in files.Order(StringComparer.OrdinalIgnoreCase)) yield return file;
+            foreach (string file in files.Order(StringComparer.OrdinalIgnoreCase))
+                if (!IsLink(file)) yield return file;
             foreach (string child in folders.OrderDescending(StringComparer.OrdinalIgnoreCase))
-                if (!SkippedFolders.Contains(Path.GetFileName(child))) pending.Push(child);
+                if (!SkippedFolders.Contains(Path.GetFileName(child)) && !IsLink(child)) pending.Push(child);
         }
     }
 
@@ -159,8 +181,30 @@ public static class ProjectFiles
         {
             string full = Path.GetFullPath(Path.Combine(root, relative));
             string baseline = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            return full.StartsWith(baseline, StringComparison.OrdinalIgnoreCase) ? full : null;
+            if (!full.StartsWith(baseline, StringComparison.OrdinalIgnoreCase)) return null;
+            string actualRoot = RealPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            return RealPath(full).StartsWith(actualRoot, StringComparison.OrdinalIgnoreCase) ? full : null;
         }
-        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    private static bool IsLink(string path)
+    {
+        try { return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return true; }
+    }
+
+    /** Resolve existing junctions/symlinks without requiring the final file to exist (new edits still work). */
+    private static string RealPath(string path)
+    {
+        string full = Path.GetFullPath(path), current = Path.GetPathRoot(full)!;
+        foreach (string part in full[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            FileSystemInfo item = File.Exists(current) ? new FileInfo(current) : new DirectoryInfo(current);
+            if (item.LinkTarget is not null)
+                current = item.ResolveLinkTarget(true)?.FullName ?? throw new IOException("The path contains an unresolved link.");
+        }
+        return current;
     }
 }

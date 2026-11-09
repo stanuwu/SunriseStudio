@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace Solforge.Mcp.Testkit;
 
@@ -76,6 +77,7 @@ public sealed class TestkitMonitor(TestkitOptions options)
     public Func<int, bool>? PortUp { get; init; }
     public Func<CancellationToken, Task<(bool Ok, string Detail, int Tools)>>? Handshake { get; init; }
     public Func<int, bool>? Kill { get; init; }
+    public Func<int?>? StartHttp { get; init; }
 
     public static TestkitMonitor CreateDefault() => new(new TestkitOptions());
 
@@ -83,7 +85,8 @@ public sealed class TestkitMonitor(TestkitOptions options)
     public string LaunchDescription() =>
         $"stdio MCP server: the client (Claude Code) runs `{Options.Python} {string.Join(' ', Options.PythonArgs)} {Options.Script}` from .mcp.json with " +
         $"SOL_PAD_PORT={Options.PadPort} SOL_LIVE_PORT={Options.LivePort}; the script binds the live capture port {Options.LivePort} itself. " +
-        $"The client owns the pipe, so a killed testkit comes back only when the client reconnects (/mcp). `--http <port>` serves the same tools without a client.";
+        $"Each client owns its stdio worker. The aggregate reconnects a dead worker on the next call; direct clients must reconnect (/mcp). " +
+        "Multiple client instances are normal, and capture status returns each instance's actual stream URL. `--http <port>` serves tools separately.";
 
     /** Checks the script, the running processes, the ports and a throwaway handshake, and turns them into a light. */
     public async Task<TestkitStatus> StatusAsync(CancellationToken cancel = default)
@@ -103,16 +106,15 @@ public sealed class TestkitMonitor(TestkitOptions options)
         return new(light, summary, exists, processes, instances, ok, detail, tools, pad, live, LaunchDescription());
     }
 
-    /** Light rules: red when the script is missing or fails its handshake; amber when nobody runs it, it runs twice, or capture is down; else green. */
+    /** Transport-only light: red on a missing script/failed handshake, amber with no client/default endpoint, else green. */
     public static (string Light, string Summary) Judge(bool scriptExists, bool? handshakeOk, int instances, bool liveUp, bool padUp)
     {
         if (!scriptExists) return ("red", "sol_testkit_mcp.py not found");
         if (handshakeOk != true) return ("red", "testkit script fails its MCP handshake (python or numpy/Pillow missing?)");
         string pad = padUp ? "pad server up" : "pad server off";
         if (instances == 0) return ("amber", $"script healthy but no testkit running; the client must reconnect (/mcp) or Start HTTP ({pad})");
-        if (instances > 1) return ("amber", $"{instances} testkit instances running; they fight over the live port, restart to leave one");
         if (!liveUp) return ("amber", $"running but live capture port is not answering ({pad})");
-        return ("green", $"running, handshake ok, live capture up ({pad})");
+        return ("green", $"{instances} MCP client instance(s), handshake ok, default capture endpoint up ({pad}); check capture/launch_status for a fresh game frame");
     }
 
     /** python.exe processes count; py.exe is only the launcher in front of them, so it counts only when alone. */
@@ -123,29 +125,30 @@ public sealed class TestkitMonitor(TestkitOptions options)
     }
 
     /**
-     * Ends every running testkit process. mode "kill" leaves the client to respawn it on reconnect; "http" then starts the script's
-     * own --http server on HttpPort.
+     * Explicit "kill" ends every testkit worker. "http" restarts only HTTP workers on HttpPort and preserves stdio clients.
      */
     public async Task<TestkitRestartResult> RestartAsync(string mode, CancellationToken cancel = default)
     {
         if (!File.Exists(Options.Script)) return new(false, "sol_testkit_mcp.py not found: " + Options.Script, [], null);
+        if (mode is not ("kill" or "http")) return new(false, "mode must be kill or http", [], null);
         bool http = string.Equals(mode, "http", StringComparison.OrdinalIgnoreCase);
         var processes = await (ListProcesses?.Invoke(cancel) ?? ListAsync(cancel)).ConfigureAwait(false);
         var killer = Kill ?? KillTree;
         var killed = new List<int>();
-        foreach (var row in processes)
+        foreach (var row in processes.Where(row => !http || Regex.IsMatch(row.CommandLine,
+            @"(?:^|\s)--http\s+[""']?" + Options.HttpPort + @"[""']?(?:\s|$)", RegexOptions.CultureInvariant)))
             if (killer(row.Pid)) killed.Add(row.Pid);
         if (!http)
             return new(true, killed.Count == 0 ? "No testkit was running; reconnect it from the client (/mcp)."
                 : $"Ended {killed.Count} testkit process(es). The client reconnects with /mcp (Claude Code respawns it).", killed, null);
         await Task.Delay(500, cancel).ConfigureAwait(false);
-        int? pid = StartHttp();
-        return pid is null ? new(false, "Ended the old testkit but could not start the HTTP one.", killed, null)
-            : new(true, $"Started the testkit HTTP server on http://127.0.0.1:{Options.HttpPort}/mcp (pid {pid}); live capture binds port {Options.LivePort}.", killed, pid);
+        int? pid = StartHttp is { } startHttp ? startHttp() : StartHttpProcess();
+        return pid is null ? new(false, "Could not start the HTTP testkit; stdio clients were preserved.", killed, null)
+            : new(true, $"Started the testkit HTTP server on http://127.0.0.1:{Options.HttpPort}/mcp (pid {pid}); stdio client connections were preserved. Capture prefers port {Options.LivePort}, using an available loopback port if occupied.", killed, pid);
     }
 
     /** Starts `py -3 script --http port` without a window. */
-    private int? StartHttp()
+    private int? StartHttpProcess()
     {
         try
         {

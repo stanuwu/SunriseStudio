@@ -17,11 +17,11 @@ try
     Embedded(); checks.Add("embedded tree name in the DLL Comments beats the counter and is exact");
     GitChecks(); checks.Add("git: branch, short HEAD, dirty count, files changed after the build; non-repo reports an error without failing");
     CounterFallback(); checks.Add("tree counter falls back to sunrise_version.h; resources found under Sunrise/ or the root");
-    Light(); checks.Add("testkit light: red without script or handshake, amber with none/two instances or dead live port, green otherwise");
+    Light(); checks.Add("testkit light: red without script or handshake, amber without an instance or live endpoint; multiple healthy clients are allowed, transport green does not prove a game frame");
     Processes(); checks.Add("testkit processes: py launcher plus python child is one instance; pid|name|command lines parse");
     Probe(); checks.Add("handshake reply parsing: server name and tool count, missing serverInfo or tools fail");
     await Status(); checks.Add("status: injected processes, ports and handshake produce the light; missing script skips the handshake");
-    await Restart(); checks.Add("restart: kill mode ends every pid, missing script refuses, no process is a soft message");
+    await Restart(); checks.Add("restart: HTTP mode preserves stdio and other ports, explicit kill mode ends every pid, invalid mode and missing script refuse");
     await Tools(); checks.Add("MCP tools: get_client_build, testkit_status read freely; testkit_restart asks first, declined kills nothing, bad mode refused");
     if (args.Contains("--live")) await Live();
     foreach (string check in checks) Console.WriteLine("ok " + check);
@@ -173,7 +173,7 @@ void Light()
     Expect(TestkitMonitor.Judge(false, null, 0, false, false).Light == "red", "no script");
     Expect(TestkitMonitor.Judge(true, false, 1, true, true).Light == "red", "handshake fails");
     Expect(TestkitMonitor.Judge(true, true, 0, false, false).Light == "amber", "not running");
-    Expect(TestkitMonitor.Judge(true, true, 2, true, true).Light == "amber", "two instances");
+    Expect(TestkitMonitor.Judge(true, true, 2, true, true).Light == "green", "multiple MCP clients are normal");
     Expect(TestkitMonitor.Judge(true, true, 1, false, true).Light == "amber", "live port down");
     var green = TestkitMonitor.Judge(true, true, 1, true, false);
     Expect(green.Light == "green" && green.Summary.Contains("pad server off", StringComparison.Ordinal), "green, pad off is not a fault");
@@ -239,6 +239,20 @@ async Task Restart()
     Expect(none.Ok && none.Killed.Count == 0 && none.Message.Contains("No testkit", StringComparison.Ordinal), "nothing running");
     var refused = await MakeMonitor(Path.Combine(scratch, "nope.py"), procs, _ => true, (true, "", 1), pid => { killed.Add(pid); return true; }).RestartAsync("kill");
     Expect(!refused.Ok && killed.Count == 2, "missing script kills nothing");
+    var invalid = await MakeMonitor(script, procs, _ => true, (true, "", 1), pid => { killed.Add(pid); return true; }).RestartAsync("invalid");
+    Expect(!invalid.Ok && killed.Count == 2, "invalid mode kills nothing");
+    killed.Clear();
+    var httpMonitor = new TestkitMonitor(new TestkitOptions { Script = script })
+    {
+        ListProcesses = _ => Task.FromResult<IReadOnlyList<TestkitProcess>>([
+            new(3, "python.exe", "python sol_testkit_mcp.py"),
+            new(4, "python.exe", "python sol_testkit_mcp.py --http 48840"),
+            new(5, "python.exe", "python sol_testkit_mcp.py --http 48841")]),
+        Kill = pid => { killed.Add(pid); return true; },
+        StartHttp = () => 6,
+    };
+    var http = await httpMonitor.RestartAsync("http");
+    Expect(http.Ok && http.StartedPid == 6 && killed.SequenceEqual([4]), "HTTP restart preserves stdio clients and other HTTP ports");
 }
 
 async Task Tools()
@@ -262,8 +276,18 @@ async Task Tools()
     var badMode = await testkit[1].Handler(new JsonObject { ["mode"] = "nuke" }, default);
     Expect(badMode.IsError && approvals.Count == 1, "bad mode refused before asking");
     approve = true;
-    var restarted = await testkit[1].Handler(new JsonObject(), default);
+    var restarted = await testkit[1].Handler(new JsonObject { ["mode"] = "kill" }, default);
     Expect(!restarted.IsError && killed.SequenceEqual(new[] { 5 }), "approved restart kills");
+    killed.Clear();
+    var safeMonitor = new TestkitMonitor(new TestkitOptions { Script = script })
+    {
+        ListProcesses = _ => Task.FromResult<IReadOnlyList<TestkitProcess>>([new(5, "python.exe", "python sol_testkit_mcp.py")]),
+        Kill = pid => { killed.Add(pid); return true; },
+        StartHttp = () => 6,
+    };
+    var safeTools = TestkitTools.Create(safeMonitor, (_, _, _) => Task.FromResult(true));
+    var safeRestart = await safeTools[1].Handler(new JsonObject(), default);
+    Expect(!safeRestart.IsError && killed.Count == 0, "default HTTP restart preserves stdio clients");
 
     var missing = await build[0].Handler(new JsonObject { ["dll"] = Path.Combine(scratch, "gone.dll") }, default);
     Expect(!missing.IsError && missing.Texts[0].Contains("\"exists\": false", StringComparison.Ordinal), "get_client_build on a missing DLL");

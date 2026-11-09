@@ -61,6 +61,83 @@ internal static class InvestmentArrayChecks
         Console.WriteLine("investment_arrays add=pass remove=pass create=pass expressions=shared stale=reject deltas=pass patch=pass");
     }
 
+    /** Display requirement rows follow the perk rows by index: add, remove (first and middle), trim, pad and no block. */
+    public static void PerkDisplayRows()
+    {
+        byte[] display = Display(3);
+        Check(InvestmentPerkDisplayEdits.ReadCount(display) == 3, "Fixture display has the wrong row count.");
+        // Row 1 carries an authored requirement: its expression array (+8 count, +16 pointer) aims at the spare array.
+        int rows = Rows(display), spare = display.Length - 24;
+        Q(display, rows + 32 + 8, 1); Q(display, rows + 32 + 16, spare - (rows + 32 + 16));
+        Check(InvestmentPerkDisplayEdits.ReadCount(display) == 3 && Requirement(display, 1) == spare, "Fixture requirement is not readable.");
+        for (int i = 0; i < 3; i++) U(display, rows + i * 32 + 4, (uint)(10 + i));
+
+        byte[] added = InvestmentPerkDisplayEdits.Resize(display, 4);
+        Check(InvestmentPerkDisplayEdits.ReadCount(added) == 4 && Mark(added, 0) == 10 && Mark(added, 2) == 12 && Empty(added, 3), "Add did not append an empty row.");
+        Check(Requirement(added, 1) == Requirement(display, 1) && Requirement(added, 1) != 0, "Add lost the authored requirement.");
+        Check(BinaryPrimitives.ReadInt64LittleEndian(added) == added.Length, "Add did not update the size header.");
+
+        byte[] first = InvestmentPerkDisplayEdits.Resize(display, 2, 0);
+        Check(InvestmentPerkDisplayEdits.ReadCount(first) == 2 && Mark(first, 0) == 11 && Mark(first, 1) == 12, "Removing row 0 kept the wrong rows.");
+        Check(Requirement(first, 0) == Requirement(display, 1), "Removing row 0 lost the requirement of the row that moved up.");
+
+        byte[] middle = InvestmentPerkDisplayEdits.Resize(display, 2, 1);
+        Check(InvestmentPerkDisplayEdits.ReadCount(middle) == 2 && Mark(middle, 0) == 10 && Mark(middle, 1) == 12, "Removing the middle row kept the wrong rows.");
+        Check(Requirement(middle, 0) == 0 && Requirement(middle, 1) == 0 && Requirement(first, 0) != 0, "Removing the middle row left its requirement behind.");
+
+        byte[] kept = InvestmentPerkDisplayEdits.Resize(display, 3);
+        Check(kept.AsSpan().SequenceEqual(display), "Resizing to the same count changed the display.");
+
+        byte[] two = InvestmentPerkDisplayEdits.Resize(display, 2);
+        byte[] padded = InvestmentPerkDisplayEdits.Resize(two, 3);
+        Check(InvestmentPerkDisplayEdits.ReadCount(padded) == 3 && Mark(padded, 1) == 11 && Empty(padded, 2)
+            && Requirement(padded, 1) == Requirement(display, 1), "Padding from 2 to 3 changed existing rows.");
+
+        Check(InvestmentPerkDisplayEdits.ReadCount(two) == 2 && Mark(two, 1) == 11, "Trim to 2 kept the wrong rows.");
+        byte[] none = InvestmentPerkDisplayEdits.Resize(display, 0);
+        Check(InvestmentPerkDisplayEdits.ReadCount(none) == 0 && none.Length == display.Length, "Trim to 0 did not leave an empty array.");
+        byte[] regrown = InvestmentPerkDisplayEdits.Resize(none, 1);
+        Check(InvestmentPerkDisplayEdits.ReadCount(regrown) == 1 && Empty(regrown, 0), "Growing an empty array failed.");
+
+        Reject(() => InvestmentPerkDisplayEdits.Resize(display, 2, 3));
+        Reject(() => InvestmentPerkDisplayEdits.Resize(display, 2, -1));
+        byte[] noBlock = (byte[])display.Clone(); Q(noBlock, 96, 0);
+        Reject(() => InvestmentPerkDisplayEdits.Resize(noBlock, 1));
+        Reject(() => InvestmentPerkDisplayEdits.Resize(noBlock, 0));
+        Console.WriteLine("investment_perk_displays add=pass remove_first=pass remove_middle=pass requirement=kept pad=pass trim=pass no_block=reject");
+    }
+
+    /** A minimal display tag: native perk display block (class 0x80805D08) with count rows and a spare expression step. */
+    private static byte[] Display(int count)
+    {
+        const int block = 176, header = 208;
+        int tail = header + 16 + count * 32 + 16, length = tail + 16 + 8;
+        byte[] data = new byte[length];
+        Q(data, 0, length);
+        U(data, block - 4, 0x80805D08);
+        Q(data, 96, block - 96);
+        Q(data, block + 8, count); Q(data, block + 16, header - (block + 16));
+        U(data, header - 4, 0x80809FBD); Q(data, header, count); U(data, header + 8, 0x80805D0A);
+        for (int i = 0; i < count; i++)
+        {
+            int row = header + 16 + i * 32;
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(row), ushort.MaxValue);
+            U(data, row + 4, 0x811C9DC5);
+        }
+        U(data, tail - 4, 0x80809FBD); Q(data, tail, 1); U(data, tail + 8, 0x80807D31);
+        return data;
+    }
+    private static int Rows(byte[] display) { int block = 96 + (int)BinaryPrimitives.ReadInt64LittleEndian(display.AsSpan(96)); int array = block + 8; return array + 8 + (int)BinaryPrimitives.ReadInt64LittleEndian(display.AsSpan(array + 8)) + 16; }
+    private static uint Mark(byte[] display, int row) => BinaryPrimitives.ReadUInt32LittleEndian(display.AsSpan(Rows(display) + row * 32 + 4));
+    private static bool Empty(byte[] display, int row) => BinaryPrimitives.ReadUInt32LittleEndian(display.AsSpan(Rows(display) + row * 32 + 4)) == 0x811C9DC5;
+    /** Absolute address of a row's requirement array data, 0 when it has no requirement. */
+    private static int Requirement(byte[] display, int row)
+    {
+        int at = Rows(display) + row * 32 + 16;
+        long delta = BinaryPrimitives.ReadInt64LittleEndian(display.AsSpan(at));
+        return delta == 0 ? 0 : (int)(at + delta);
+    }
+
     private static void Untouched(byte[] before, byte[] after)
     {
         for (int i = 0; i < before.Length; i++)

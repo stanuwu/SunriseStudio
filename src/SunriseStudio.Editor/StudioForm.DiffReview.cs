@@ -3,7 +3,8 @@
  * file implements on AiHost: the edit is queued (QueueDiffReview) and DrawDiffReviewModal (hook H10) shows a side-by-side
  * line diff (LCS; removed lines on Bad at 18 %, added lines on Ok at 18 %, one table so both sides scroll together) with a
  * 3-minute countdown and Approve/Reject. A file that changed on disk, paused context sharing or a disconnected client
- * cancels the review; it is never auto-approved and its buttons are blocked for MCP UI automation. Approval lets the tool
+ * cancels the review. With Auto-approve AI requests enabled, the same validation runs without opening the modal and the
+ * approval is recorded in the AI log. Manual review buttons are blocked for MCP UI automation. Approval lets the tool
  * write through the editor's action path, which records the edit under AI edits with Undo.
  * Also here: get_editor_screenshot (the uncropped back buffer) and the credential-document check for captures.
  */
@@ -46,6 +47,26 @@ public sealed partial class StudioForm
     private readonly List<PendingDiff> diffReviews = [];
     private TaskCompletionSource<byte[]?>? editorScreenshot;
     private bool editorScreenshotHooked;
+
+    /** The enabled editor preference also covers project edits. Never approve stale or paused work. */
+    private async Task<bool> ApproveProjectEdit(string summary, string path, string? before, string after, TimeSpan expiresIn, CancellationToken cancel)
+    {
+        var session = McpSessionRegistry.Current;
+        bool? automatic = await OnUi(() =>
+        {
+            cancel.ThrowIfCancellationRequested();
+            if (!settings.AutoApproveRequests) return (bool?)null;
+            string? full = ProjectFiles.EditablePath(workspace.Project?.DirectoryPath, path, out _);
+            if (aiPaused || full is null || CredentialGuard.IsCredentialPath(full)) return false;
+            string? current;
+            try { current = File.Exists(full) ? File.ReadAllText(full) : null; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+            if (!string.Equals(current, before, StringComparison.Ordinal)) return false;
+            RecordAiRequest("apply_project_edit", summary, AiRequestOutcome.Auto, session?.Label);
+            return true;
+        }).WaitAsync(cancel).ConfigureAwait(false);
+        return automatic ?? await QueueDiffReview(summary, path, before, after, expiresIn, cancel).ConfigureAwait(false);
+    }
 
     /**
      * Queues a reviewed edit and waits for the user's answer (false on Reject, expiry, a stale file, paused sharing or a
@@ -334,7 +355,7 @@ public sealed partial class StudioForm
     private sealed partial class AiHost
     {
         public Task<bool> ApproveEditAsync(string summary, string path, string? before, string after, TimeSpan expiresIn, CancellationToken cancel) =>
-            Owner.QueueDiffReview(summary, path, before, after, expiresIn, cancel);
+            Owner.ApproveProjectEdit(summary, path, before, after, expiresIn, cancel);
 
         public Task<byte[]?> EditorScreenshotAsync(CancellationToken cancel) => Owner.CaptureEditorScreenshotAsync(cancel);
 

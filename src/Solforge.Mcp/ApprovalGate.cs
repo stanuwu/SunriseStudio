@@ -10,13 +10,16 @@ public sealed class ApprovalGate(Func<bool> autoApprove, Action<string, string> 
      * Returns true at once (logging through onAuto) when auto-approve is on; otherwise waits for the user's
      * answer.
      */
-    public async Task<bool> AskAsync(string tool, string summary, Func<Task<bool>> askUser)
+    public async Task<bool> AskAsync(string tool, string summary, Func<Task<bool>> askUser, CancellationToken cancel = default)
     {
+        cancel.ThrowIfCancellationRequested();
         if (autoApprove())
         {
             onAuto(tool, summary);
             return true;
         }
-        return await askUser().ConfigureAwait(false);
+        bool allowed = await askUser().ConfigureAwait(false);
+        cancel.ThrowIfCancellationRequested();
+        return allowed;
     }
 }

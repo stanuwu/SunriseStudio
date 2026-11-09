@@ -26,8 +26,51 @@ public sealed partial class StudioForm
     private async Task<JsonObject> AiItemSourceQueryAsync(string tool, JsonObject args, CancellationToken cancel) => tool switch
     {
         "compare_with_base" => await AiCompareWithBaseAsync(args, cancel).ConfigureAwait(false),
+        "check_item_perk_displays" => await OnUi(AiCheckPerkDisplays).WaitAsync(cancel).ConfigureAwait(false),
         _ => await AiItemSourcesAsync(args, cancel).ConfigureAwait(false)
     };
+
+    // ---- check_item_perk_displays / repair_item_perk_displays ----
+
+    /** Perk count vs display requirement count for every project item, plus display tags several items claim. */
+    private JsonObject AiCheckPerkDisplays()
+    {
+        if (!workspace.CanEdit || workspace.Project is null) return AiError("No project is open, or Solforge is busy.");
+        if (workspace.Investment is null) return AiError("The item catalog is not loaded yet; call get_item or search_items, then try again.");
+        var (items, shared) = workspace.CheckPerkDisplays();
+        var rows = new JsonArray();
+        foreach (var row in items)
+            rows.Add(new JsonObject
+            {
+                ["item"] = Hex(row.Item), ["name"] = row.Name, ["display"] = Hex(row.Display), ["perks"] = row.Perks,
+                ["displayRows"] = row.DisplayRows, ["ok"] = !row.Mismatched, ["problem"] = row.Problem
+            });
+        var claims = new JsonArray();
+        foreach (var (display, owners) in shared)
+            claims.Add(new JsonObject { ["display"] = Hex(display), ["items"] = new JsonArray([.. owners.Select(tag => (JsonNode)Hex(tag))]) });
+        return new JsonObject
+        {
+            ["checked"] = items.Count, ["mismatched"] = items.Count(row => row.Mismatched), ["items"] = rows, ["sharedDisplays"] = claims,
+            ["note"] = "A mismatch crashes the game client (it walks perks and display rows with one index). repair_item_perk_displays fixes it."
+        };
+    }
+
+    /** Resizes mismatched display rows to the perk counts as one undo step (repair_item_perk_displays). */
+    private string AiRepairPerkDisplays(JsonObject args)
+    {
+        if (!workspace.CanEdit || workspace.Project is null) return "No project is open, or Solforge is busy.";
+        if (workspace.Investment is null) return "The item catalog is not loaded yet; call get_item or search_items, then try again.";
+        bool dryRun = McpJson.Bool(args, "dry_run", true);
+        if (!dryRun && workspace.Document is null) return "Open any asset first (open_asset); the repair is recorded as an undo step against it.";
+        (IReadOnlyList<PerkDisplayRow> Fixed, IReadOnlyList<string> Skipped) result = ([], []);
+        workspace.Run(() => result = workspace.RepairPerkDisplays(dryRun));
+        if (workspace.Error.Length > 0) return workspace.Error;
+        string list = string.Join("; ", result.Fixed.Select(row => $"{row.Name} {Hex(row.Item)} (perks {row.Perks}, display rows {row.DisplayRows} -> {row.Perks})"));
+        string skipped = result.Skipped.Count == 0 ? "" : " Skipped: " + string.Join("; ", result.Skipped) + ".";
+        if (result.Fixed.Count == 0) return "No project item needs its display rows resized." + skipped;
+        return (dryRun ? $"Dry run: would fix {result.Fixed.Count} item(s): " : $"Fixed {result.Fixed.Count} item(s) in one undo step: ") + list + "." + skipped
+            + (dryRun ? " Call again with dry_run false to apply." : "");
+    }
 
     // ---- T1.5 compare_with_base ----
 

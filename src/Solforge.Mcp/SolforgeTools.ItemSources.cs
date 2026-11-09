@@ -14,9 +14,9 @@ public static partial class SolforgeTools
     /** Read tools of this file, in listing order. */
     public static readonly string[] ItemSourceReadTools = ["compare_with_base", "get_item_sources"];
     /** Action tools of this file. */
-    public static readonly string[] ItemSourceActionTools = ["revert_to_base"];
+    public static readonly string[] ItemSourceActionTools = ["repair_item_perk_displays", "revert_to_base"];
     /** Every tool of this file, in listing order. */
-    public static readonly string[] ItemSourceToolNames = ["compare_with_base", "get_item_sources", "revert_to_base"];
+    public static readonly string[] ItemSourceToolNames = ["compare_with_base", "get_item_sources", "check_item_perk_displays", "repair_item_perk_displays", "revert_to_base"];
 
     /** Source kinds get_item_sources reports (its kind filter). */
     public static readonly string[] ItemSourceKinds =
@@ -50,6 +50,17 @@ public static partial class SolforgeTools
             Paged(("item", "string", "Item tag (0x...), definition hash or exact name", true),
                 ("kind", "string", "Optional kind: " + string.Join(", ", ItemSourceKinds), false),
                 ("deep", "boolean", "Also walk activity and reference graphs (slower; default true)", false)));
+        yield return Query("check_item_perk_displays", "For every project item (edited or added): its perk count against its display tag's " +
+            "requirement row count, and any display tag claimed by more than one item. The game client walks both arrays with one index, " +
+            "so a mismatch crashes it. repair_item_perk_displays fixes mismatches. The first call may say the item catalog is loading.",
+            McpJson.Schema());
+        yield return act("repair_item_perk_displays", "Resize the display requirement rows of every mismatched project item to its perk " +
+            "count, keeping authored rows (extra rows at the end are dropped, missing ones are empty), as one undoable project change. " +
+            "dry_run (default true) only lists what would change. Open any asset first before applying.",
+            McpJson.Schema(("dry_run", "boolean", "List the fixes without applying them (default true)", false)),
+            _ => null,
+            args => McpJson.Bool(args, "dry_run", true) ? "Check which project items need their perk display rows resized (dry run)"
+                : "Resize perk display rows of every mismatched project item");
         yield return act("revert_to_base", "Revert a tag to the base install: the whole tag (drops the project's change, as " +
             "the Changes panel's Revert does) or, with field, only that field or byte range (other edits stay). Undo works. " +
             "Use compare_with_base first to see what changes.",

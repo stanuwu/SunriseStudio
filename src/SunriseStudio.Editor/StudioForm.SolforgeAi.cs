@@ -146,6 +146,7 @@ public sealed partial class StudioForm
      */
     public void LaunchOrFocusSolforgeAi()
     {
+        if (McpOnlyUi) return;
         var host = SolforgeAi;
         if (host.State == SolforgeAiState.NotFound)
         {

@@ -24,6 +24,8 @@ public partial interface ISolforgeHost
     bool Paused { get; }
     string? ProjectRoot { get; }
     IReadOnlyList<string> SdkRoots { get; }
+    /** Enabled Context > Folders roots. Each grant covers all descendant folders; use absolute read paths outside the project. */
+    IReadOnlyList<string> AllowedReadFolders => [];
     string? CurrentMap { get; }
     AttentionLog Attention { get; }
     /** The latest get_context snapshot, as JSON. */
@@ -100,11 +102,13 @@ public static partial class SolforgeTools
         "content by name with list_maps (zones) and search_assets, open it with open_map, then find_world_objects (layer volumes " +
         "or collision) and get_placement before edit_placement or edit_bounds. Playbooks for common jobs are skills named " +
         "solforge-new-weapon, solforge-new-armor, solforge-map-bounds, solforge-patrol-content, solforge-new-enemy and " +
-        "solforge-new-mission; read the matching one first. Solforge's own UI: list_ui_controls, then ui_invoke, ui_set_value, " +
+        "solforge-new-mission; read the matching SKILL.md from the project's installed solforge-* skills first. " +
+        "Project context and the available skill names are also written to .solforge/SESSION.md and AGENTS.md. " +
+        "Solforge's own UI: list_ui_controls, then ui_invoke, ui_set_value, " +
         "ui_set_checked or ui_select. The live view: get_viewport_frame, get_viewport_frames, wait_for_viewport_change (each with " +
         "text for models without vision; ocr: true or read_screen_text reads the words on screen). Where the player is in game: get_player_position (map, zone, xyz, yaw, nearest " +
         "objects and slots) and wait_for_player_near. Shader, animation clip and audio metadata (no map needed): list_shaders, " +
-        "get_shader, list_animations, get_animation, list_audio and get_audio. Action tools need the user's approve click. " +
+        "get_shader, list_animations, get_animation, list_audio and get_audio. Action tools follow the editor's Auto-approve AI requests setting and are audited in its AI log. " +
         "For how the game client works (functions, xrefs, strings, structs, vtables, tag class handlers in destiny2.exe) and for raw " +
         "tag data, unknown tag classes, localized text and JSON/CSV export, start with decomp_status and read the solforge-decomp skill; " +
         "paged results return next_cursor, which you pass back as cursor. " + ParhelionHint + " " + RetailHint + " " + SelfServiceHint + " " + AutomaticHint + " " + CommandsHint;
@@ -121,7 +125,7 @@ public static partial class SolforgeTools
         "the game installation, rendering, memory, FPS caps; get_settings reads the same names), set_mod_details (Build and install " +
         "needs mod details; get_project shows them), open_project, create_project, close_project, close_map, close_asset, " +
         "build_project, build_to_folder, update_running_game and reload_mission_scripts. Server mission scripts read as " +
-        "scripts:<path> with read_project_file. Only Settings > AI stays the user's.";
+        "scripts:<path> with read_project_file. MCP server availability is controlled by the user in Settings > MCP.";
 
 
     /** read_panel names; each pages with offset/limit. */
@@ -222,26 +226,27 @@ public static partial class SolforgeTools
                 Schema(("n", "integer", "How many (default 20)", false)),
                 (args, _) => Task.FromResult(McpToolResult.Json(host.Attention.ToJson(Math.Clamp(McpJson.Int(args, "n", 20), 1, 256))))),
             Read("read_project_file", "Read a project file (path relative to the project folder), a Lua SDK doc ('sdk:<path>') or a " +
-                "server mission script ('scripts:<path>', as list_mission_scripts gives it). sha256 is the whole file's version: pass it " +
+                "server mission script ('scripts:<path>', as list_mission_scripts gives it), or an absolute path inside an enabled Context > Folders root (including all subfolders). sha256 is the whole file's version: pass it " +
                 "as expected_sha256 to apply_project_edit so a stale edit is refused.",
-                Schema(("path", "string", "Project-relative path, sdk:<path> or scripts:<path>", true), ("offset", "integer", "First line (default 1)", false),
+                Schema(("path", "string", "Project-relative path, sdk:<path>, scripts:<path> or absolute path in an enabled AI folder", true), ("offset", "integer", "First line (default 1)", false),
                     ("limit", "integer", "Line count (default 400)", false)),
                 (args, _) =>
                 {
                     string shown = McpJson.String(args, "path") ?? "";
-                    if (host.ProjectRoot is null && !shown.StartsWith(ProjectFiles.SdkPrefix, StringComparison.OrdinalIgnoreCase)
+                    if (host.ProjectRoot is null && !Path.IsPathFullyQualified(shown) && !shown.StartsWith(ProjectFiles.SdkPrefix, StringComparison.OrdinalIgnoreCase)
                         && !shown.StartsWith(ProjectFiles.ScriptsPrefix, StringComparison.OrdinalIgnoreCase))
                         return Task.FromResult(McpToolResult.Error(NoProjectOpen(host)));
-                    if (ProjectFiles.Resolve(host.ProjectRoot, host.SdkRoots, shown, host.ServerScriptsRoot) is not { } path)
-                        return Task.FromResult(McpToolResult.Error("That path is outside the project, the SDK docs and the server scripts folder."));
+                    if (ProjectFiles.Resolve(host.ProjectRoot, host.SdkRoots, shown, host.ServerScriptsRoot, host.AllowedReadFolders) is not { } path)
+                        return Task.FromResult(McpToolResult.Error("That path is outside the project, SDK docs, server scripts and enabled AI folders. A folder grant includes all of its subfolders."));
                     if (CredentialGuard.IsCredentialPath(path)) return Task.FromResult(McpToolResult.Error(CredentialGuard.Refusal));
                     return Task.FromResult(McpToolResult.Json(ProjectFiles.Read(path, shown, McpJson.Int(args, "offset", 1), McpJson.Int(args, "limit", 400))));
                 }),
-            Read("search_project", "Case-insensitive text search over project files and the Lua SDK docs.",
+            Read("search_project", "Case-insensitive text search over project files, Lua SDK docs and enabled AI folders, recursively. Use folder to narrow a large root.",
                 Schema(("query", "string", "Text to find", true), ("extension", "string", "Optional extension filter, e.g. .lua", false),
-                    ("limit", "integer", "Most hits (default 100)", false)),
+                    ("limit", "integer", "Most hits (default 100)", false), ("folder", "string", "Optional project-relative folder or absolute folder inside an enabled AI root", false)),
                 (args, _) => Task.FromResult(McpToolResult.Json(ProjectFiles.Search(host.ProjectRoot, host.SdkRoots,
-                    McpJson.String(args, "query") ?? "", McpJson.String(args, "extension"), Math.Clamp(McpJson.Int(args, "limit", 100), 1, 1000))))),
+                    McpJson.String(args, "query") ?? "", McpJson.String(args, "extension"), Math.Clamp(McpJson.Int(args, "limit", 100), 1, 1000),
+                    CredentialGuard.IsCredentialPath, host.AllowedReadFolders, McpJson.String(args, "folder"))))),
             Read("search_reference", "Search the reference library (saved docs and repo pages, 08-docs\\reference): ranked hits " +
                 "with title, url, library path, tags and a snippet. Read a hit with read_reference.",
                 Schema(("query", "string", "Words to find", true), ("tag", "string", "Optional tag the page must have", false),
@@ -374,6 +379,7 @@ public static partial class SolforgeTools
             .. DataTools(host),
             .. SchemaTools(host),
             .. MediaTools(host),
+            .. CuiTools(host),
             .. ContentTools(host, Read),
             .. UiTools(host, Read),
             .. PlayerTools(host, Read),
@@ -421,16 +427,17 @@ public static partial class SolforgeTools
     private static McpTool ProjectEdit(ISolforgeHost host) =>
         new("apply_project_edit", "Write a project file (project overlay only, never game packages). Either 'content' replaces the " +
             "file, or 'find'/'replace' edits one exact occurrence. Pass expected_sha256 (from read_project_file or get_open_documents) " +
-            "and the write is refused as stale when the file changed since. The user reviews the exact before/after text in a " +
-            "side-by-side diff. Shows in Project changes and can be undone.",
+            "and the write is refused as stale when the file changed since. Approval follows the editor's Auto-approve AI requests " +
+            "preference; otherwise the user reviews the exact before/after diff. Shows in Project changes and can be undone.",
             McpJson.Schema(("path", "string", "Project-relative path", true), ("content", "string", "New full content", false),
                 ("find", "string", "Exact text to replace (must occur once)", false), ("replace", "string", "Replacement text", false),
                 ("expected_sha256", "string", "The file's sha256 from your last read; a mismatch refuses the write as stale", false)),
             true, async (args, cancel) =>
             {
                 string relative = McpJson.String(args, "path") ?? "";
-                if (host.ProjectRoot is null) return McpToolResult.Error(NoProjectOpen(host));
-                if (ProjectFiles.EditablePath(host.ProjectRoot, relative, out string? reason) is not { } target)
+                string? projectRoot = host.ProjectRoot;
+                if (projectRoot is null) return McpToolResult.Error(NoProjectOpen(host));
+                if (ProjectFiles.EditablePath(projectRoot, relative, out string? reason) is not { } target)
                     return McpToolResult.Error(reason ?? "Refused.");
                 if (CredentialGuard.IsCredentialPath(target)) return McpToolResult.Error(CredentialGuard.Refusal);
                 bool whole = args["content"] is not null, patch = args["find"] is not null;
@@ -453,6 +460,9 @@ public static partial class SolforgeTools
                     : $"Edit {relative}: replace {Quote(McpJson.String(args, "find"))} with {Quote(McpJson.String(args, "replace"))}";
                 if (!await host.ApproveEditAsync(summary, relative, before, after, TimeSpan.FromMinutes(3), cancel).ConfigureAwait(false))
                     return McpToolResult.Error("The user declined this in Solforge (or the review expired).");
+                cancel.ThrowIfCancellationRequested();
+                if (!string.Equals(projectRoot, host.ProjectRoot, StringComparison.OrdinalIgnoreCase))
+                    return McpToolResult.Error("The open project changed during approval; nothing was written. Read the new project context first.");
                 // The file may have changed while the review was open: never overwrite a version the user did not see.
                 string? now = File.Exists(target) ? await File.ReadAllTextAsync(target, cancel).ConfigureAwait(false) : null;
                 if (!string.Equals(now, before, StringComparison.Ordinal))

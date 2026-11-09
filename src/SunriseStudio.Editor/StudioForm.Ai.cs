@@ -40,6 +40,7 @@ public sealed partial class StudioForm
      */
     public void OpenAiWorkspace()
     {
+        if (McpOnlyUi) return;
         if (ShowPopout(StudioPanelKind.AI, true)) return;
         var node = layout.Show(StudioPanelKind.AI);
         if (node.Collapsed == true) node.Collapsed = false;
@@ -225,7 +226,7 @@ public sealed partial class StudioForm
     /** The Folders list, shared by the Solforge AI panel's popup and Settings > AI. */
     private void DrawAiFolders()
     {
-        ImGui.TextWrapped("AI clients started with Solforge's config (Claude Code --add-dir) may also read these folders. Changes apply the next time a client starts.");
+        ImGui.TextWrapped("Each enabled folder includes every subfolder. Solforge MCP file reads and searches use these grants immediately; external CLI folder arguments refresh when the client starts. Use an absolute path for files outside the project.");
         SolTheme.SectionHeader("FOUND");
         if (workspace.Project?.DirectoryPath is not { } project) ImGui.TextDisabled("Open a project first.");
         else

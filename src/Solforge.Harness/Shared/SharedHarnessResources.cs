@@ -1,8 +1,9 @@
 /**
  * File: The read-only shared skills and destiny-modder MCP preflight (UI-UE5 §5.2), ported from solforge-next
  * (Solforge.Next.Harness/SharedHarnessResources.cs). The hard-coded C:\Users\Seth paths became the defaults of the editor
- * settings SharedResourcesRoot and WorkbenchRoot; Inspect only looks where the settings point (and at the exact sibling
- * names next to the project), never enumerates drives or home trees, and runs nothing: Node's version is read from the
+ * settings SharedResourcesRoot and WorkbenchRoot; Inspect looks where settings point, with a bounded migration lookup
+ * for the missing legacy default (exact names near project/runtime ancestors), never enumerates drives or home trees,
+ * and runs nothing: Node's version is read from the
  * executable's version resource.
  */
 using System.Collections.ObjectModel;
@@ -63,6 +64,13 @@ public static class SharedHarnessResources
         var skillMessages = new List<string>();
         string? sharedSkillDirectory = null;
         var collection = NormalizeDirectory(settings.SharedResourcesPath);
+        if (collection is null && string.Equals(settings.SharedResourcesPath?.TrimEnd('\\', '/').Replace('/', '\\'), DefaultSharedResourcesRoot,
+                StringComparison.OrdinalIgnoreCase) && DiscoverSharedCollectionRoot(settings.AiRuntimePath, projectRoot) is { } moved)
+        {
+            collection = moved;
+            skillMessages.Add("The legacy shared collection path is missing; using the validated collection at " + moved + ".");
+            checks.Add(new("Shared collection location", true, "Legacy default moved; using " + moved));
+        }
         if (string.IsNullOrWhiteSpace(settings.SharedResourcesPath))
         {
             skillMessages.Add("Shared collection disabled. Choose its folder to enable shared skills and destiny-modder.");
@@ -229,6 +237,25 @@ public static class SharedHarnessResources
                 candidates.Add(Path.Combine(parent.FullName, "DestinyWorkbench"));
         }
         return candidates.Distinct(StringComparer.OrdinalIgnoreCase).FirstOrDefault(IsWorkbenchRoot);
+    }
+
+    /** Exact collection locations near explicit anchors; migrate the old default without scanning unrelated folders. */
+    public static string? DiscoverSharedCollectionRoot(string? runtimePath = null, string? projectRoot = null)
+    {
+        var candidates = new List<string>();
+        foreach (string? anchor in new[] { projectRoot, runtimePath })
+        {
+            if (NormalizeDirectory(anchor) is not { } start) continue;
+            for (var folder = new DirectoryInfo(start); folder is not null && candidates.Count < 72; folder = folder.Parent)
+            {
+                candidates.Add(Path.Combine(folder.FullName, "ai stuff", "ai-mcps-skills-consilidated"));
+                candidates.Add(Path.Combine(folder.FullName, "ai", "ai-mcps-skills-consilidated"));
+                candidates.Add(Path.Combine(folder.FullName, "ai-mcps-skills-consilidated"));
+                if (Path.GetPathRoot(folder.FullName)?.TrimEnd('\\', '/') == folder.FullName.TrimEnd('\\', '/')) break;
+            }
+        }
+        return candidates.Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizeDirectory)
+            .FirstOrDefault(folder => folder is not null && ContainsSkillBundle(Path.Combine(folder, "skills")));
     }
 
     private static string? NormalizeDirectory(string? path)

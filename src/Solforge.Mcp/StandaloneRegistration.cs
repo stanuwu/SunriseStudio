@@ -172,6 +172,56 @@ public static partial class StandaloneRegistration
         }
     }
 
+    /**
+     * Re-points every ~/.claude.json server (user level and per project, e.g. `sol`) that runs an older run copy of
+     * solforge-mcp in the run-copy folder at @param shimPath. Run copies are renamed on every publish and the older ones
+     * pruned, so an entry left on an old name stops starting; this runs on every editor start. Only the command changes.
+     * @return how many entries were changed.
+     */
+    public static int RefreshRunCopies(string shimPath, string? claudeFile = null)
+    {
+        claudeFile ??= ClaudeConfigFile();
+        string shim = Path.GetFullPath(shimPath);
+        string? folder = Path.GetDirectoryName(shim);
+        if (folder is null || !Path.GetFileName(shim).StartsWith("solforge-mcp-", StringComparison.OrdinalIgnoreCase)) return 0;
+        bool Stale(JsonNode? entry)
+        {
+            if (entry?["command"] is not JsonValue value || !value.TryGetValue(out string? command) || string.IsNullOrWhiteSpace(command)) return false;
+            try
+            {
+                string full = Path.GetFullPath(command.Trim('"'));
+                return Path.GetFileName(full).StartsWith("solforge-mcp-", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(Path.GetDirectoryName(full), folder, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(full, shim, StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+        }
+        IEnumerable<JsonObject> Lists(JsonObject root)
+        {
+            if (root["mcpServers"] is JsonObject top) yield return top;
+            if (root["projects"] is JsonObject projects)
+                foreach (var (_, project) in projects)
+                    if (project?["mcpServers"] is JsonObject servers) yield return servers;
+        }
+        lock (gate)
+        {
+            try
+            {
+                if (ReadObject(claudeFile) is not { } current
+                    || !Lists(current).Any(list => list.Any(pair => Stale(pair.Value)))) return 0;
+                int changed = 0;
+                UpdateObject(claudeFile, root =>
+                {
+                    foreach (var list in Lists(root))
+                        foreach (var (_, entry) in list.ToList())
+                            if (Stale(entry)) { entry!["command"] = shim; changed++; }
+                }, backup: false);
+                return changed;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { return 0; }
+        }
+    }
+
     private static JsonObject? ReadObject(string path) =>
         File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true }) as JsonObject : null;
 

@@ -18,15 +18,18 @@ public sealed partial class StudioForm
     private int addKind, addType = 8, addSubType;
     private StudioDocument? cloneSource;
 
-    // The menu bar's menus (StudioForm.MenuBar.cs); each item is disabled while its command cannot run. The » menu reuses them as submenus.
+    // The menu bar's menus (StudioForm.MenuBar.cs), in the mockup's order: File, Edit, View, Assets, Map, Mission, Build,
+    // AI, Help. Every item is an existing command (EditorCommands ids in StudioForm.Ai.Commands.cs run the same code) and
+    // is disabled while it cannot run. The » menu reuses them as submenus.
 
     private void DrawFileMenu()
     {
-        if (!UiAuto.BeginMenu("File")) return; SolTheme.PopupShadow();
+        if (!BeginBarMenu("File")) return;
         if (UiAuto.MenuItem("New project", ShortcutInput.Text(ShortcutActions.NewProject), false, !workspace.IsBusy)) projectDialog = true;
         if (UiAuto.MenuItem("Open project...", ShortcutInput.Text(ShortcutActions.OpenProject), false, !workspace.IsBusy)) OpenProjectDialog();
         if (UiAuto.BeginMenu("Recent projects", settings.RecentProjects.Count != 0 && !workspace.IsBusy))
         {
+            SolTheme.PopupShadow();
             foreach (string path in settings.RecentProjects.ToArray())
             {
                 ImGui.PushID(path);
@@ -39,9 +42,6 @@ public sealed partial class StudioForm
             }
             UiAuto.EndMenu();
         }
-        if (UiAuto.MenuItem("New mission script...", ShortcutInput.Text(ShortcutActions.CreateMissionScript), false,
-            workspace.Catalog is not null && !workspace.IsBusy))
-            NewMissionScript();
         if (UiAuto.MenuItem(missionGraphActive ? "Save script" : "Save project",
             ShortcutInput.Text(ShortcutActions.SaveProject), false, CanSaveActive))
             SaveActiveDocument();
@@ -49,17 +49,19 @@ public sealed partial class StudioForm
         { if (ConfirmMissionDraft()) workspace.CloseProject(); });
         if (UiAuto.MenuItem("Close world", "", false, workspace.World is not null && !workspace.IsBusy)) workspace.Run(workspace.CloseWorld);
         ImGui.Separator();
+        // The mockup keeps the mod's details with the project (File); build.mod_details is the same command.
+        if (UiAuto.MenuItem("Mod details...", "", false, workspace.CanEdit)) workspace.Run(OpenModDialog);
         if (UiAuto.MenuItem("Sunrise location...", "", false, !workspace.IsBusy)) settingsDialog = true;
         if (UiAuto.MenuItem("Cache...", "", false, !workspace.IsBusy)) cacheDialog = true;
         if (UiAuto.MenuItem("Settings...", ShortcutInput.Text(ShortcutActions.OpenSettings))) preferencesOpen = true;
         ImGui.Separator();
         if (UiAuto.MenuItem("Exit")) BeginInvoke(Close);
-        UiAuto.EndMenu();
+        EndBarMenu();
     }
 
     private void DrawEditMenu()
     {
-        if (!UiAuto.BeginMenu("Edit")) return; SolTheme.PopupShadow();
+        if (!BeginBarMenu("Edit")) return;
         if (UiAuto.MenuItem("Undo", ShortcutInput.Text(ShortcutActions.Undo), false, CanUndoActive)) UndoActive();
         if (UiAuto.MenuItem("Redo", ShortcutInput.Text(ShortcutActions.Redo), false, CanRedoActive)) RedoActive();
         ImGui.Separator();
@@ -69,12 +71,12 @@ public sealed partial class StudioForm
         ImGui.Separator();
         if (UiAuto.MenuItem("Shortcuts...")) shortcutsDialog = true;
         if (UiAuto.MenuItem("Settings...", ShortcutInput.Text(ShortcutActions.OpenSettings))) preferencesOpen = true;
-        UiAuto.EndMenu();
+        EndBarMenu();
     }
 
     private void DrawAssetsMenu()
     {
-        if (!UiAuto.BeginMenu("Assets")) return; SolTheme.PopupShadow();
+        if (!BeginBarMenu("Assets")) return;
         if (UiAuto.MenuItem("Export full asset to Blender...", "", false, CanExportBundle)) ExportFullAsset();
         MapBundleTooltip();
         if (UiAuto.MenuItem("Export world to Blender...", "", false,
@@ -100,12 +102,41 @@ public sealed partial class StudioForm
         ImGui.Separator();
         if (UiAuto.MenuItem("Resolve asset names", "", false, workspace.Catalog is not null && !workspace.IsBusy))
             workspace.Run(workspace.IndexNames);
-        UiAuto.EndMenu();
+        EndBarMenu();
+    }
+
+    /** Map: placing content in the open map, the live game link and the retail maps. */
+    private void DrawMapMenu()
+    {
+        if (!BeginBarMenu("Map")) return;
+        if (UiAuto.BeginMenu("Place"))
+        {
+            SolTheme.PopupShadow();
+            DrawPlaceMenuItems();
+            UiAuto.EndMenu();
+        }
+        ImGui.Separator();
+        if (UiAuto.MenuItem("Live")) focusLive = true;
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("The link to the running game: player position, live objects and reloads");
+        if (UiAuto.MenuItem("Retail workspace (live build, maps, porting)")) retailOpen = true;
+        EndBarMenu();
+    }
+
+    /** Mission: new scripts and the mission graph. */
+    private void DrawMissionMenu()
+    {
+        if (!BeginBarMenu("Mission")) return;
+        if (UiAuto.MenuItem("New mission script...", ShortcutInput.Text(ShortcutActions.CreateMissionScript), false,
+            workspace.Catalog is not null && !workspace.IsBusy))
+            NewMissionScript();
+        if (UiAuto.MenuItem("Graph")) focusMissionGraph = true;
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("The mission graph and node graph editor");
+        EndBarMenu();
     }
 
     private void DrawBuildMenu()
     {
-        if (!UiAuto.BeginMenu("Build")) return; SolTheme.PopupShadow();
+        if (!BeginBarMenu("Build")) return;
         if (UiAuto.MenuItem("Build packages", ShortcutInput.Text(ShortcutActions.BuildPackages), false, workspace.CanEdit))
             workspace.Run(() => workspace.Build());
         if (UiAuto.MenuItem("Build and install", ShortcutInput.Text(ShortcutActions.BuildAndInstall), false, workspace.CanEdit)) InstallMod();
@@ -114,37 +145,84 @@ public sealed partial class StudioForm
         if (UiAuto.MenuItem("Build to folder...", "", false, workspace.CanEdit))
             PickFolder("Build output", folder => workspace.Build(folder));
         ImGui.Separator();
-        if (UiAuto.MenuItem("Mod details...", "", false, workspace.CanEdit)) workspace.Run(OpenModDialog);
         DrawPackagingMenuItems();
-        UiAuto.EndMenu();
+        ImGui.Separator();
+        if (UiAuto.MenuItem("Local Server")) focusLocalServer = true;
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("The local test server: start, stop, deploy and its log");
+        EndBarMenu();
     }
 
     private void DrawViewMenu()
     {
-        if (!UiAuto.BeginMenu("View")) return; SolTheme.PopupShadow();
-        if (UiAuto.MenuItem("Graph")) focusMissionGraph = true;
-        if (UiAuto.MenuItem("Live")) focusLive = true;
-        if (UiAuto.MenuItem("Local Server")) focusLocalServer = true;
-        if (UiAuto.MenuItem("Items", "", false, workspace.Catalog is not null)) ShowItems();
-        if (UiAuto.MenuItem("Data explorer (decomp, tags, strings)")) dataExplorerOpen = true;
-        if (UiAuto.MenuItem("Retail workspace (live build, maps, porting)")) retailOpen = true;
+        if (!BeginBarMenu("View")) return;
+        bool wire = viewport?.Wireframe ?? false, grid = viewport?.ShowGrid ?? true;
+        if (UiAuto.MenuItem("Wireframe", "", ref wire)) viewport!.Wireframe = wire;
+        if (UiAuto.MenuItem("Grid", "", ref grid)) viewport!.ShowGrid = grid;
+        if (UiAuto.BeginMenu("Lighting"))
+        {
+            SolTheme.PopupShadow();
+            int lighting = Math.Clamp((int)settings.LightingMode, 0, LightingNames.Length - 1);
+            for (int i = 0; i < LightingNames.Length; i++)
+                if (UiAuto.MenuItem(LightingNames[i], "", i == lighting) && i != lighting) SetLighting(i);
+            UiAuto.EndMenu();
+        }
+        DrawRenderingMenuItem();
         ImGui.Separator();
         if (UiAuto.MenuItem("Frame selection", ShortcutInput.Text(ShortcutActions.FrameSelection3D), false,
             viewport?.Camera.PivotFree == true)) viewport?.FocusSelection();
         if (UiAuto.MenuItem("Set cursor to selection", ShortcutInput.Text(ShortcutActions.SetCursor3D), false,
             (viewport?.SelectedObject is not null || viewport?.SelectedCollision >= 0) && viewport!.Camera.PivotFree))
             viewport?.SetCursorToSelection();
-        bool wire = viewport?.Wireframe ?? false, grid = viewport?.ShowGrid ?? true;
-        if (UiAuto.MenuItem("Wireframe", "", ref wire)) viewport!.Wireframe = wire;
-        if (UiAuto.MenuItem("Grid", "", ref grid)) viewport!.ShowGrid = grid;
         ImGui.Separator();
-        DrawRenderingMenuItem();
-        UiAuto.EndMenu();
+        // The mockup's View > Panels group; the old Window menu's items live here now.
+        MenuCaption("Panels");
+        if (UiAuto.MenuItem("Content Browser drawer", ShortcutInput.Text(ShortcutActions.ToggleBrowser))) ToggleBrowserDrawer();
+        if (UiAuto.MenuItem("Items", "", false, workspace.Catalog is not null)) ShowItems();
+        if (UiAuto.MenuItem("Data explorer (decomp, tags, strings)")) dataExplorerOpen = true;
+        DrawContentEditorsMenuItem();
+        DrawLayoutMenu();
+        if (UiAuto.BeginMenu("Layouts"))
+        {
+            SolTheme.PopupShadow();
+            foreach (string name in StudioLayout.PresetNames)
+                if (UiAuto.MenuItem(name)) ApplyLayoutPreset(name);
+            UiAuto.EndMenu();
+        }
+        EndBarMenu();
+    }
+
+    /** AI: the separate Solforge AI app, its in-editor panel and the MCP call log. */
+    private void DrawAiMenu()
+    {
+        if (!BeginBarMenu("AI")) return;
+        // Launching or focusing a GUI app stays the user's: UI automation cannot click it (as the toolbar pill).
+        UiAuto.PushBlocked();
+        try
+        {
+            if (UiAuto.MenuItem("Solforge AI", ShortcutInput.Text(ShortcutActions.OpenAiWorkspace))) LaunchOrFocusSolforgeAi();
+            StudioUi.Tip("Launch the Solforge AI app for this project, or bring it to the front.");
+        }
+        finally { UiAuto.PopBlocked(); }
+        if (UiAuto.MenuItem("Solforge AI panel")) OpenAiWorkspace();
+        if (UiAuto.MenuItem("Output Log", "", layout.Find(StudioPanelKind.Output) is not null || IsPoppedOut(StudioPanelKind.Output)))
+            ShowPanelFromMenu(StudioPanelKind.Output);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Status, notices, errors and the MCP call log (AI LOG)");
+        EndBarMenu();
+    }
+
+    /** Shows a dock panel as View > Panels does (a popped-out one comes to the front). */
+    private void ShowPanelFromMenu(StudioPanelKind kind)
+    {
+        if (ShowPopout(kind, true)) return;
+        var shown = layout.Show(kind);
+        if (shown.Collapsed == true) shown.Collapsed = false;
+        maximizedPanel = null;
+        layoutDirty = true;
     }
 
     private void DrawHelpMenu()
     {
-        if (!UiAuto.BeginMenu("Help")) return; SolTheme.PopupShadow();
+        if (!BeginBarMenu("Help")) return;
         DrawHelpMenuItems();
         if (UiAuto.MenuItem("Third-party notices")) noticesDialog = true;
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Licenses of the libraries and code Studio includes");
@@ -152,7 +230,7 @@ public sealed partial class StudioForm
         ImGui.Separator();
         ImGui.TextDisabled($"Solforge {StudioVersion.Text}");
         ImGui.TextDisabled(AboutCredit);
-        UiAuto.EndMenu();
+        EndBarMenu();
     }
 
     private static readonly string[] LightingNames = ["Studio", "Sky", "Ambient"];
@@ -189,7 +267,7 @@ public sealed partial class StudioForm
     private void DrawLocationDialog()
     {
         CenterModal(600);
-        if (!ImGui.BeginPopupModal("Sunrise location", ImGuiWindowFlags.AlwaysAutoResize)) return;
+        if (!SolTheme.BeginDialog("Sunrise location", ImGuiWindowFlags.AlwaysAutoResize)) return;
         ImGui.TextUnformatted("Installation folder");
         ImGui.SetNextItemWidth(465 * scale);
         UiAuto.InputText("##install", ref location, 4096);
@@ -228,7 +306,7 @@ public sealed partial class StudioForm
     private void DrawProjectDialog()
     {
         CenterModal(600);
-        if (!ImGui.BeginPopupModal("New project", ImGuiWindowFlags.AlwaysAutoResize)) return;
+        if (!SolTheme.BeginDialog("New project", ImGuiWindowFlags.AlwaysAutoResize)) return;
         ImGui.TextUnformatted("Name"); ImGui.SetNextItemWidth(-1);
         UiAuto.InputText("##projectName", ref projectName, 128);
         ImGui.TextUnformatted("Parent folder");
@@ -260,7 +338,7 @@ public sealed partial class StudioForm
     private void DrawAddDialog()
     {
         CenterModal(600);
-        if (!ImGui.BeginPopupModal("Add asset", ImGuiWindowFlags.AlwaysAutoResize)) return;
+        if (!SolTheme.BeginDialog("Add asset", ImGuiWindowFlags.AlwaysAutoResize)) return;
         if (cloneSource is { } source) { ImGui.TextDisabled("Source"); ImGui.TextWrapped(source.Name); }
         else
         {
