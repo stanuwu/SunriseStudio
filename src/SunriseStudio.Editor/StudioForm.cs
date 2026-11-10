@@ -219,9 +219,11 @@ public sealed partial class StudioForm : Form
     {
         if (drawing || nativeDialog || closed || renderer is null || gui is null || viewport is null
             || WindowState == FormWindowState.Minimized) return;
-        // An attached game shares this GPU; Studio draws at most 30 frames a second, and 10 in the background.
-        if (liveTab.Attached && !options.Smoke
-            && clock.Elapsed.TotalSeconds - lastFrame < (ContainsFocus ? 1 / 30.0 : 1 / 10.0)) return;
+        // An attached game shares this GPU, so the scene views render at most 30 times a second, and 10 in the
+        // background. The rest of the window keeps its frame rate.
+        double sceneInterval = liveTab.Attached && !options.Smoke ? (ContainsFocus ? 1 / 30.0 : 1 / 10.0) : 0;
+        viewport.RenderInterval = sceneInterval;
+        if (assetViewport is not null) assetViewport.RenderInterval = sceneInterval;
         drawing = true;
         long profileStart = Stopwatch.GetTimestamp();
         long profileBytes = options.ProfileFrames is null ? 0 : GC.GetAllocatedBytesForCurrentThread();
