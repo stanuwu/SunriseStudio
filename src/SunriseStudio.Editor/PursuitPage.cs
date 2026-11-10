@@ -11,8 +11,6 @@ public sealed class PursuitPage : IStudioPage
 {
     public const string PageId = "sunrise.pursuit";
     private const string Dot = InvestmentTableViews.Dot;
-    /** Icon side of the page header at UI scale 1, as on the Quest page. */
-    private const float HeaderIconSide = 48;
     private readonly InvestmentTablesLoader loader = new();
     private InvestmentIconCache icons = InvestmentIconCache.Unprepared;
     private readonly PursuitInspector inspector = new();
@@ -27,16 +25,10 @@ public sealed class PursuitPage : IStudioPage
         var workspace = context.Workspace;
         icons = InvestmentIconCache.Of(context);
         if (!loader.Ready(workspace, out var catalog, out var tables)) return;
-        workspace.RequestInvestmentDetail();
-        if (!workspace.InvestmentDetailCurrent)
-        {
-            if (workspace.IsBusy) { ImGui.TextDisabled("Reading item"); return; }
-            InvestmentTablesLoader.Failed(workspace, workspace.RetryInvestmentDetail);
-            return;
-        }
+        if (!InvestmentTablesLoader.DetailReady(workspace)) return;
         if (workspace.SelectedInvestmentItem is not { } detail) { ImGui.TextDisabled("Not an item"); return; }
         var item = detail.Item;
-        float side = HeaderIconSide * InvestmentTableViews.PageScale;
+        float side = QuestPage.HeaderIconSide * InvestmentTableViews.PageScale;
         icons.Draw(catalog, item.Index, side);
         ImGui.SameLine();
         ImGui.BeginGroup();

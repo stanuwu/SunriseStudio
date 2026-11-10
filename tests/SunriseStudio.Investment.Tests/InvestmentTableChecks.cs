@@ -37,7 +37,7 @@ internal static class InvestmentTableChecks
         Check(tables.Root is null
             && tables.Diagnostics.Contains("This installation has no investment root."),
             "A catalog without a root did not report it.");
-        Check(catalog.ReadItem(itemTag, item) is { Pursuit: null, Diagnostics.Count: 0 },
+        Check(catalog.ReadItemWithPursuit(itemTag, item) is { Pursuit: null, Diagnostics.Count: 0 },
             "An item without blocks gained a pursuit.");
     }
 
@@ -102,7 +102,7 @@ internal static class InvestmentTableChecks
     private static void Expressions(InvestmentTables tables)
     {
         var unlocks = tables.Unlocks;
-        Check(unlocks.SharedCount == 50 && unlocks.Shared(5).IsEmpty
+        Check(unlocks.Shared(49).Instructions.Count == 1 && unlocks.Shared(50).Error.Length != 0 && unlocks.Shared(5).IsEmpty
             && unlocks.Shared(9).Instructions.Count == 1, "Shared rows did not load.");
         Check(unlocks.GraphDiagnostics.Contains("1 shared expression references leave the table (first in row 4).")
             && unlocks.GraphDiagnostics.Contains("1 shared expression references name an empty row (first in row 6).")
@@ -112,14 +112,22 @@ internal static class InvestmentTableChecks
         Check(unlocks.Depth(Reference(1)) == 2 && unlocks.Depth(Reference(2)) == -1 && unlocks.Depth(Reference(4)) == -1
             && unlocks.Depth(Reference(5)) == -1 && unlocks.Depth(Reference(6)) == -1 && unlocks.Depth(Reference(99)) == -1,
             "Shared depths ignored a cycle or a broken reference.");
-        Check(unlocks.Depth(Reference(8)) == 40 && unlocks.Problems(Reference(8))
-            .SequenceEqual(["Sunrise refuses expressions nested deeper than 32 shared rows."]),
-                "A 40-deep chain was refused or not noted.");
+        // Rows 17-47 nest 31 deep, which Sunrise binds; row 16 adds the 32nd level, which it refuses.
+        string[] tooDeep = ["Sunrise refuses expressions that nest 32 shared rows or deeper."];
+        Check(unlocks.Depth(Reference(8)) == 40 && unlocks.Problems(Reference(8)).SequenceEqual(tooDeep)
+            && unlocks.Depth(Reference(16)) == 32 && unlocks.Problems(Reference(16)).SequenceEqual(tooDeep)
+            && unlocks.Depth(Reference(17)) == 31 && unlocks.Problems(Reference(17)).Count == 0,
+            "The nesting Sunrise refuses was not noted from its limit on.");
         Check(unlocks.Format(Reference(1)) == "shared #1" && unlocks.Format(unlocks.Shared(1)) == "shared #0 >= 1",
             "A balanced shared row did not print infix.");
-        Check(unlocks.Format(unlocks.Shared(7)) == "op 19 (0), flag Account flag row 0, and"
-            && unlocks.Problems(unlocks.Shared(7)).SequenceEqual(["Studio does not decode opcode 19."]),
+        Check(unlocks.Format(unlocks.Shared(7)) == "op 29 (0), flag Account flag row 0, and"
+            && unlocks.Problems(unlocks.Shared(7)).SequenceEqual(["Studio does not decode opcode 29."]),
             "An undecoded opcode printed infix.");
+        // Multiply pops two values and bitwise not pops one, as Sunrise evaluates them.
+        var product = new InvestmentExpression(0, [new(InvestmentUnlocks.ValueOpcode, 1, 0),
+            new(InvestmentUnlocks.ConstantOpcode, 2, 0), new(19, 0, 0), new(28, 0, 0)]);
+        Check(unlocks.Format(product) == "~(Account value row 0 * 2)" && unlocks.Problems(product).Count == 0,
+            "An arithmetic or bitwise opcode Sunrise evaluates was not decoded: " + unlocks.Format(product));
         Check(unlocks.Format(Reference(2)) == "shared #2 (missing, empty or cyclic)"
             && unlocks.Format(new InvestmentExpression(0, [])) == "None",
             "A cyclic reference printed as a value.");
@@ -175,14 +183,20 @@ internal static class InvestmentTableChecks
                 InvestmentProgressKind.Unreadable, InvestmentProgressKind.Value, InvestmentProgressKind.Value,
                     InvestmentProgressKind.Several,
                 InvestmentProgressKind.Other]), "Fixture objectives were classified wrongly: " + string.Join(", ", kinds));
-        Check(tables.ProgressSource(tables.Objectives[1]).Instruction is { Opcode: flag, Operand: 6 }
+        Check(tables.ProgressSource(tables.Objectives[1]).Instruction is { Opcode: flag, Operand: 4 }
             && tables.ProgressSource(tables.Objectives[5]).Instruction is { Opcode: value, Operand: 4 },
             "A one-source objective did not name the instruction it binds to, through a shared row included.");
         Check(Of((shared, 0)) is { Kind: InvestmentProgressKind.Flag, Instruction.Operand: 0 }
             && Of((shared, 49)).Kind == InvestmentProgressKind.External && Of((shared, 48)).Kind == InvestmentProgressKind.Value
             && Of((shared, 1)).Kind == InvestmentProgressKind.Several
-            && Of((value, 1), (value, 3), (13, 0)).Kind == InvestmentProgressKind.Several,
+            && Of((value, 1), (value, 3), (13, 0)).Kind == InvestmentProgressKind.Several
+            && Of((value, 1), (InvestmentUnlocks.ConstantOpcode, 2), (19, 0)).Kind == InvestmentProgressKind.Several,
             "Shared rows were not inlined before counting instructions.");
+        // The account flag map names slot 4 and the character map slot 1, so Sunrise reads them from saved banks. No map names
+        // slot 6, so Sunrise binds it as an external input, which no saved row holds.
+        Check(tables.Unlocks.BoundFlag(4) && tables.Unlocks.BoundFlag(1) && !tables.Unlocks.BoundFlag(6)
+            && Of((flag, 1)).Kind == InvestmentProgressKind.Flag && Of((flag, 6)).Kind == InvestmentProgressKind.External,
+            "A flag slot was bound to the wrong source.");
         // The character value map names slot 2, so Sunrise reads it from the character bank. No map names slot 7, so Sunrise
         // binds it as an external input.
         Check(tables.Unlocks.BoundValue(2) && !tables.Unlocks.BoundValue(7) && Of((value, 2)).Kind == InvestmentProgressKind.Value
@@ -211,7 +225,7 @@ internal static class InvestmentTableChecks
      */
     private static void Progress(InvestmentCatalog catalog, PackageCatalog packages, InvestmentTables tables)
     {
-        var pursuit = catalog.ReadItem(First + FirstItemEntry + 3, packages.Read(First + FirstItemEntry + 3)).Pursuit!;
+        var pursuit = catalog.ReadItemWithPursuit(First + FirstItemEntry + 3, packages.Read(First + FirstItemEntry + 3)).Pursuit!;
         Check(pursuit.Objectives.SequenceEqual(Enumerable.Range(0, 8).Select(index => (ushort)index))
             && tables.Objectives[7].Optional,
             "Fixture item 3 no longer lists objectives 0-7 with an optional last one.");
@@ -273,7 +287,9 @@ internal static class InvestmentTableChecks
             && tables.Objectives[0].Error.Length == 0 && tables.Objectives[2].Source.IsEmpty
             && tables.Objectives[3].Source.IsEmpty,
             "Objective rows were misread.");
-        var detail = catalog.ReadItem(First + FirstItemEntry + 3, packages.Read(First + FirstItemEntry + 3));
+        var detail = catalog.ReadItemWithPursuit(First + FirstItemEntry + 3, packages.Read(First + FirstItemEntry + 3));
+        Check(catalog.ReadItem(First + FirstItemEntry + 3, packages.Read(First + FirstItemEntry + 3)).Pursuit is null,
+            "The plain item read also read the pursuit.");
         var pursuit = detail.Pursuit ?? throw new InvalidDataException("The pursuit block was not read.");
         Check(pursuit.Objectives.Count == 8 && pursuit.Diagnostics.Contains("Sunrise reads at most 7 objectives on a pursuit.")
             && pursuit.Diagnostics.Contains("Unused reward preview slot 1 is not empty."), "Pursuit rule breaks were not noted.");
@@ -292,7 +308,7 @@ internal static class InvestmentTableChecks
             "The owner's quest set was not read.");
         try { catalog.ReadQuestSet(ItemCount); throw new InvalidDataException("A quest owner outside the item index was read."); }
         catch (ArgumentOutOfRangeException) { }
-        var second = catalog.ReadItem(First + FirstItemEntry + 5, packages.Read(First + FirstItemEntry + 5)).Pursuit!;
+        var second = catalog.ReadItemWithPursuit(First + FirstItemEntry + 5, packages.Read(First + FirstItemEntry + 5)).Pursuit!;
         Check(second.LifetimeSeconds is null && second.Lifetime?.Instructions.Count == 2 && second.Diagnostics.Count == 0,
             "A computed lifetime was read as a constant.");
         // Item 3's lifetime is one constant row of 3600 seconds. Item 5's is a computed two-row expression, and item 0 has no
@@ -514,7 +530,7 @@ internal static class InvestmentTableChecks
         return root.ToArray();
     }
 
-    // Flag slot 2 claims bank row 1, which feeds slot 5; the map names slot 2 at row 2. Slot 6 claims the same row as slot 2.
+    // Flag slot 2 claims bank row 1, which feeds slot 5; the map names slot 2 at row 2. No mapping table names slot 6.
     private static byte[] FlagSlots() => Slots(0x80807D4F,
         [(0, 1, 0), (0, 3, 0), (0, 1, 1), (0xABCD1234, 6, 0xFFFF), (0, 1, 3), (0, 3, 1), (0, 1, 1)],
         (blob, at, row) => { blob.S(at + 4, (ushort)row.Kind); blob.S(at + 6, row.Row); });
@@ -545,8 +561,8 @@ internal static class InvestmentTableChecks
     }
 
     /**
-     * Rows: 0 flag; 1 shared 0 >= 1; 2/3 a cycle; 4 out of range; 5 empty; 6 names 5; 7 opcode 19; 8-47 a 40-deep chain; 48 a
-     * saved value; 49 an external value.
+     * Rows: 0 flag; 1 shared 0 >= 1; 2/3 a cycle; 4 out of range; 5 empty; 6 names 5; 7 opcode 29, one past the last
+     * opcode Sunrise evaluates; 8-47 a 40-deep chain; 48 a saved value; 49 an external value.
      */
     private static byte[] Shared()
     {
@@ -556,7 +572,7 @@ internal static class InvestmentTableChecks
         (uint, uint)[] Body(int row) => row switch
         {
             0 => [(1, 0)], 1 => [(12, 0), (11, 1), (14, 0xFFFFFFFF)], 2 => [(12, 3)], 3 => [(12, 2)], 4 => [(12, 99)], 5 => [],
-            6 => [(12, 5)], 7 => [(19, 0), (1, 0), (4, 0)], 47 => [(1, 0)], 48 => [(10, 4)],
+            6 => [(12, 5)], 7 => [(29, 0), (1, 0), (4, 0)], 47 => [(1, 0)], 48 => [(10, 4)],
                 49 => [(10, 7)], _ => [(12, (uint)row + 1)]
         };
         for (int row = 0; row < rows; row++)
@@ -643,8 +659,8 @@ internal static class InvestmentTableChecks
         for (int row = 0; row < 8; row++) { blob.U(rows + row * 0xA0, 0x41 + (uint)row); blob.U(rows + row * 0xA0 + 0x30, 1); }
         blob.Expression(rows + 8, (10, 7)); blob.U(rows + 0x30, 10);
         blob.B(rows + 0xA0 + 0x28, 2);
-        // Objective 1 reads flag slot 6 and adjusts its target by flag slot 2, which bind the same account row.
-        blob.Expression(rows + 0xA0 + 8, (1, 6)); blob.Expression(rows + 0xA0 + 0x38, (1, 2));
+        // Objective 1 reads flag slot 4, which the account flag map names, and adjusts its target by flag slot 2.
+        blob.Expression(rows + 0xA0 + 8, (1, 4)); blob.Expression(rows + 0xA0 + 0x38, (1, 2));
         blob.Array(rows + 3 * 0xA0 + 8, 0x80807D31, 0, 8);
         // Objective 4 reads a saved value, 5 another through shared row 48, 6 two flags, and 7 is an optional constant.
         blob.Expression(rows + 4 * 0xA0 + 8, (10, 3));

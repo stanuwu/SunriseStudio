@@ -5,7 +5,7 @@ using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
-/** One inventory bucket descriptor of root slot 17. Raw is the whole 36-byte descriptor. */
+/** One inventory bucket descriptor of root slot 17. Raw is the whole descriptor. */
 public sealed record InvestmentBucket(int Index, byte Id, int FirstSlot, int SlotCount, byte ArraySelector,
     byte Fifo, byte NoTransferOnEviction, ReadOnlyMemory<byte> Raw, string Problem = "")
 {

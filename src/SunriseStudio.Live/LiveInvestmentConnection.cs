@@ -4,34 +4,53 @@ using System.IO.MemoryMappedFiles;
 
 namespace SunriseStudio.Live;
 
+/**
+ * Where a link stands: waiting for the game's version word, carrying requests, facing a game of another link version, facing
+ * a game that never wrote its version, or closed for good.
+ */
 public enum LiveInvestmentLinkState { Opening, Connected, VersionDiffers, Unavailable, Closed }
 
 /** The requests an editor session sends. The link carries one request at a time and answers them in the order sent. */
 public interface ILiveInvestmentLink : IDisposable
 {
+    /** Where the link stands. Only a Connected link carries a request. */
     LiveInvestmentLinkState State { get; }
+    /** Why the link is not connected, or empty. */
     string Diagnostic { get; }
+    /** Asks who the game is: its account, characters and the catalogs it has read. */
     Task<LiveInvestmentHello> HelloAsync(CancellationToken cancellationToken);
+    /** Reads what the selected character and the profile hold. */
     Task<LiveInventorySnapshot> InventoryAsync(CancellationToken cancellationToken);
+    /** Reads the account's seasonal XP, rank and pass rows. */
     Task<LiveSeasonPassSnapshot> SeasonPassAsync(CancellationToken cancellationToken);
+    /** Reads the selected character's held pursuits and their objectives. */
     Task<LivePursuitSnapshot> PursuitsAsync(CancellationToken cancellationToken);
     /** Reads up to LiveInvestmentProtocol.UnlockReadCapacity saved flag and value rows of the selected character. */
     Task<LiveUnlockSnapshot> UnlockValuesAsync(IReadOnlyList<LiveUnlockSource> sources, CancellationToken cancellationToken);
+    /** Grants a quantity of one item through the game's acquisition. */
     Task<LiveInvestmentReceipt> GrantItemAsync(LiveInvestmentOperation operation, uint itemHash, uint quantity,
         CancellationToken cancellationToken);
+    /** Sets a held row's quantity, and quantity 0 removes the row. */
     Task<LiveInvestmentReceipt> SetQuantityAsync(LiveInvestmentOperation operation, LiveInventoryScope scope, ulong instance,
         uint hash, int expectedSerial, int expectedQuantity, int quantity, CancellationToken cancellationToken);
+    /** Sets the account's seasonal XP when it still equals expected. */
     Task<LiveInvestmentReceipt> SetSeasonalExperienceAsync(LiveInvestmentOperation operation, int expected, int replacement,
         CancellationToken cancellationToken);
+    /** Claims the pass row with this claim index when it still grants this item. */
     Task<LiveInvestmentReceipt> ClaimSeasonPassRewardAsync(LiveInvestmentOperation operation, ushort row, uint itemHash,
         CancellationToken cancellationToken);
+    /** Clears the claim flag of a pass row the game reports claimed. */
     Task<LiveInvestmentReceipt> ResetSeasonPassClaimAsync(LiveInvestmentOperation operation, ushort row, uint itemHash,
         CancellationToken cancellationToken);
+    /** Writes the saved row one objective of a held pursuit reads, when the row still holds expected. */
     Task<LiveInvestmentReceipt> SetPursuitObjectiveAsync(LiveInvestmentOperation operation, ulong instance, uint itemHash,
         int expectedSerial, uint objectiveHash, byte ordinal, int expected, int value, CancellationToken cancellationToken);
+    /** Sets each incomplete objective of a held pursuit to its target without turning the pursuit in. */
     Task<LiveInvestmentReceipt> CompletePursuitObjectivesAsync(LiveInvestmentOperation operation, ulong instance, uint itemHash,
         int expectedSerial, CancellationToken cancellationToken);
+    /** Reads the game's receipt of an earlier mutation without changing it. */
     Task<LiveInvestmentReceipt> ReadReceiptAsync(ulong operationId, CancellationToken cancellationToken);
+    /** Lets the game forget a finished mutation's receipt. */
     Task<LiveInvestmentReceipt> AcknowledgeAsync(ulong operationId, CancellationToken cancellationToken);
 }
 
@@ -42,6 +61,7 @@ public sealed class LiveInvestmentNotSentException(string message, Exception inn
 public sealed class LiveInvestmentOutcomeUnknownException(LiveInvestmentOperation operation,
     string message) : TimeoutException(message)
 {
+    /** The mutation whose receipt can still say what the game did. */
     public LiveInvestmentOperation Operation { get; } = operation;
 }
 
@@ -73,6 +93,8 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
     private LiveInvestmentHello? hello;
     private ulong gameStarted;
     private long opened;
+    // When the mapping was last tried, as an Environment.TickCount64 value, or null before the first try.
+    private long? openTried;
     private Pending? pending;
     private bool disposed;
 
@@ -97,9 +119,12 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
         _ = Task.Run(() => PumpAsync(token));
     }
 
+    /** Where the link stands, as the pump last saw it. */
     public LiveInvestmentLinkState State { get { lock (gate) return state; } }
+    /** Why the link is not connected, or empty. A closed link keeps the reason it closed. */
     public string Diagnostic { get { lock (gate) return diagnostic; } }
 
+    /** Asks who the game is and keeps the answer, which later mutations must be made from. */
     public async Task<LiveInvestmentHello> HelloAsync(CancellationToken cancellationToken)
     {
         var reply = Accepted(await SendAsync(LiveInvestmentOpcode.Hello, 0, default, [], null,
@@ -109,25 +134,30 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
         return read;
     }
 
+    /** Reads what the selected character and the profile hold. */
     public async Task<LiveInventorySnapshot> InventoryAsync(CancellationToken cancellationToken) =>
         LiveInvestmentProtocol.ReadInventory(Accepted(await SendAsync(LiveInvestmentOpcode.InventorySnapshot, 0, default, [],
             null,
             cancellationToken).ConfigureAwait(false)));
 
+    /** Reads the account's seasonal XP, rank and pass rows. */
     public async Task<LiveSeasonPassSnapshot> SeasonPassAsync(CancellationToken cancellationToken) =>
         LiveInvestmentProtocol.ReadSeasonPass(Accepted(await SendAsync(LiveInvestmentOpcode.SeasonPassSnapshot, 0, default, [],
             null,
             cancellationToken).ConfigureAwait(false)));
 
+    /** Reads the selected character's held pursuits and their objectives. */
     public async Task<LivePursuitSnapshot> PursuitsAsync(CancellationToken cancellationToken) =>
         LiveInvestmentProtocol.ReadPursuits(Accepted(await SendAsync(LiveInvestmentOpcode.PursuitSnapshot, 0, default, [], null,
             cancellationToken).ConfigureAwait(false)));
 
+    /** Reads saved flag and value rows of the selected character, one value per source in the order asked. */
     public async Task<LiveUnlockSnapshot> UnlockValuesAsync(IReadOnlyList<LiveUnlockSource> sources,
         CancellationToken cancellationToken) =>
         LiveInvestmentProtocol.ReadUnlockValues(Accepted(await SendAsync(LiveInvestmentOpcode.UnlockValues, 0, default,
             LiveInvestmentProtocol.UnlockValues(sources), null, cancellationToken).ConfigureAwait(false)), sources);
 
+    /** Grants a quantity of one item to the operation's character through the game's acquisition. */
     public Task<LiveInvestmentReceipt> GrantItemAsync(LiveInvestmentOperation operation, uint itemHash, uint quantity,
         CancellationToken cancellationToken) =>
         SubmitAsync(operation, LiveInvestmentOpcode.GrantItem,
@@ -141,12 +171,14 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
             LiveInvestmentProtocol.SetQuantity(scope, instance, hash, expectedSerial, expectedQuantity,
                 quantity), cancellationToken);
 
+    /** The game refuses the change unless its seasonal XP still equals expected. */
     public Task<LiveInvestmentReceipt> SetSeasonalExperienceAsync(LiveInvestmentOperation operation,
         int expected, int replacement,
         CancellationToken cancellationToken) =>
         SubmitAsync(operation, LiveInvestmentOpcode.SetSeasonalExperience,
             LiveInvestmentProtocol.SetSeasonalExperience(expected, replacement), cancellationToken);
 
+    /** Claims the pass row with this claim index. The game refuses unless the row still grants this item. */
     public Task<LiveInvestmentReceipt> ClaimSeasonPassRewardAsync(LiveInvestmentOperation operation, ushort row, uint itemHash,
         CancellationToken cancellationToken) =>
         SubmitAsync(operation, LiveInvestmentOpcode.ClaimSeasonPassReward,
@@ -165,6 +197,7 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
             LiveInvestmentProtocol.SetPursuitObjective(instance, itemHash, expectedSerial, objectiveHash, ordinal,
                 expected, value), cancellationToken);
 
+    /** Sets each incomplete objective of a held pursuit to its target. The pursuit is not turned in. */
     public Task<LiveInvestmentReceipt> CompletePursuitObjectivesAsync(LiveInvestmentOperation operation, ulong instance,
         uint itemHash, int expectedSerial, CancellationToken cancellationToken) =>
         SubmitAsync(operation, LiveInvestmentOpcode.CompletePursuitObjectives,
@@ -333,7 +366,9 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
     private void Service(long now)
     {
         if (process.HasExited) { Close("The game closed."); return; }
-        if (view is null && !Open(now)) return;
+        // A refused open throws, so it is tried again at the game's own connect interval and not on every pump tick.
+        bool openDue = openTried is not { } tried || now - tried >= LiveInvestmentProtocol.ConnectIntervalMilliseconds;
+        if (view is null && (!openDue || !Open(now))) return;
         view!.Write(LiveInvestmentProtocol.HeartbeatOffset, now);
         uint version = view.ReadUInt32(LiveInvestmentProtocol.GameVersionOffset);
         (state, diagnostic) = version switch
@@ -389,6 +424,7 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
      */
     private bool Open(long now)
     {
+        openTried = now;
         try
         {
             mapping = MemoryMappedFile.CreateNew(LiveInvestmentProtocol.MappingName(processId),
@@ -440,6 +476,7 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
         mapping = null;
     }
 
+    /** Ends the pump and tells the game to drop the link. A pending mutation fails as unknown and a pending read as cancelled. */
     public void Dispose()
     {
         lock (gate)

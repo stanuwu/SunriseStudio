@@ -30,7 +30,7 @@ internal sealed class BucketList
     private const string Many = "-";
     private BucketIndex? index;
     private (BucketIndex? Index, string Search) shownKey;
-    /** The buckets the list shows under All held items, in its order. */
+    // The installed buckets the search matches, sorted by id. Rebuilt when the snapshot or the search changes.
     private InvestmentBucket[] shown = [];
     private bool scrollToSelected;
     private string search = "";

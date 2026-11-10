@@ -96,7 +96,7 @@ public sealed class SeasonPassPage : IStudioPage, IStudioRowPage
         InvestmentTables tables, InvestmentProgression shown,
         SeasonPassGrid.Ladder ladder)
     {
-        var rows = grid.SelectedRows(shown, ladder);
+        var rows = grid.SelectedRows(ladder);
         if (rows.Count == 0) return;
         StudioUi.Heading(grid.SelectedTitle, "Extracted: pass reward");
         grid.DrawRowChips(catalog, icons, shown, rows, ladder);

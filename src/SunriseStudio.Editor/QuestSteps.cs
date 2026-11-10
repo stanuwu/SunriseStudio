@@ -37,15 +37,21 @@ internal sealed class QuestSteps : IDisposable
         }, token);
     }
 
-    /** Adopts a finished read between frames. A failed read with no known chain leaves an empty chain that carries the error. */
+    /**
+     * Adopts a finished read between frames. A failed read with no known chain leaves an empty chain that carries the error.
+     * With a known chain, each of its steps carries the error, so no step waits for a read that has ended.
+     */
     public void Prepare()
     {
         if (reading is not { IsCompleted: true } done) return;
         reading = null;
         if (done.IsCompletedSuccessfully) (Chain, Steps) = (done.Result.Chain, done.Result.Steps);
         else if (!done.IsCanceled)
-            Chain ??= new((ushort)Math.Min(key.Owner, ushort.MaxValue), -1, ushort.MaxValue, 0, [],
-                done.Exception?.GetBaseException().Message ?? "The quest chain could not be read.");
+        {
+            string error = done.Exception?.GetBaseException().Message ?? "The quest chain could not be read.";
+            Chain ??= new((ushort)Math.Min(key.Owner, ushort.MaxValue), -1, ushort.MaxValue, 0, [], error);
+            Steps = [.. Chain.Steps.Select(step => new QuestStepDetail(step.ItemIndex, null, error))];
+        }
         Revision++;
     }
 
@@ -56,7 +62,7 @@ internal sealed class QuestSteps : IDisposable
         try
         {
             uint tag = catalog.Items[item].Tag;
-            return new(item, catalog.ReadItem(tag, packages.Read(tag), token), "");
+            return new(item, catalog.ReadItemWithPursuit(tag, packages.Read(tag), token), "");
         }
         catch (Exception error) when (Unreadable(error)) { return new(item, null, error.Message); }
     }

@@ -8,6 +8,7 @@ namespace SunriseStudio.Editor;
 /** One change Studio asks the game to make. The game revalidates every expected value the action carries. */
 public abstract record LiveAction
 {
+    /** The request the action is sent as. */
     public abstract LiveInvestmentOpcode Opcode { get; }
     /** The item, held row, pass row or seasonal XP the action changes. An action waits while another on its target is pending. */
     public abstract string TargetKey { get; }
@@ -19,15 +20,19 @@ public abstract record LiveAction
     internal abstract Task<LiveInvestmentReceipt> SendAsync(ILiveInvestmentLink link,
         LiveInvestmentOperation operation, CancellationToken token);
 
+    /** The key of grants of one item. */
     public static string ItemKey(uint hash) => $"item {hash:X8}";
     /** A held instance's quantity and its pursuit progress share this key, so they wait for each other. */
     public static string InstanceKey(ulong instance) => $"instance {instance:X16}";
     /** A stack shares its item's key, so a grant and a quantity change of one stack wait for each other. */
     public static string HeldKey(LiveHeld held) => held.Instance != 0 ? InstanceKey(held.Instance) : ItemKey(held.DefinitionHash);
+    /** The key of a claim or claim reset of one season pass row. */
     public static string PassRowKey(int row) => $"pass row {row}";
+    /** The key of seasonal XP changes. */
     public const string ExperienceKey = "experience";
 }
 
+/** Grants a quantity of one item to the selected character through the game's acquisition. */
 public sealed record LiveGrantItem(uint ItemHash, string Name, int Quantity) : LiveAction
 {
     public override LiveInvestmentOpcode Opcode => LiveInvestmentOpcode.GrantItem;
@@ -52,6 +57,7 @@ public sealed record LiveSetQuantity(LiveHeld Row, string Name, int Quantity) : 
         Row.MutationSerial, Row.Quantity, Quantity, token);
 }
 
+/** Sets the account's seasonal XP. The game compares its XP with Expected first. */
 public sealed record LiveSetExperience(int Expected, int Experience) : LiveAction
 {
     public override LiveInvestmentOpcode Opcode => LiveInvestmentOpcode.SetSeasonalExperience;
@@ -75,6 +81,7 @@ public sealed record LiveClaimPassRow(ushort Row, uint ItemHash, string Name) : 
         CancellationToken token) => link.ClaimSeasonPassRewardAsync(operation, Row, ItemHash, token);
 }
 
+/** Clears a season pass row's claim flag. Granted items stay. */
 public sealed record LiveResetPassClaim(ushort Row, uint ItemHash, string Name) : LiveAction
 {
     public override LiveInvestmentOpcode Opcode => LiveInvestmentOpcode.ResetSeasonPassClaim;
@@ -124,16 +131,25 @@ public enum LiveOperationPhase { Sending, Waiting, Done, Saved, Refused, Unknown
 /** One action sent to the game, and what its receipt says. */
 public sealed class LiveOperation(LiveInvestmentOperation identity, LiveAction action, string target, DateTime submittedAt)
 {
+    /** The id, target and game instance the game knows the operation by. */
     public LiveInvestmentOperation Identity { get; } = identity;
+    /** What the game was asked to change. */
     public LiveAction Action { get; } = action;
     /** Who the action was sent to, as "Warlock, account 0x4000000000000002". */
     public string Target { get; } = target;
+    /** Local time of the Submit call. */
     public DateTime SubmittedAt { get; } = submittedAt;
+    /** Where the operation stands. */
     public LiveOperationPhase Phase { get; private set; }
+    /** The game's last receipt, or null before it answered. */
     public LiveInvestmentReceipt? Receipt { get; private set; }
+    /** The status line. */
     public string Text { get; private set; } = "Sending";
-    /** Why the status line says what it does, shown last in the tooltip. */
+    /** Why the status line says what it does, shown in the tooltip. */
     public string Details { get; private set; } = "";
+    /** Why the last receipt read or acknowledgement failed, or empty. The next receipt clears it. */
+    public string ReadError { get; private set; } = "";
+    /** True until the game gives a final receipt or the outcome is lost. */
     public bool Pending => Phase is LiveOperationPhase.Sending or LiveOperationPhase.Waiting;
     /** True for a published grant that stopped part way. Receipt.Reason says why the rest was not granted. */
     public bool StoppedPartWay => Phase == LiveOperationPhase.Done && Receipt is { Reason.Length: > 0 };
@@ -143,6 +159,7 @@ public sealed class LiveOperation(LiveInvestmentOperation identity, LiveAction a
     internal void Adopt(LiveInvestmentReceipt receipt)
     {
         Receipt = receipt;
+        ReadError = "";
         (Phase, Text, Details) = receipt.State switch
         {
             LiveReceiptState.Queued => (LiveOperationPhase.Waiting, "Queued", ""),
@@ -168,13 +185,17 @@ public sealed class LiveOperation(LiveInvestmentOperation identity, LiveAction a
     {
         (Phase, Text) = Receipt is null ? (LiveOperationPhase.NotReceived, "The game did not receive it. Nothing changed.")
             : (LiveOperationPhase.Forgotten, "The game no longer has this result.");
-        Details = "";
+        Details = ReadError = "";
     }
 
     /** Marks the operation refused. The game did not retain the submission, so nothing changed. */
     internal void Refuse(string sentence) { Phase = LiveOperationPhase.Refused; Text = "Refused: " + sentence; Details = ""; }
 
-    internal void ReadFailed(string message) => Details = message;
+    /** The game dropped the finished receipt or holds none, so nothing is left to read. */
+    internal void MarkAcknowledged() { Acknowledged = true; ReadError = ""; }
+
+    /** Notes a receipt read or acknowledgement that failed. The operation keeps its phase, text and details. */
+    internal void ReadFailed(string message) => ReadError = message;
 
     private static string WaitText(LiveInvestmentWait wait) => wait switch
     {
@@ -197,6 +218,8 @@ public sealed partial class LiveInvestmentSession
     // A receipt changes at most once per BAP service interval, so pending receipts are read at that pace.
     private const long ReceiptMilliseconds = LiveInvestmentConnection.ReceiptPollMilliseconds;
     private readonly List<LiveOperation> operations = [];
+    // The operations on each target, oldest first, so a drawn row finds its own without searching every operation.
+    private readonly Dictionary<string, List<LiveOperation>> operationsByTarget = [];
     /** Every action sent in this Studio run, oldest first. */
     public IReadOnlyList<LiveOperation> Operations => operations;
 
@@ -209,6 +232,9 @@ public sealed partial class LiveInvestmentSession
             $"{InvestmentTableViews.ClassName(character.CharacterClass)}, account 0x{hello.Context.AccountSoid:X16}",
                 DateTime.Now);
         operations.Add(operation);
+        if (!operationsByTarget.TryGetValue(action.TargetKey, out var onTarget))
+            operationsByTarget[action.TargetKey] = onTarget = [];
+        onTarget.Add(operation);
         Revision++;
         return operation;
     }
@@ -224,7 +250,17 @@ public sealed partial class LiveInvestmentSession
         : operation.Identity.GameStarted != Hello!.GameStarted ? "The game restarted; its results are gone." : "";
 
     /** The latest operation on one target, for the line under its action. */
-    public LiveOperation? LastFor(string targetKey) => operations.LastOrDefault(row => row.Action.TargetKey == targetKey);
+    public LiveOperation? LastFor(string targetKey) =>
+        operationsByTarget.TryGetValue(targetKey, out var onTarget) ? onTarget[^1] : null;
+
+    /** True while an operation on the target has no final receipt. Another action on the target waits for it. */
+    public bool PendingFor(string targetKey)
+    {
+        if (!operationsByTarget.TryGetValue(targetKey, out var onTarget)) return false;
+        foreach (var operation in onTarget)
+            if (operation.Pending) return true;
+        return false;
+    }
 
     /**
      * Why an action cannot be sent, in the order the user can fix it, or empty when it can. Each check is one the game
@@ -238,29 +274,30 @@ public sealed partial class LiveInvestmentSession
         // An operation names the account, character and content hash. The game reports content 0 until it has read its data.
         if (!hello.Context.Complete) return LiveInvestmentProtocol.Describe("not_ready");
         if (!hello.PeerOwnsAccount) return LiveInvestmentProtocol.Describe("publication_peer");
-        return operations.Any(row => row.Pending && row.Action.TargetKey == targetKey) ? "Waiting for the last request." : "";
+        return PendingFor(targetKey) ? "Waiting for the last request." : "";
     }
 
-    /** Starts an unsent action, else a due receipt read, else an acknowledgement. @return True when a request started. */
+    /**
+     * Starts the oldest unsent action, else the oldest due receipt read, else the oldest due acknowledgement. Receipts are
+     * read only from the game instance that took the operation.
+     * @return True when a request started.
+     */
     private bool NextOperationRequest()
     {
         ulong started = Hello!.GameStarted;
-        if (operations.FirstOrDefault(row => row.Phase == LiveOperationPhase.Sending && !row.Sent) is { } unsent)
+        LiveOperation? unsent = null, waiting = null, finished = null;
+        foreach (var row in operations)
         {
-            Send(unsent);
-            return true;
+            if (row.Phase == LiveOperationPhase.Sending && !row.Sent) { unsent = row; break; }
+            if (row.Identity.GameStarted != started) continue;
+            bool due = now - row.ReadAt >= ReceiptMilliseconds;
+            if (row.CheckRequested || row.Phase == LiveOperationPhase.Waiting && due) waiting ??= row;
+            else if (row.Receipt?.Terminal == true && !row.Acknowledged && due) finished ??= row;
         }
-        var current = operations.Where(row => row.Identity.GameStarted == started).ToArray();
-        if (current.FirstOrDefault(row => row.CheckRequested
-            || row.Phase == LiveOperationPhase.Waiting && now - row.ReadAt >= ReceiptMilliseconds) is { } waiting)
-        {
-            ReadReceipt(waiting);
-            return true;
-        }
-        if (current.FirstOrDefault(row => row.Receipt?.Terminal == true && !row.Acknowledged
-            && now - row.ReadAt >= ReceiptMilliseconds) is not { } finished) return false;
-        Acknowledge(finished);
-        return true;
+        if (unsent is not null) Send(unsent);
+        else if (waiting is not null) ReadReceipt(waiting);
+        else if (finished is not null) Acknowledge(finished);
+        return unsent is not null || waiting is not null || finished is not null;
     }
 
     /**
@@ -297,7 +334,7 @@ public sealed partial class LiveInvestmentSession
         operation.ReadAt = now;
         Start((target, token) => target.AcknowledgeAsync(operation.Identity.Id, token), receipt =>
         {
-            if (receipt.Terminal || receipt.State == LiveReceiptState.Unknown) operation.Acknowledged = true;
+            if (receipt.Terminal || receipt.State == LiveReceiptState.Unknown) operation.MarkAcknowledged();
         }, error => operation.ReadFailed(error.Message));
     }
 
@@ -374,9 +411,10 @@ internal static class LiveOperationLine
         ImGui.PopID();
     }
 
-    /** The operation id, the action, its target and the receipt's note, one per line. */
+    /** The operation id, the action, its target, the receipt's note and a failed receipt read, one per line. */
     internal static string Tooltip(LiveOperation operation) => string.Join("\n", new[]
     {
-        $"Operation {operation.Identity.Id:X16}", operation.Action.Summary, "To " + operation.Target, operation.Details
+        $"Operation {operation.Identity.Id:X16}", operation.Action.Summary, "To " + operation.Target, operation.Details,
+        operation.ReadError.Length == 0 ? "" : "Result not read: " + operation.ReadError
     }.Where(line => line.Length != 0));
 }

@@ -15,8 +15,6 @@ public sealed record InvestmentSlotRead(int Slot, uint Tag, InvestmentSlotState 
 /** The root slots Studio reads, named by the root layout's field for each slot, as Sunrise's root_slot reads them. */
 public static class InvestmentRootSlots
 {
-    /** Investment constants blob. */
-    public static readonly int Constants = Of(nameof(RootView.Slot11InvestmentConstants));
     /** Character classes. Each row names its class's default finisher. */
     public static readonly int Classes = Of(nameof(RootView.Slot12ClassTable));
     /** Inventory bucket descriptors. Sunrise reads the table without a class check. */

@@ -36,6 +36,16 @@ internal static class PursuitProgress
     /** The held copy's value that holds a bounty's deadline (Sunrise state/account/inventory/item_state.h kItemExpiryLane). */
     private const int BountyDeadlineLane = 0;
 
+    /** A held pursuit in a few words: "2 of 3 objectives" when the game knows its objectives, otherwise "progress unknown". */
+    public static string Status(LiveHeldPursuit held)
+    {
+        if (!held.Flags.HasFlag(LivePursuitFlags.ObjectivesKnown)) return "progress unknown";
+        int complete = 0;
+        foreach (var objective in held.Objectives)
+            if (objective.Flags.HasFlag(LivePursuitObjectiveFlags.Complete)) complete++;
+        return $"{complete} of {held.Objectives.Count} objectives";
+    }
+
     /** True when this server can set the objective at all, so Set progress is drawn. */
     public static bool CanSet(InvestmentTables tables, InvestmentPursuit pursuit, int ordinal, LiveHeldPursuit? held) =>
         !SetRefusal(tables, pursuit, ordinal, held, "").Never;

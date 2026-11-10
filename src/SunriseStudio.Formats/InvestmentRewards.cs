@@ -4,10 +4,14 @@ using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
+/** One socket override of a reward row. An index of InvestmentCatalog.Absent names nothing. */
 public sealed record InvestmentSocketOverride(int Offset, ushort SocketType, ushort PlugItem, ushort PlugSet,
     ushort RollSet, uint Selection)
 {
-    public bool FixedPlug => Selection == 0xFFFFFFFF;
+    /** The selection of an override that names its plug directly (Sunrise rewards/definition.h kFixedPlugSelection). */
+    private const uint FixedPlugSelection = 0xFFFFFFFF;
+    /** True when the override names its plug rather than selecting one from a set. */
+    public bool FixedPlug => Selection == FixedPlugSelection;
 }
 
 /** The socket overrides a reward row carries. */

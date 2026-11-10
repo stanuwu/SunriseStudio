@@ -34,12 +34,14 @@ internal sealed class ItemCatalogView(bool kindMenu = true)
     private string search = "";
     private ItemSort sort;
     private int chosen = -1;
-    private bool scrollToChosen;
+    // What the next draw does to the list's scroll: back to the top for new rows, then to the chosen item when the rows list it.
+    private bool scrollToTop, scrollToChosen;
     // Whether the list last drew as a grid. Switching between rows and grid scrolls to the chosen item.
     private bool? drawnAsGrid;
     // The item of the grid cell whose context menu is open.
     private InvestmentItem? contextItem;
-    // The kind, search, order and narrowing the rows were built for. A change scrolls the list to the chosen item.
+    // The kind, search, order and narrowing the rows were built for. A change scrolls the list to the chosen item, or to the
+    // top when the new rows do not list it.
     private (string Kind, string Search, ItemSort Sort, IReadOnlyCollection<int>? Candidates, bool ChangedOnly) filter;
     // The data the rows were built from. A new catalog, category rows or, under ChangedOnly, a project edit rebuilds the rows
     // without moving the list.
@@ -158,7 +160,9 @@ internal sealed class ItemCatalogView(bool kindMenu = true)
     {
         InvestmentItem? clicked = null;
         float height = IconList.RowHeight(scale);
-        if (scrollToChosen) { ImGui.SetScrollY(Math.Max(0, Array.FindIndex(shown, item => item.Index == chosen)) * height); scrollToChosen = false; }
+        if (scrollToTop) ImGui.SetScrollY(0);
+        if (ChosenRow(shown) is >= 0 and var row) ImGui.SetScrollY(row * height);
+        scrollToTop = false;
         var clipper = new ImGuiListClipperPtr(ImGuiNative.ImGuiListClipper_ImGuiListClipper());
         clipper.Begin(shown.Length, height);
         while (clipper.Step())
@@ -185,7 +189,9 @@ internal sealed class ItemCatalogView(bool kindMenu = true)
     private InvestmentItem? DrawGrid(StudioWorkspace workspace, InvestmentCatalog catalog, InvestmentIconCache icons, float scale,
         InvestmentItem[] shown, ItemCatalogOptions options)
     {
-        if (scrollToChosen) { grid.ScrollTo(Math.Max(0, Array.FindIndex(shown, item => item.Index == chosen))); scrollToChosen = false; }
+        if (scrollToTop) grid.ResetScroll();
+        if (ChosenRow(shown) is >= 0 and var cell) grid.ScrollTo(cell);
+        scrollToTop = false;
         uint badge = ImGui.GetColorU32(StudioTheme.Accent);
         IconCell Cell(int index)
         {
@@ -208,6 +214,17 @@ internal sealed class ItemCatalogView(bool kindMenu = true)
     }
 
     /**
+     * Takes the pending scroll to the chosen item. A chosen item the rows do not list leaves the list where it is.
+     * @return The chosen item's place in the shown rows when the list should scroll to it, else -1.
+     */
+    private int ChosenRow(InvestmentItem[] shown)
+    {
+        if (!scrollToChosen) return -1;
+        scrollToChosen = false;
+        return Array.FindIndex(shown, item => item.Index == chosen);
+    }
+
+    /**
      * The kind's items, or every item for AllItems, narrowed to the candidates, to the project's changes when asked and to every
      * search word, in the chosen order. The rows are rebuilt only when the filter or their source changes.
      */
@@ -217,7 +234,7 @@ internal sealed class ItemCatalogView(bool kindMenu = true)
         var narrowed = (Kind, search, sort, options.Candidates, options.ChangedOnly);
         var built = (catalog, kindRows, options.ChangedOnly ? workspace.ProjectRevision : 0);
         if (filter == narrowed && source == built) return rows;
-        if (filter != narrowed) { grid.ResetScroll(); scrollToChosen = true; }
+        if (filter != narrowed) scrollToTop = scrollToChosen = true;
         filter = narrowed; source = built;
         IEnumerable<InvestmentItem> items = kindRows is null ? catalog.Items
             : kindRows.Select(row => catalog.FindItem(row.Entry.TagHash)).OfType<InvestmentItem>();
@@ -227,17 +244,20 @@ internal sealed class ItemCatalogView(bool kindMenu = true)
         if (words.Length != 0)
             items = items.Where(item => SearchText(item) is var text
                 && words.All(word => text.Contains(word, StringComparison.OrdinalIgnoreCase)));
-        rows = (sort switch
-        {
-            ItemSort.Name => items.OrderBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase),
-            ItemSort.Rarity => items.OrderByDescending(item => item.Tier).ThenBy(item => item.Name,
-                StringComparer.CurrentCultureIgnoreCase),
-            ItemSort.Type => items.OrderBy(item => item.TypeName, StringComparer.CurrentCultureIgnoreCase)
-                .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase),
-            _ => items
-        }).ToArray();
+        rows = Ordered(items, sort).ToArray();
         return rows;
     }
+
+    /** The items in one of the sort menu's orders: by name, rarest tier first, or by type line. Names order equal ones. */
+    internal static IEnumerable<InvestmentItem> Ordered(IEnumerable<InvestmentItem> items, ItemSort sort) => sort switch
+    {
+        ItemSort.Name => items.OrderBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase),
+        ItemSort.Rarity => items.OrderByDescending(item => item.Tier).ThenBy(item => item.Name,
+            StringComparer.CurrentCultureIgnoreCase),
+        ItemSort.Type => items.OrderBy(item => item.TypeName, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase),
+        _ => items
+    };
 
     /** Name, type line, rarity, item index, definition hash and package tag, which a search word may match. */
     private static string SearchText(InvestmentItem item) =>

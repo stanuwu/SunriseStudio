@@ -8,8 +8,11 @@ namespace SunriseStudio.Formats;
 /** Objective progress descriptions, read from the objective display table. */
 internal static class InvestmentObjectiveText
 {
-    /** A row holds the objective hash, then the description's u16 string bank at +24 (zero padding follows) and u32 string hash. */
-    private const int DescriptionBank = 24;
+    /**
+     * The description's string bank, a 16-bit index in the word just before the row's string hash. The row layout names only
+     * the objective hash and the string hash.
+     */
+    private static readonly int DescriptionBank = TagView.FieldOffset<C808059f0>(nameof(C808059f0.Unk1c)) - sizeof(uint);
 
     /**
      * Rows join objectives by index and must repeat the objective's hash. A missing or mismatched row gives no text.

@@ -13,16 +13,24 @@ internal sealed partial class LiveInvestmentSection
     private const float HeaderIcon = 72;
     // The shared item catalog view. A click chooses the item this subtab acts on and does not open it in Assets.
     private readonly ItemCatalogView itemList = new();
-    // The chosen item's definition hash, which history records as "item:<hash>".
+    // What an item's row key starts with, before its definition hash in hexadecimal.
+    private const string ItemRowPrefix = "item:";
+    // The chosen item's definition hash, which history records as its row key.
     private uint? chosenItem;
 
-    private string? ItemsRow => chosenItem is { } hash ? $"item:{hash:X8}" : null;
+    private string? ItemsRow => chosenItem is { } hash ? ItemRow(hash) : null;
+
+    /** The row key history, Open in Live and the Pursuits subtab use for an item: "item:<hash>". */
+    internal static string ItemRow(uint hash) => $"{ItemRowPrefix}{hash:X8}";
+
+    /** The definition hash an ItemRow key names, or null for any other key. */
+    private static uint? ParseItemRow(string row) => row.StartsWith(ItemRowPrefix, StringComparison.Ordinal)
+        && uint.TryParse(row.AsSpan(ItemRowPrefix.Length), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint hash)
+        ? hash : null;
 
     private void ShowItemsRow(string row)
     {
-        if (row.StartsWith("item:", StringComparison.Ordinal)
-            && uint.TryParse(row.AsSpan(5), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint hash))
-        { chosenItem = hash; itemList.Reset(); }
+        if (ParseItemRow(row) is { } hash) { chosenItem = hash; itemList.Reset(); }
     }
 
     /** The item catalog with what the character holds, and beside it the chosen item's held rows and actions. */

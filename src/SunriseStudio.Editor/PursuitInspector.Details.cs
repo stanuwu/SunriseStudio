@@ -120,7 +120,7 @@ internal sealed partial class PursuitInspector
     private static IReadOnlyList<(string Name, string Value, string Tip)> Saved(LiveHeldPursuit held) =>
     [
         ("Instance", $"0x{held.Instance:X16}", ""), ("Serial", held.MutationSerial.ToString(CultureInfo.InvariantCulture), ""),
-        ("Item flags", $"0x{held.ItemFlags:X8}" + (InvestmentTableViews.Tracked(held) ? Dot + "Tracked" : ""), "")
+        ("Item flags", $"0x{held.ItemFlags:X8}" + (held.Tracked ? Dot + "Tracked" : ""), "")
     ];
 
     /**

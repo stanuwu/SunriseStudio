@@ -18,6 +18,7 @@ public enum LiveInvestmentStatus : uint { None, Ok, Invalid, Refused }
 public enum LiveReceiptState : uint { Unknown, Queued, Deferred, Refused, Published, CommittedUnpublished }
 /** Why a non-terminal operation is waiting. */
 public enum LiveInvestmentWait : uint { None, PublicationPeer, AccountResync, Catalog }
+/** The saved row array a held row lives in: the account's profile, the character's instances or its stacks. */
 public enum LiveInventoryScope : byte { Profile, CharacterItem, CharacterStack }
 
 /** The game catalogs that finished loading. */
@@ -27,13 +28,16 @@ public enum LiveInvestmentReadiness : uint
     None = 0, Items = 1, ItemDetails = 2, Buckets = 4, Progressions = 8, SeasonPass = 16, Rewards = 32, Objectives = 64,
     Pursuits = 128
 }
+/** What the game says of one pass row: whether it exists, is claimed or acquired, and how its rank and condition stand. */
 [Flags]
 public enum LiveSeasonPassRowFlags : ushort
 {
     None = 0, Available = 1, Claimed = 2, Acquired = 4, Automatic = 8, RankMet = 16, ConditionKnown = 32, ConditionMet = 64
 }
+/** What the game says of one held pursuit. ObjectivesKnown is clear when it cannot read the pursuit's contract. */
 [Flags]
 public enum LivePursuitFlags : byte { None = 0, Bounty = 1, ObjectivesKnown = 2, ObjectivesComplete = 4 }
+/** What the game says of one objective. Skipped is an optional objective whose saved row it did not read. */
 [Flags]
 public enum LivePursuitObjectiveFlags : byte { None = 0, Known = 1, Complete = 2, Skipped = 4 }
 /** The kind of saved row a source reads. Zero is never valid, so unused source slots stay zero. */
@@ -52,6 +56,7 @@ public readonly record struct LiveInvestmentContext(ulong AccountSoid, ulong Cha
 public sealed record LiveInvestmentReply(LiveInvestmentStatus Status, string Reason, LiveInvestmentOpcode Opcode,
     ulong OperationId, LiveInvestmentContext Context, ulong GameStarted, byte[] Payload);
 
+/** One character of the live account. At most one is selected. */
 public sealed record LiveInvestmentCharacter(ulong Soid, byte CharacterClass, bool Selected);
 
 /**
@@ -65,11 +70,14 @@ public sealed record LiveInvestmentHello(LiveInvestmentContext Context, LiveInve
 public sealed record LiveBucket(byte BucketId, ushort SlotCount, sbyte EquipmentSlot);
 /** BucketId is NoBucket when the definition names no installed bucket. */
 public sealed record LiveProfileRow(ulong Instance, uint DefinitionHash, int Quantity, int MutationSerial, byte BucketId);
+/** One instance the selected character holds. EquipmentSlot is Unequipped for one that is not worn. */
 public sealed record LiveCharacterItem(ulong Instance, uint DefinitionHash, int Quantity, int MutationSerial,
     byte BucketId, byte EquipmentSlot)
 {
+    /** True when the instance fills an equipment slot. */
     public bool Equipped => EquipmentSlot != LiveInvestmentProtocol.Unequipped;
 }
+/** One stack the selected character holds. A stack has no instance of its own. */
 public sealed record LiveCharacterStack(uint DefinitionHash, int Quantity, int MutationSerial, byte BucketId);
 /** The selected character and the profile, read under one game lock. */
 public sealed record LiveInventorySnapshot(LiveInvestmentContext Context, IReadOnlyList<LiveBucket> Buckets,
@@ -77,12 +85,23 @@ public sealed record LiveInventorySnapshot(LiveInvestmentContext Context, IReadO
 
 /** Index is the game's claim index. An unavailable placeholder row has item hash zero. */
 public sealed record LiveSeasonPassRow(ushort Index, uint ItemHash, byte RequiredRank, LiveSeasonPassRowFlags Flags);
+/** The account's seasonal XP, the rank it gives and every row of the game's pass. */
 public sealed record LiveSeasonPassSnapshot(LiveInvestmentContext Context, int Experience, ushort Rank,
     IReadOnlyList<LiveSeasonPassRow> Rows);
 
+/** One objective as the game evaluated it. A flag objective's Value is 0 or 1. */
 public sealed record LivePursuitObjective(uint ObjectiveHash, int Value, int Target, LivePursuitObjectiveFlags Flags);
+/** One held pursuit with its saved item flags and its objectives in the order of its installed contract. */
 public sealed record LiveHeldPursuit(ulong Instance, uint ItemHash, int MutationSerial, uint ItemFlags, LivePursuitFlags Flags,
-    IReadOnlyList<LivePursuitObjective> Objectives);
+    IReadOnlyList<LivePursuitObjective> Objectives)
+{
+    /** The saved item flag of a tracked item (Sunrise state/account/inventory/item_state.h kTrackedItemFlag). */
+    private const uint TrackedItemFlag = 0x2;
+
+    /** True when the player tracks this pursuit. */
+    public bool Tracked => (ItemFlags & TrackedItemFlag) != 0;
+}
+/** The selected character's held pursuits. */
 public sealed record LivePursuitSnapshot(LiveInvestmentContext Context, IReadOnlyList<LiveHeldPursuit> Held);
 
 /** One saved flag or value row. Index is the row inside its bank, bound from the installed slot tables. */
@@ -99,6 +118,7 @@ public sealed record LiveUnlockSnapshot(LiveInvestmentContext Context, IReadOnly
 public sealed record LiveInvestmentReceipt(ulong OperationId, LiveReceiptState State, string Reason, LiveInvestmentWait Wait,
     LiveInvestmentContext Context)
 {
+    /** True once the game has finished with the mutation, so the receipt no longer changes. */
     public bool Terminal => State is LiveReceiptState.Refused or LiveReceiptState.Published or LiveReceiptState.CommittedUnpublished;
 }
 
@@ -124,72 +144,120 @@ public sealed record LiveInvestmentOperation(ulong Id, LiveInvestmentContext Exp
  */
 public static class LiveInvestmentProtocol
 {
+    /** The mapping's magic word, "SSIV" in memory, and the layout version both sides must share. */
     public const uint Magic = 0x56495353, Version = 3;
+    /** Sizes of the control block, the request block, the response header and the reason label inside it. */
     public const int ControlBytes = 48, RequestBlockBytes = 80, ResponseHeaderBytes = 112, ReasonBytes = 64;
+    /** The room for a request's payload and for an answer's, which the largest snapshot fills. */
     public const int RequestPayloadBytes = 40, ResponsePayloadBytes = PursuitBytes;
+    /** Where the request block, the response block and the response payload start. */
     public const int RequestBlockOffset = 48, ResponseBlockOffset = 128, ResponsePayloadOffset = 240;
+    /** The whole mapping's size. */
     public const int MappingBytes = ResponsePayloadOffset + ResponsePayloadBytes;
     // Mirror investment_wire::kConnectIntervalMs and kHeartbeatTimeoutMs.
     public const int ConnectIntervalMilliseconds = 1000, HeartbeatTimeoutMilliseconds = 3000;
 
+    /** Control block fields Studio writes: magic, version, mapping size, its process id and its heartbeat. */
     public const int MagicOffset = 0, VersionOffset = 4, BytesOffset = 8, EditorPidOffset = 12, HeartbeatOffset = 16;
+    /** Control block fields the game writes, then the request id Studio writes and the response id the game answers with. */
     public const int GameVersionOffset = 24, GamePidOffset = 28, GameStartedOffset = 32, RequestOffset = 40, ResponseOffset = 44;
+    /** Request block fields: opcode, payload size, operation id and the expected context. */
     public const int OpcodeOffset = 48, RequestPayloadBytesOffset = 52, OperationOffset = 56, ExpectedOffset = 64;
+    /** Where a request's payload starts. */
     public const int RequestPayloadOffset = 88;
+    /** Response header fields: status, a reserved word, the operation id and the opcode answered. */
     public const int StatusOffset = 128, ResponseReservedOffset = 132, ResponseOperationOffset = 136, ResponseOpcodeOffset = 144;
+    /** Response header fields: payload size, the context the answer is bound to and the reason label. */
     public const int ResponsePayloadBytesOffset = 148, ContextOffset = 152, ReasonOffset = 176;
 
+    /** Request payload sizes of the grant, quantity, XP and pass row mutations. */
     public const int GrantItemBytes = 8, SetQuantityBytes = 32, SetSeasonalExperienceBytes = 8, SeasonPassRowBytes = 8;
+    /** GrantItemRequest fields. */
     public const int GrantHashOffset = 0, GrantQuantityOffset = 4;
+    /** SetQuantityRequest fields that name the row. */
     public const int SetScopeOffset = 0, SetInstanceOffset = 8, SetHashOffset = 16;
+    /** SetQuantityRequest fields the game compares with the row, then the new quantity. */
     public const int SetExpectedSerialOffset = 20, SetExpectedQuantityOffset = 24, SetQuantityOffset = 28;
+    /** SetSeasonalExperienceRequest fields. */
     public const int ExperienceExpectedOffset = 0, ExperienceReplacementOffset = 4;
+    /** Fields of a pass row claim or claim reset. */
     public const int PassRowIndexOffset = 0, PassHashOffset = 4;
 
+    /** Answer payload sizes of Hello, the three snapshots and a receipt. */
     public const int HelloBytes = 56, InventoryBytes = 31584, SeasonPassBytes = 2056, PursuitBytes = 45296, ReceiptBytes = 8;
+    /** Rows the fixed arrays of Hello and the inventory snapshot hold. */
     public const int CharacterCapacity = 3, BucketCapacity = 255, ProfileRowCapacity = 701, CharacterStackCapacity = 333;
     /** The native character array's 350 rows: 333 unequipped rows, which include held pursuits, and 17 equipment slots. */
     public const int UnequippedItemCapacity = 333, EquipmentSlotCount = 17;
+    /** Instances one character holds, worn or not. */
     public const int CharacterItemCapacity = UnequippedItemCapacity + EquipmentSlotCount;
+    /** Rows the pass snapshot and the pursuit snapshot hold, and the objectives of one held pursuit. */
     public const int SeasonPassRowCapacity = 256, HeldPursuitCapacity = UnequippedItemCapacity, PursuitObjectiveCapacity = 7;
+    /** The bucket id of a row whose definition names no installed bucket, and the equipment slot of an instance not worn. */
     public const byte NoBucket = 0xFF, Unequipped = 0xFF;
+    /** The equipment slot of a bucket that equips nothing. */
     public const sbyte NoEquipmentSlot = -1;
 
+    /** Hello fields before its character array. */
     public const int HelloReadinessOffset = 0, HelloCharacterCountOffset = 4, HelloPeerOffset = 5, HelloReservedOffset = 6;
+    /** Where Hello's characters start and the size of one. */
     public const int HelloCharactersOffset = 8, CharacterBytes = 16;
+    /** Fields of one Hello character. */
     public const int CharacterSoidOffset = 0, CharacterClassOffset = 8, CharacterSelectedOffset = 9, CharacterReservedOffset = 10;
 
+    /** The inventory snapshot's row counts. */
     public const int ProfileCountOffset = 0, ItemCountOffset = 2, StackCountOffset = 4, BucketCountOffset = 6;
+    /** Where the inventory snapshot's arrays start, and its reserved tail. */
     public const int ProfileOffset = 8, ItemsOffset = 16832, StacksOffset = 25232,
         BucketsOffset = 30560, InventoryTailOffset = 31580;
+    /** Sizes of one profile row, character item, character stack and bucket. */
     public const int ProfileRowBytes = 24, ItemBytes = 24, StackBytes = 16, BucketBytes = 4;
+    /** Fields a profile row and a character item share. */
     public const int RowInstanceOffset = 0, RowHashOffset = 8, RowQuantityOffset = 12, RowSerialOffset = 16, RowBucketOffset = 20;
+    /** What follows the shared fields: a profile row's padding, and a character item's slot and padding. */
     public const int ProfileReservedOffset = 21, ItemEquipmentSlotOffset = 21, ItemReservedOffset = 22;
+    /** Fields of one character stack. */
     public const int StackHashOffset = 0, StackQuantityOffset = 4, StackSerialOffset = 8, StackBucketOffset = 12;
+    /** A character stack's padding. */
     public const int StackReservedOffset = 13;
+    /** Fields of one bucket. */
     public const int BucketIdOffset = 0, BucketEquipmentSlotOffset = 1, BucketSlotCountOffset = 2;
 
+    /** The pass snapshot's fields, where its rows start and the size of one. */
     public const int PassExperienceOffset = 0, PassRankOffset = 4, PassRowCountOffset = 6, PassRowsOffset = 8, PassRowBytes = 8;
+    /** Fields of one pass row. */
     public const int RowItemHashOffset = 0, RowRankOffset = 4, RowReservedOffset = 5, RowFlagsOffset = 6;
 
+    /** The pursuit snapshot's count and padding, where its held pursuits start, and the sizes of one and of one objective. */
     public const int HeldCountOffset = 0, PursuitReservedOffset = 2, HeldOffset = 8, HeldBytes = 136, ObjectiveBytes = 16;
+    /** Fields that name one held pursuit. */
     public const int HeldInstanceOffset = 0, HeldHashOffset = 8, HeldSerialOffset = 12, HeldItemFlagsOffset = 16;
+    /** A held pursuit's state, objective count and padding, and where its objectives start. */
     public const int HeldFlagsOffset = 20, HeldObjectiveCountOffset = 21, HeldReservedOffset = 22, HeldObjectivesOffset = 24;
+    /** Fields of one objective. */
     public const int ObjectiveHashOffset = 0, ObjectiveValueOffset = 4, ObjectiveTargetOffset = 8, ObjectiveFlagsOffset = 12;
+    /** An objective's padding. */
     public const int ObjectiveReservedOffset = 13;
 
+    /** A receipt's fields. */
     public const int ReceiptStateOffset = 0, ReceiptWaitOffset = 4;
 
     /** Sources one unlockValues request reads: a 4-byte header and nine 4-byte sources fill the request payload. */
-    public const int UnlockReadCapacity = 9, UnlockValuesRequestBytes = 40, UnlockValuesBytes = 72;
+    public const int UnlockReadCapacity = 9, UnlockValuesRequestBytes = RequestPayloadBytes, UnlockValuesBytes = 72;
+    /** The unlockValues request's count, where its sources start and the size of one. */
     public const int UnlockCountOffset = 0, UnlockSourcesOffset = 4, UnlockSourceBytes = 4;
+    /** Fields of one unlock source. */
     public const int UnlockKindOffset = 0, UnlockBankOffset = 1, UnlockIndexOffset = 2;
+    /** The size and fields of one unlock value. */
     public const int UnlockValueBytes = 8, UnlockStateOffset = 0, UnlockStateReservedOffset = 1, UnlockValueOffset = 4;
 
     /** SetPursuitObjectiveRequest and CompletePursuitObjectivesRequest share their first three fields. */
     public const int SetObjectiveBytes = 32, CompleteObjectivesBytes = 16;
+    /** The fields that name the held pursuit in both pursuit requests. */
     public const int PursuitInstanceOffset = 0, PursuitHashOffset = 8, PursuitSerialOffset = 12;
+    /** SetPursuitObjectiveRequest fields that name the objective and the value the game compares. */
     public const int ObjectiveRequestHashOffset = 16, ObjectiveOrdinalOffset = 20, ObjectiveExpectedOffset = 24;
+    /** The value SetPursuitObjectiveRequest writes. */
     public const int ObjectiveReplacementOffset = 28;
 
     private const uint ReadinessBits = 0xFF;
@@ -198,6 +266,7 @@ public static class LiveInvestmentProtocol
     /** Unlock read states: invalid when the bank cannot hold the row, known when the value is the saved one. */
     private const byte UnlockInvalid = 0, UnlockKnown = 1;
 
+    /** The name of the mapping Studio creates for one game process. */
     public static string MappingName(int processId) => $@"Local\SunriseStudio.Investment.{processId}";
     /** Mutations carry an operation id and a complete expected context. */
     public static bool IsMutation(LiveInvestmentOpcode opcode) =>
@@ -207,6 +276,7 @@ public static class LiveInvestmentProtocol
     public static bool IsReceiptRequest(LiveInvestmentOpcode opcode) =>
         opcode is LiveInvestmentOpcode.ReadReceipt or LiveInvestmentOpcode.AcknowledgeReceipt;
 
+    /** The payload size a request of this opcode carries. */
     public static int RequestBytes(LiveInvestmentOpcode opcode) => opcode switch
     {
         LiveInvestmentOpcode.GrantItem => GrantItemBytes,
@@ -219,6 +289,7 @@ public static class LiveInvestmentProtocol
         _ => 0
     };
 
+    /** The payload size an accepted answer to this opcode carries. */
     public static int ResponseBytes(LiveInvestmentOpcode opcode) => opcode switch
     {
         LiveInvestmentOpcode.Hello => HelloBytes,
@@ -253,6 +324,7 @@ public static class LiveInvestmentProtocol
         payload.CopyTo(block[(RequestPayloadOffset - RequestBlockOffset)..]);
     }
 
+    /** Encodes a grant of a positive quantity of one item. */
     public static byte[] GrantItem(uint itemHash, uint quantity)
     {
         if (itemHash == 0) throw new ArgumentOutOfRangeException(nameof(itemHash));
@@ -404,6 +476,7 @@ public static class LiveInvestmentProtocol
             response.Slice(ResponseHeaderBytes, (int)payloadBytes).ToArray());
     }
 
+    /** Decodes Hello and checks its selected character against the answer's context. */
     public static LiveInvestmentHello ReadHello(LiveInvestmentReply reply)
     {
         var bytes = Payload(reply, LiveInvestmentOpcode.Hello, HelloBytes);
@@ -428,6 +501,7 @@ public static class LiveInvestmentProtocol
         return new(reply.Context, (LiveInvestmentReadiness)readiness, reply.GameStarted, characters, peer != 0);
     }
 
+    /** Decodes the inventory snapshot's counted rows and checks every unused slot is zero. */
     public static LiveInventorySnapshot ReadInventory(LiveInvestmentReply reply)
     {
         var bytes = Payload(reply, LiveInvestmentOpcode.InventorySnapshot, InventoryBytes);
@@ -443,6 +517,7 @@ public static class LiveInvestmentProtocol
             Rows(bytes, StacksOffset, StackBytes, stacks, CharacterStackCapacity, "character stack", ReadStack));
     }
 
+    /** Decodes the pass snapshot. A row's index is its place in the array. */
     public static LiveSeasonPassSnapshot ReadSeasonPass(LiveInvestmentReply reply)
     {
         var bytes = Payload(reply, LiveInvestmentOpcode.SeasonPassSnapshot, SeasonPassBytes);
@@ -457,9 +532,10 @@ public static class LiveInvestmentProtocol
                     throw new InvalidDataException("A season pass row's item disagrees with its availability.");
                 return new LiveSeasonPassRow((ushort)index, hash, row[RowRankOffset], flags);
             });
-        return new(reply.Context, I32(bytes, PassExperienceOffset), U16(bytes, PassRankOffset), rows);
+        return new(reply.Context, Amount(I32(bytes, PassExperienceOffset), "seasonal XP"), U16(bytes, PassRankOffset), rows);
     }
 
+    /** Decodes the held pursuits and their objectives. */
     public static LivePursuitSnapshot ReadPursuits(LiveInvestmentReply reply)
     {
         var bytes = Payload(reply, LiveInvestmentOpcode.PursuitSnapshot, PursuitBytes);
@@ -538,7 +614,9 @@ public static class LiveInvestmentProtocol
         "not_ready" => "The game is still reading its installed data.",
         "selected_character" => "Select a character in the game first.",
         "account_state" => "The game could not use its saved account.",
-        "request_field" => "Studio sent a request the game could not read.",
+        "request_field" or "request_opcode" or "request_size" or "request_padding" or "request_operation" or "request_context" =>
+            "Studio sent a request the game could not read.",
+        "serial" => "The character's inventory cannot record another change.",
         "pursuits_unsupported" => "The game cannot read pursuit objectives from its installed data.",
         "rewards_unsupported" => "The game cannot read rewards from its installed data.",
         "publication_peer" => "Sign in to the game with this account first.",
@@ -586,16 +664,16 @@ public static class LiveInvestmentProtocol
     private static LiveBucket ReadBucket(ReadOnlySpan<byte> row, int index)
     {
         sbyte slot = (sbyte)row[BucketEquipmentSlotOffset];
-        if (row[BucketIdOffset] == NoBucket
-            || slot < NoEquipmentSlot) throw new InvalidDataException("An inventory bucket record is invalid.");
+        if (row[BucketIdOffset] == NoBucket || slot < NoEquipmentSlot || slot >= EquipmentSlotCount)
+            throw new InvalidDataException("An inventory bucket record is invalid.");
         return new(row[BucketIdOffset], U16(row, BucketSlotCountOffset), slot);
     }
 
     private static LiveProfileRow ReadProfileRow(ReadOnlySpan<byte> row, int index)
     {
         Zero(row[ProfileReservedOffset..], "profile row");
-        return new(U64(row, RowInstanceOffset), U32(row, RowHashOffset), I32(row, RowQuantityOffset),
-            I32(row, RowSerialOffset), row[RowBucketOffset]);
+        return new(U64(row, RowInstanceOffset), U32(row, RowHashOffset),
+            Amount(I32(row, RowQuantityOffset), "profile row quantity"), I32(row, RowSerialOffset), row[RowBucketOffset]);
     }
 
     private static LiveCharacterItem ReadItem(ReadOnlySpan<byte> row, int index)
@@ -604,14 +682,15 @@ public static class LiveInvestmentProtocol
         if (U64(row, RowInstanceOffset) == 0 || (slot >= EquipmentSlotCount && slot != Unequipped))
             throw new InvalidDataException("A character item record is invalid.");
         Zero(row[ItemReservedOffset..], "character item");
-        return new(U64(row, RowInstanceOffset), U32(row, RowHashOffset), I32(row, RowQuantityOffset),
-            I32(row, RowSerialOffset), row[RowBucketOffset], slot);
+        return new(U64(row, RowInstanceOffset), U32(row, RowHashOffset),
+            Amount(I32(row, RowQuantityOffset), "character item quantity"), I32(row, RowSerialOffset), row[RowBucketOffset], slot);
     }
 
     private static LiveCharacterStack ReadStack(ReadOnlySpan<byte> row, int index)
     {
         Zero(row[StackReservedOffset..], "character stack");
-        return new(U32(row, StackHashOffset), I32(row, StackQuantityOffset), I32(row, StackSerialOffset), row[StackBucketOffset]);
+        return new(U32(row, StackHashOffset), Amount(I32(row, StackQuantityOffset), "character stack quantity"),
+            I32(row, StackSerialOffset), row[StackBucketOffset]);
     }
 
     private static LiveHeldPursuit ReadHeldPursuit(ReadOnlySpan<byte> row, int index)
@@ -658,6 +737,10 @@ public static class LiveInvestmentProtocol
 
     private static uint Bits(uint value, uint defined, string what) =>
         (value & ~defined) == 0 ? value : throw new InvalidDataException($"The {what} has unknown bits.");
+
+    /** A quantity or an XP total, which the game never holds below zero. */
+    private static int Amount(int value, string what) =>
+        value >= 0 ? value : throw new InvalidDataException($"The {what} is negative.");
 
     private static void Zero(ReadOnlySpan<byte> bytes, string what)
     {

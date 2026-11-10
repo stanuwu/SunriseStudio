@@ -40,9 +40,6 @@ internal sealed class IconGrid
 
     private int scrollTo = -1;
 
-    /** The first cell of the top grid row the last draw showed. */
-    public int FirstVisible { get; private set; }
-
     /** Scrolls to the top on the next draw, for a list whose rows changed. */
     public void ResetScroll() => scrollTo = 0;
 
@@ -94,7 +91,6 @@ internal sealed class IconGrid
         ImGui.BeginChild(id, new(0, height), ImGuiChildFlags.None);
         var (size, columns, pitch, spacing) = Layout(ImGui.GetContentRegionAvail().X, scale);
         if (scrollTo >= 0) { ImGui.SetScrollY(scrollTo / columns * pitch); scrollTo = -1; }
-        FirstVisible = Math.Clamp((int)(ImGui.GetScrollY() / pitch) * columns, 0, Math.Max(0, count - 1));
         var top = ImGui.GetCursorPos();
         var draw = ImGui.GetWindowDrawList();
         var clipper = new ImGuiListClipperPtr(ImGuiNative.ImGuiListClipper_ImGuiListClipper());
@@ -246,7 +242,7 @@ internal sealed class IconGrid
     }
 }
 
-/** List rows with item icons, shared by the browser, the item catalog, Live's Inventory and the table pages so they look alike. */
+/** List rows and lines with item icons, shared by the item catalog, Live's Inventory and the season pass grid so they look alike. */
 internal static class IconList
 {
     /** One row's height at a UI scale. */

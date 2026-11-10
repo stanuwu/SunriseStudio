@@ -82,9 +82,9 @@ internal static class InvestmentItemBlocks
 }
 
 /**
- * What an objective's progress reads once Sunrise binds its program: a program Sunrise cannot bind, one value no mapping
- * table binds to a saved bank, one flag, one value, one class flag, several instructions, or one other instruction such as a
- * constant.
+ * What an objective's progress reads once Sunrise binds its program: a program Sunrise cannot bind, one flag or value no
+ * mapping table binds to a saved bank, one saved flag, one saved value, one class flag, several instructions, or one other
+ * instruction such as a constant.
  */
 public enum InvestmentProgressKind { Unreadable, External, Flag, Value, ClassFlag, Several, Other }
 /** Instruction is the program's only instruction, or default when the kind is Unreadable or Several. */
@@ -100,6 +100,8 @@ public sealed partial class InvestmentTables
     private readonly Dictionary<byte, int[]> itemsByBucket;
     private readonly InvestmentItemLinks[] links;
     private readonly string[] objectiveText;
+    // Each installed objective's progress source, by objective index.
+    private readonly InvestmentProgressSource[] progressSources;
     public InvestmentRoot? Root { get; }
     public InvestmentUnlocks Unlocks { get; }
     public IReadOnlyList<InvestmentProgression> Progressions { get; }
@@ -122,6 +124,7 @@ public sealed partial class InvestmentTables
         IReadOnlyList<InvestmentBucket> buckets, IReadOnlyList<string> bucketProblems, uint bucketClass, string[] objectiveText)
     {
         Root = root; Unlocks = unlocks; Progressions = progressions; Objectives = objectives; this.objectiveText = objectiveText;
+        progressSources = [.. objectives.Select(ReadProgressSource)];
         Buckets = buckets; BucketTableProblems = bucketProblems; BucketTableClass = bucketClass;
         foreach (var bucket in buckets) bucketsById.TryAdd(bucket.Id, bucket);
         itemsByBucket = items.GroupBy(item => item.Bucket).ToDictionary(group => group.Key, group => group
@@ -157,8 +160,10 @@ public sealed partial class InvestmentTables
     /** The item's wrapper pool, or -1 when the item has no readable wrapper. */
     public int WrapperPool(int item) => item >= 0 && item < links.Length
         && links[item].WrapperPool != ushort.MaxValue ? links[item].WrapperPool : -1;
+    /** The wrapper flag of a wrapper that opens as soon as it is acquired (Sunrise rewards/definition.h kOpenOnAcquisition). */
+    private const byte OpenOnAcquisition = 1;
     /** True when the item's wrapper opens as soon as it is acquired; false without a wrapper. */
-    public bool OpensOnAcquisition(int item) => WrapperPool(item) >= 0 && (links[item].WrapperFlags & 1) != 0;
+    public bool OpensOnAcquisition(int item) => WrapperPool(item) >= 0 && (links[item].WrapperFlags & OpenOnAcquisition) != 0;
 
     /**
      * The progress lane an objective fills: its one instruction reads an unbound value that the pursuit's instance values
@@ -174,41 +179,24 @@ public sealed partial class InvestmentTables
 
     /**
      * What an objective's progress reads once shared rows are inlined, as package_objective_build.cpp read_objective and
-     * package_reward_build.cpp RewardConditions::append_expression bind it. A missing, unreadable or empty shared row,
-     * nesting at InvestmentUnlocks.ServerNestingLimit, a cycle, an opcode Sunrise does not evaluate or a slot outside its
-     * table leaves the program Unreadable. The pursuit's instance values are not consulted, since Sunrise's item-progress
-     * rule does not read them either.
+     * package_reward_build.cpp RewardConditions::append_expression bind it. A program Sunrise refuses
+     * (InvestmentUnlocks.InlinedCount) is Unreadable. The pursuit's instance values are not consulted, since Sunrise's
+     * item-progress rule does not read them either. The installed objectives' sources are read once when the tables load.
      */
-    public InvestmentProgressSource ProgressSource(InvestmentObjective objective)
+    public InvestmentProgressSource ProgressSource(InvestmentObjective objective) =>
+        objective.Index >= 0 && objective.Index < progressSources.Length && ReferenceEquals(Objectives[objective.Index], objective)
+            ? progressSources[objective.Index] : ReadProgressSource(objective);
+
+    private InvestmentProgressSource ReadProgressSource(InvestmentObjective objective)
     {
-        int count = 0;
-        InvestmentUnlockInstruction only = default;
-        var visiting = new HashSet<uint>();
-        bool Append(InvestmentExpression expression, int depth)
-        {
-            if (depth >= InvestmentUnlocks.ServerNestingLimit || expression.Error.Length != 0) return false;
-            foreach (var instruction in expression.Instructions)
-            {
-                if (instruction.Opcode == InvestmentUnlocks.SharedOpcode)
-                {
-                    int before = count;
-                    // Sunrise has no cycle check of its own, so a cycle nests until the depth limit refuses it. Shared
-                    // returns an error for an operand outside the table, including one too large for an int.
-                    if (!visiting.Add(instruction.Operand) || !Append(Unlocks.Shared((int)instruction.Operand), depth + 1)
-                        || count == before) return false;
-                    visiting.Remove(instruction.Operand);
-                    continue;
-                }
-                if (!Binds(instruction)) return false;
-                if (count++ == 0) only = instruction;
-            }
-            return true;
-        }
-        if (!Append(objective.Source, 0) || count == 0) return new(InvestmentProgressKind.Unreadable, default);
+        int count = Unlocks.InlinedCount(objective.Source, out var only);
+        if (count == 0) return new(InvestmentProgressKind.Unreadable, default);
         if (count > 1) return new(InvestmentProgressKind.Several, default);
+        // A flag or value read that no saved bank holds is an external input, which pursuit_edit.cpp saved_row never writes.
         var kind = only.Opcode switch
         {
-            InvestmentUnlocks.FlagOpcode => Unlocks.ClassOf(only) >= 0 ? InvestmentProgressKind.ClassFlag : InvestmentProgressKind.Flag,
+            InvestmentUnlocks.FlagOpcode => Unlocks.ClassOf(only) >= 0 ? InvestmentProgressKind.ClassFlag
+                : Unlocks.BoundFlag(only.Operand) ? InvestmentProgressKind.Flag : InvestmentProgressKind.External,
             InvestmentUnlocks.ValueOpcode => ExternalRead(only) ? InvestmentProgressKind.External : InvestmentProgressKind.Value,
             _ => InvestmentProgressKind.Other
         };
@@ -221,14 +209,6 @@ public sealed partial class InvestmentTables
      */
     private bool ExternalRead(InvestmentUnlockInstruction read) => read.Opcode == InvestmentUnlocks.ValueOpcode
         && read.Operand < Unlocks.ValueSlots.Count && !Unlocks.BoundValue(read.Operand);
-
-    /** Sunrise binds a flag or value read only to a slot its table holds, and any other instruction only when it evaluates it. */
-    private bool Binds(InvestmentUnlockInstruction instruction) => instruction.Opcode switch
-    {
-        InvestmentUnlocks.FlagOpcode => instruction.Operand < Unlocks.FlagSlots.Count,
-        InvestmentUnlocks.ValueOpcode => instruction.Operand < Unlocks.ValueSlots.Count,
-        _ => InvestmentUnlocks.Evaluated(instruction.Opcode)
-    };
 
     /**
      * Reads the root, unlocks, progressions, objectives, objective text and buckets in that order. A section
@@ -249,8 +229,7 @@ public sealed partial class InvestmentTables
         T Section<T>(string section, T fallback, Func<T> read)
         {
             token.ThrowIfCancellationRequested();
-            try { return read(); }
-            catch (Exception error) when (InvestmentCatalog.Recoverable(error)) { diagnostics.Add($"{section}: {error.Message}"); return fallback; }
+            return InvestmentCatalog.ReadSection(diagnostics, section, fallback, read);
         }
         if (Section("Investment root", 0u, () => root.SlotTag(InvestmentRootSlots.Items)) != sources.Items)
             diagnostics.Add("The item index differs from the investment root's item table; reward item names may be wrong.");

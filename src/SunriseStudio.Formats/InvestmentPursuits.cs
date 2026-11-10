@@ -38,20 +38,24 @@ public static class InvestmentPursuits
     public const byte PursuitBucket = InvestmentItemKinds.PursuitBucket;
     /** The item's lifetime expression. */
     internal static readonly int LifetimeField = TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.H34f70b23");
+    /** Bytes between the objective array and the require-all byte (item_definition_reader.cpp kRequireAllObjectivesOffset). */
+    private const int RequireAllGap = 7;
     /**
-     * The objective block's require-all and require-non-optional bytes, the eighth and ninth after its objective array. A value
-     * above 1 in either leaves the contract unreadable (item_definition_reader.cpp read_pursuit_metadata).
+     * The objective block's require-all byte and the require-non-optional byte after it. A value above 1 in either leaves
+     * the contract unreadable (item_definition_reader.cpp read_pursuit_metadata).
      */
     private static readonly int RequireAllControl = TagView.FieldOffset<ItemObjectiveBlock>(nameof(ItemObjectiveBlock.Objectives))
-        + Unsafe.SizeOf<TagArray<ObjectiveReferenceArray>>() + 7, RequireNonOptionalControl = RequireAllControl + 1;
+        + Unsafe.SizeOf<TagArray<ObjectiveReferenceArray>>() + RequireAllGap, RequireNonOptionalControl = RequireAllControl + 1;
+    /** The allow-negative and allow-change-when-completed bytes' places in the word that starts with the optional byte. */
+    private const int AllowNegativeByte = 2, AllowChangeByte = 3;
     /**
-     * Objective row control bytes: optional, allow negative, allow change when completed, counts down, ending just before the
-     * completion value. Sunrise reads only the optional and counts-down bytes, and a value above 1 in either refuses the whole
-     * objective table (package_objective_build.cpp read_completion_controls).
+     * Objective row control bytes: the optional word and the counts-down word, ending just before the completion value.
+     * Sunrise reads only the optional and counts-down bytes, and a value above 1 in either refuses the whole objective table
+     * (package_objective_build.cpp read_completion_controls).
      */
     private static readonly int CountsDownControl = TagView.FieldOffset<ObjectiveRow>(nameof(ObjectiveRow.CompletionValue)) - sizeof(uint),
-        OptionalControl = CountsDownControl - sizeof(uint), AllowNegativeControl = OptionalControl + 2,
-            AllowChangeControl = OptionalControl + 3;
+        OptionalControl = CountsDownControl - sizeof(uint), AllowNegativeControl = OptionalControl + AllowNegativeByte,
+            AllowChangeControl = OptionalControl + AllowChangeByte;
     /** Minimum quest owner and quest-set block sizes, as quest_initialization_reader.cpp derives them from the same layouts. */
     internal static readonly int MinimumQuestOwner = Unsafe.SizeOf<ItemDefinition>(),
         MinimumQuestSet = Math.Min(Math.Min(Unsafe.SizeOf<ItemObjectiveBlock>(), Unsafe.SizeOf<QuestSetBlock>()),

@@ -12,8 +12,8 @@ public sealed class QuestPage : IStudioPage, IStudioRowPage, IFramePreparedPage,
     public const string PageId = "sunrise.quest";
     private const string Dot = InvestmentTableViews.Dot;
     private const string StepKey = QuestChainView.StepKey;
-    /** Icon side of the page header, at UI scale 1. */
-    private const float HeaderIconSide = 48;
+    /** Icon side of the Quest and Pursuit page headers, at UI scale 1. */
+    internal const float HeaderIconSide = 48;
     /** The inspector's share of the page width, its width bounds at UI scale 1, and the largest share of the page it may take. */
     private const float InspectorShare = .34f, InspectorMinimum = 260, InspectorMaximum = 460, InspectorMostShare = .5f;
     /** Below this page width at UI scale 1, the inspector moves under the canvas, which then keeps this share of the height. */
@@ -60,13 +60,7 @@ public sealed class QuestPage : IStudioPage, IStudioRowPage, IFramePreparedPage,
         var workspace = context.Workspace;
         icons = InvestmentIconCache.Of(context);
         if (!loader.Ready(workspace, out var catalog, out var tables)) return;
-        workspace.RequestInvestmentDetail();
-        if (!workspace.InvestmentDetailCurrent)
-        {
-            if (workspace.IsBusy) { ImGui.TextDisabled("Reading item"); return; }
-            InvestmentTablesLoader.Failed(workspace, workspace.RetryInvestmentDetail);
-            return;
-        }
+        if (!InvestmentTablesLoader.DetailReady(workspace)) return;
         if (workspace.SelectedInvestmentItem is not { } detail || workspace.Catalog is not { } packages) { ImGui.TextDisabled("Not an item"); return; }
         var item = detail.Item;
         // A step names its owner. An item that names none, such as an owner without objectives, is its own owner.

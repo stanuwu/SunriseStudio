@@ -187,7 +187,7 @@ internal sealed partial class PursuitInspector
     {
         var live = step.Session;
         if (LiveGate.Missing(live, live.Pursuits, LiveNeed.Pursuits) is not null || step.Held is not { } held) return;
-        string status = InvestmentTableViews.PursuitStatus(held);
+        string status = PursuitProgress.Status(held);
         string tip = held.Flags.HasFlag(LivePursuitFlags.Bounty) ? StudioUi.MayBeInaccurate : "";
         if (step.Copies.Count == 1) { StudioUi.Facts("pursuit-live", [("In game", "Held" + Dot + status, tip)]); return; }
         StudioUi.Facts("pursuit-live",
@@ -195,7 +195,7 @@ internal sealed partial class PursuitInspector
         ImGui.SetNextItemWidth(-1);
         if (!ImGui.BeginCombo("##held-copy", $"0x{held.Instance:X16}{Dot}{status}")) return;
         foreach (var copy in step.Copies)
-            if (ImGui.Selectable($"0x{copy.Instance:X16}{Dot}{InvestmentTableViews.PursuitStatus(copy)}", copy == held))
+            if (ImGui.Selectable($"0x{copy.Instance:X16}{Dot}{PursuitProgress.Status(copy)}", copy == held))
             {
                 chosenCopy = copy.Instance;
                 live.Selected = live.Held?.All.FirstOrDefault(row => row.Instance == copy.Instance);

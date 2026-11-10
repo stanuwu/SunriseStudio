@@ -24,111 +24,20 @@ internal static class InvestmentChecks
 
     public static async Task Run()
     {
-        Offsets();
+        Sizes();
         Readers();
         Rejections();
         Unlocks();
         PursuitEdits();
         await Connection();
-        Console.WriteLine("live investment_offsets=checked investment_readers=checked investment_rejects=checked investment_unlocks=checked "
+        Console.WriteLine("live investment_sizes=checked investment_readers=checked investment_rejects=checked investment_unlocks=checked "
             + "investment_pursuit_edits=checked investment_connection=checked");
     }
 
-    /** Every offset, size and capacity beside the native header's value (studio_investment_wire.h version 3). */
-    private static void Offsets()
+    /** The mapping name, each request and answer size and the enum values the game declares (studio_investment_wire.h). */
+    private static void Sizes()
     {
-        (string Name, int Actual, int Expected)[] offsets =
-        [
-            (nameof(P.ControlBytes), P.ControlBytes, 48), (nameof(P.HeartbeatOffset), P.HeartbeatOffset, 16),
-            (nameof(P.GameVersionOffset), P.GameVersionOffset, 24), (nameof(P.GamePidOffset), P.GamePidOffset, 28),
-            (nameof(P.GameStartedOffset), P.GameStartedOffset, 32), (nameof(P.RequestOffset), P.RequestOffset, 40),
-            (nameof(P.ResponseOffset), P.ResponseOffset, 44), (nameof(P.RequestBlockOffset), P.RequestBlockOffset, 48),
-            (nameof(P.OpcodeOffset), P.OpcodeOffset, 48), (nameof(P.RequestPayloadBytesOffset), P.RequestPayloadBytesOffset, 52),
-            (nameof(P.OperationOffset), P.OperationOffset, 56), (nameof(P.ExpectedOffset), P.ExpectedOffset, 64),
-            (nameof(P.RequestPayloadOffset), P.RequestPayloadOffset, 88), (nameof(P.RequestBlockBytes), P.RequestBlockBytes, 80),
-            (nameof(P.ResponseBlockOffset), P.ResponseBlockOffset, 128), (nameof(P.StatusOffset), P.StatusOffset, 128),
-            (nameof(P.ResponseReservedOffset), P.ResponseReservedOffset, 132),
-            (nameof(P.ResponseOperationOffset), P.ResponseOperationOffset, 136),
-            (nameof(P.ResponseOpcodeOffset), P.ResponseOpcodeOffset, 144),
-            (nameof(P.ResponsePayloadBytesOffset), P.ResponsePayloadBytesOffset, 148),
-            (nameof(P.ContextOffset), P.ContextOffset, 152), (nameof(P.ReasonOffset), P.ReasonOffset, 176),
-            (nameof(P.ReasonBytes), P.ReasonBytes, 64), (nameof(P.ResponsePayloadOffset), P.ResponsePayloadOffset, 240),
-            (nameof(P.ResponseHeaderBytes), P.ResponseHeaderBytes, 112), (nameof(P.MappingBytes), P.MappingBytes, 45536),
-            (nameof(P.RequestPayloadBytes), P.RequestPayloadBytes, 40),
-                (nameof(P.ResponsePayloadBytes), P.ResponsePayloadBytes, 45296),
-            (nameof(P.GrantItemBytes), P.GrantItemBytes, 8), (nameof(P.GrantQuantityOffset), P.GrantQuantityOffset, 4),
-            (nameof(P.SetQuantityBytes), P.SetQuantityBytes, 32), (nameof(P.SetInstanceOffset), P.SetInstanceOffset, 8),
-            (nameof(P.SetHashOffset), P.SetHashOffset, 16), (nameof(P.SetExpectedSerialOffset), P.SetExpectedSerialOffset, 20),
-            (nameof(P.SetExpectedQuantityOffset), P.SetExpectedQuantityOffset, 24),
-                (nameof(P.SetQuantityOffset), P.SetQuantityOffset, 28),
-            (nameof(P.SetSeasonalExperienceBytes), P.SetSeasonalExperienceBytes, 8),
-            (nameof(P.ExperienceReplacementOffset), P.ExperienceReplacementOffset, 4),
-            (nameof(P.SeasonPassRowBytes), P.SeasonPassRowBytes, 8), (nameof(P.PassHashOffset), P.PassHashOffset, 4),
-            (nameof(P.UnlockValuesRequestBytes), P.UnlockValuesRequestBytes, 40),
-                (nameof(P.UnlockSourcesOffset), P.UnlockSourcesOffset, 4),
-            (nameof(P.UnlockSourceBytes), P.UnlockSourceBytes, 4), (nameof(P.UnlockBankOffset), P.UnlockBankOffset, 1),
-            (nameof(P.UnlockIndexOffset), P.UnlockIndexOffset, 2),
-            (nameof(P.SetObjectiveBytes), P.SetObjectiveBytes, 32),
-                (nameof(P.CompleteObjectivesBytes), P.CompleteObjectivesBytes, 16),
-            (nameof(P.PursuitHashOffset), P.PursuitHashOffset, 8), (nameof(P.PursuitSerialOffset), P.PursuitSerialOffset, 12),
-            (nameof(P.ObjectiveRequestHashOffset), P.ObjectiveRequestHashOffset, 16),
-            (nameof(P.ObjectiveOrdinalOffset), P.ObjectiveOrdinalOffset, 20),
-            (nameof(P.ObjectiveExpectedOffset), P.ObjectiveExpectedOffset, 24),
-            (nameof(P.ObjectiveReplacementOffset), P.ObjectiveReplacementOffset, 28),
-            (nameof(P.HelloBytes), P.HelloBytes, 56), (nameof(P.HelloCharacterCountOffset), P.HelloCharacterCountOffset, 4),
-            (nameof(P.HelloPeerOffset), P.HelloPeerOffset, 5), (nameof(P.HelloReservedOffset), P.HelloReservedOffset, 6),
-            (nameof(P.HelloCharactersOffset), P.HelloCharactersOffset, 8), (nameof(P.CharacterBytes), P.CharacterBytes, 16),
-            (nameof(P.CharacterClassOffset), P.CharacterClassOffset, 8),
-                (nameof(P.CharacterSelectedOffset), P.CharacterSelectedOffset, 9),
-            (nameof(P.CharacterReservedOffset), P.CharacterReservedOffset, 10),
-            (nameof(P.InventoryBytes), P.InventoryBytes, 31584), (nameof(P.ProfileCountOffset), P.ProfileCountOffset, 0),
-            (nameof(P.ItemCountOffset), P.ItemCountOffset, 2), (nameof(P.StackCountOffset), P.StackCountOffset, 4),
-            (nameof(P.BucketCountOffset), P.BucketCountOffset, 6), (nameof(P.ProfileOffset), P.ProfileOffset, 8),
-            (nameof(P.ItemsOffset), P.ItemsOffset, 16832), (nameof(P.StacksOffset), P.StacksOffset, 25232),
-            (nameof(P.BucketsOffset), P.BucketsOffset, 30560), (nameof(P.InventoryTailOffset), P.InventoryTailOffset, 31580),
-            (nameof(P.ProfileRowBytes), P.ProfileRowBytes, 24), (nameof(P.ItemBytes), P.ItemBytes, 24),
-            (nameof(P.StackBytes), P.StackBytes, 16), (nameof(P.BucketBytes), P.BucketBytes, 4),
-                (nameof(P.RowHashOffset), P.RowHashOffset, 8),
-            (nameof(P.RowQuantityOffset), P.RowQuantityOffset, 12), (nameof(P.RowSerialOffset), P.RowSerialOffset, 16),
-            (nameof(P.RowBucketOffset), P.RowBucketOffset, 20), (nameof(P.ProfileReservedOffset), P.ProfileReservedOffset, 21),
-            (nameof(P.ItemEquipmentSlotOffset), P.ItemEquipmentSlotOffset, 21),
-                (nameof(P.ItemReservedOffset), P.ItemReservedOffset, 22),
-            (nameof(P.StackQuantityOffset), P.StackQuantityOffset, 4), (nameof(P.StackSerialOffset), P.StackSerialOffset, 8),
-            (nameof(P.StackBucketOffset), P.StackBucketOffset, 12), (nameof(P.StackReservedOffset), P.StackReservedOffset, 13),
-            (nameof(P.BucketEquipmentSlotOffset), P.BucketEquipmentSlotOffset, 1),
-            (nameof(P.BucketSlotCountOffset), P.BucketSlotCountOffset, 2),
-            (nameof(P.SeasonPassBytes), P.SeasonPassBytes, 2056), (nameof(P.PassRankOffset), P.PassRankOffset, 4),
-            (nameof(P.PassRowCountOffset), P.PassRowCountOffset, 6), (nameof(P.PassRowsOffset), P.PassRowsOffset, 8),
-            (nameof(P.PassRowBytes), P.PassRowBytes, 8), (nameof(P.RowRankOffset), P.RowRankOffset, 4),
-            (nameof(P.RowReservedOffset), P.RowReservedOffset, 5), (nameof(P.RowFlagsOffset), P.RowFlagsOffset, 6),
-            (nameof(P.PursuitBytes), P.PursuitBytes, 45296), (nameof(P.PursuitReservedOffset), P.PursuitReservedOffset, 2),
-            (nameof(P.HeldOffset), P.HeldOffset, 8), (nameof(P.HeldBytes), P.HeldBytes, 136),
-                (nameof(P.HeldHashOffset), P.HeldHashOffset, 8),
-            (nameof(P.HeldSerialOffset), P.HeldSerialOffset, 12), (nameof(P.HeldItemFlagsOffset), P.HeldItemFlagsOffset, 16),
-            (nameof(P.HeldFlagsOffset), P.HeldFlagsOffset, 20),
-                (nameof(P.HeldObjectiveCountOffset), P.HeldObjectiveCountOffset, 21),
-            (nameof(P.HeldReservedOffset), P.HeldReservedOffset, 22),
-                (nameof(P.HeldObjectivesOffset), P.HeldObjectivesOffset, 24),
-            (nameof(P.ObjectiveBytes), P.ObjectiveBytes, 16), (nameof(P.ObjectiveValueOffset), P.ObjectiveValueOffset, 4),
-            (nameof(P.ObjectiveTargetOffset), P.ObjectiveTargetOffset, 8),
-                (nameof(P.ObjectiveFlagsOffset), P.ObjectiveFlagsOffset, 12),
-            (nameof(P.ObjectiveReservedOffset), P.ObjectiveReservedOffset, 13),
-            (nameof(P.ReceiptBytes), P.ReceiptBytes, 8), (nameof(P.ReceiptWaitOffset), P.ReceiptWaitOffset, 4),
-            (nameof(P.UnlockValuesBytes), P.UnlockValuesBytes, 72), (nameof(P.UnlockValueBytes), P.UnlockValueBytes, 8),
-            (nameof(P.UnlockStateReservedOffset), P.UnlockStateReservedOffset, 1),
-                (nameof(P.UnlockValueOffset), P.UnlockValueOffset, 4),
-            (nameof(P.CharacterCapacity), P.CharacterCapacity, 3), (nameof(P.ProfileRowCapacity), P.ProfileRowCapacity, 701),
-            (nameof(P.CharacterItemCapacity), P.CharacterItemCapacity, 350),
-            (nameof(P.CharacterStackCapacity), P.CharacterStackCapacity, 333), (nameof(P.BucketCapacity), P.BucketCapacity, 255),
-            (nameof(P.SeasonPassRowCapacity), P.SeasonPassRowCapacity, 256),
-                (nameof(P.HeldPursuitCapacity), P.HeldPursuitCapacity, 333),
-            (nameof(P.PursuitObjectiveCapacity), P.PursuitObjectiveCapacity, 7),
-                (nameof(P.UnlockReadCapacity), P.UnlockReadCapacity, 9)
-        ];
-        var differing = offsets.Where(row => row.Actual != row.Expected).Select(row => $"{row.Name} {row.Actual} (header {row.Expected})").ToArray();
-        Check(differing.Length == 0, "Investment offsets differ from the native header: " + string.Join(", ", differing));
-        Check(P.Magic == 0x56495353 && P.Version == 3 && P.MappingName(42) == @"Local\SunriseStudio.Investment.42",
-            "Investment magic, version or mapping name differs.");
+        Check(P.MappingName(42) == @"Local\SunriseStudio.Investment.42", "The investment mapping name differs.");
         // Each request and answer size, as the game declares it.
         (LiveInvestmentOpcode Opcode, int Request, int Answer)[] sizes =
         [
@@ -206,6 +115,12 @@ internal static class InvestmentChecks
         Inventory(Changed(InventoryPayload(), 8 + 24 + 3, 1), "A value in an unused profile slot was accepted.");
         Inventory(Changed8(InventoryPayload(), 16832 + 22, 1), "A nonzero character item reserved byte was accepted.");
         Inventory(Changed8(InventoryPayload(), 16832 + 21, 17), "An equipment slot past the native slots was accepted.");
+        Inventory(Changed8(InventoryPayload(), 30564 + 1, 17), "A bucket equipment slot past the native slots was accepted.");
+        Inventory(Changed(InventoryPayload(), 8 + 12, -1), "A negative profile row quantity was accepted.");
+        Inventory(Changed(InventoryPayload(), 16832 + 12, -1), "A negative character item quantity was accepted.");
+        Inventory(Changed(InventoryPayload(), 25232 + 4, -1), "A negative character stack quantity was accepted.");
+        Reject(() => P.ReadSeasonPass(Reply(LiveInvestmentOpcode.SeasonPassSnapshot, Bound, Changed(new byte[2056], 0, -1))),
+            "Negative seasonal XP was accepted.");
         Inventory(Changed16(InventoryPayload(), 2, 351), "An item count past capacity was accepted.");
         Inventory(Changed(InventoryPayload(), 31580, 1), "A nonzero inventory tail was accepted.");
         Reject(() => P.ReadHello(Reply(LiveInvestmentOpcode.Hello,

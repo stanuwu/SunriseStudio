@@ -11,8 +11,22 @@ public sealed record InvestmentProgression(int Index, int Offset, uint Hash, byt
     IReadOnlyList<InvestmentProgressionStep> Steps,
     IReadOnlyList<InvestmentSeasonPassRow> Rewards, ReadOnlyMemory<byte> Raw, string Error = "")
 {
-    /** Experience needed to reach rank r: the sum of the first r step costs. The first step costs 0. */
-    public long Threshold(int rank) => Steps.Take(Math.Max(0, rank)).Sum(step => (long)step.Cost);
+    // The experience each rank needs, from rank 0 to the last step. Summed once, because pages ask for thresholds every frame.
+    private readonly long[] thresholds = Thresholds(Steps);
+
+    /**
+     * Experience needed to reach a rank: the sum of that many step costs from the first, which costs 0. A rank past the last
+     * step needs what the last step does.
+     */
+    public long Threshold(int rank) => thresholds[Math.Clamp(rank, 0, thresholds.Length - 1)];
+
+    private static long[] Thresholds(IReadOnlyList<InvestmentProgressionStep> steps)
+    {
+        var sums = new long[steps.Count + 1];
+        for (int rank = 1; rank < sums.Length; rank++) sums[rank] = sums[rank - 1] + steps[rank - 1].Cost;
+        return sums;
+    }
+
     /** Scope 0 is the account and 1 the character. Other scopes are not replicated (package_progression_build.cpp). */
     public string ScopeLabel => Scope switch { 0 => "Account", 1 => "Character", _ => "Not replicated" };
 }
@@ -32,9 +46,7 @@ public static class InvestmentSeasonPass
      */
     internal static readonly int RewardItem = TagView.FieldOffset<ProgressionReward>(nameof(ProgressionReward.ItemIndex)),
         RewardClaim = TagView.FieldOffset<ProgressionReward>(nameof(ProgressionReward.ClaimFlagSlot));
-    /** A claim flag must map to the account flag bank, kind 1 in the flag slot table. Kind 2 is the profile bank. */
-    private const ushort AccountFlagKind = 1, ProfileFlagKind = 2;
-    private const uint OrOpcode = 3;
+    /** The instructions LooksLikeOwnership reads: two flag reads and the or that joins them. */
     private const int OwnershipLength = 3;
 
     internal static IReadOnlyList<InvestmentProgression> Read(InvestmentSlotRead slot, int itemCount, InvestmentUnlocks unlocks,
@@ -84,27 +96,30 @@ public static class InvestmentSeasonPass
 
     /**
      * Studio's guess at the paid track: conditions that start with an account flag, a profile flag and an or. The data
-     * names no tracks, so this is a heuristic. Shared rows are inlined the way Sunrise binds them.
+     * names no tracks, so this is a heuristic. Shared rows are inlined the way Sunrise binds them
+     * (package_reward_build.cpp RewardConditions::append_expression). A shared row on a cycle or at
+     * InvestmentUnlocks.ServerNestingLimit, where Sunrise refuses the expression, stays as its own instruction.
      */
     public static bool LooksLikeOwnership(InvestmentExpressionList conditions, InvestmentUnlocks unlocks)
     {
         var start = new List<InvestmentUnlockInstruction>(OwnershipLength);
         var visiting = new HashSet<uint>();
-        void Take(IReadOnlyList<InvestmentUnlockInstruction> instructions)
+        void Take(IReadOnlyList<InvestmentUnlockInstruction> instructions, int depth)
         {
             foreach (var instruction in instructions)
             {
                 if (start.Count == OwnershipLength) return;
-                if (instruction.Opcode != InvestmentUnlocks.SharedOpcode) { start.Add(instruction); continue; }
-                if (!visiting.Add(instruction.Operand)) { start.Add(instruction); continue; }
-                Take(unlocks.Shared((int)instruction.Operand).Instructions);
+                bool inlined = instruction.Opcode == InvestmentUnlocks.SharedOpcode
+                    && depth + 1 < InvestmentUnlocks.ServerNestingLimit && visiting.Add(instruction.Operand);
+                if (!inlined) { start.Add(instruction); continue; }
+                Take(unlocks.Shared((int)instruction.Operand).Instructions, depth + 1);
                 visiting.Remove(instruction.Operand);
             }
         }
-        foreach (var member in conditions.Members) Take(member.Instructions);
-        return start.Count == OwnershipLength && Flag(start[0], AccountFlagKind) && Flag(start[1], ProfileFlagKind)
-            && start[2].Opcode == OrOpcode;
-        bool Flag(InvestmentUnlockInstruction instruction, ushort kind) => instruction.Opcode == InvestmentUnlocks.FlagOpcode
+        foreach (var member in conditions.Members) Take(member.Instructions, 0);
+        return start.Count == OwnershipLength && Flag(start[0], InvestmentUnlocks.AccountFlagKind)
+            && Flag(start[1], InvestmentUnlocks.ProfileFlagKind) && start[2].Opcode == InvestmentUnlocks.OrOpcode;
+        bool Flag(InvestmentUnlockInstruction instruction, int kind) => instruction.Opcode == InvestmentUnlocks.FlagOpcode
             && instruction.Operand < unlocks.FlagSlots.Count && unlocks.FlagSlots[(int)instruction.Operand].Kind == kind;
     }
 
@@ -119,8 +134,9 @@ public static class InvestmentSeasonPass
         uint rank = row.Rank, claim = TagRead.U32(table, at + RewardClaim);
         if (rank > MaximumRank) problems.Add($"Rank {rank} is above {MaximumRank}.");
         if (item >= itemCount) problems.Add($"Item {item} is outside the item index.");
+        // A claim flag must map to the account flag bank.
         if (claim != 0 && unlocks.FlagSlots.Count != 0
-            && (claim >= unlocks.FlagSlots.Count || unlocks.FlagSlots[(int)claim].Kind != AccountFlagKind))
+            && (claim >= unlocks.FlagSlots.Count || unlocks.FlagSlots[(int)claim].Kind != InvestmentUnlocks.AccountFlagKind))
             problems.Add($"Claim flag slot {claim} is not an account flag.");
         var conditions = InvestmentUnlocks.ReadList(table, TagView.OffsetOf(table, in row.Conditions));
         if (conditions.Error.Length != 0) problems.Add("Conditions: " + conditions.Error);

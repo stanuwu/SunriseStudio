@@ -24,7 +24,7 @@ public sealed partial class InvestmentPage : IPreparedStudioPage, IFramePrepared
     private SunriseStudio.Packages.PackageCatalog? requestedCatalog;
     private long requestedOverlayRevision = -1;
     private readonly PursuitInspector inspector = new();
-    // Icons of the item pickers' rows.
+    // Reads the tables whose bucket descriptors the item's Bucket line shows.
     private readonly InvestmentTablesLoader bucketTables = new();
     // Studio never edits the bucket table, so the descriptors read once per installation stay valid across project edits.
     private (SunriseStudio.Packages.PackageCatalog? Source, InvestmentTables? Tables) bucketSource;

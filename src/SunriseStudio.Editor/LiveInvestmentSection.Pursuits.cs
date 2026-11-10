@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Formats;
@@ -19,8 +18,10 @@ internal enum PursuitBoardTab { Quests, Bounties, Chain }
 
 internal sealed partial class LiveInvestmentSection
 {
-    // The in-game Quests screen lays out its slots two across and five down, and the Bounties screen four across and seven down.
+    // The columns and rows of slots on the in-game Quests screen and on its Bounties screen.
     private const int QuestColumns = 2, QuestRows = 5, BountyColumns = 4, BountyRows = 7;
+    // The slots one in-game screen holds.
+    private const int QuestsPerScreen = QuestColumns * QuestRows, BountiesPerScreen = BountyColumns * BountyRows;
     // The padding around a card's icon and text, and the height of the progress strip along its bottom, at UI scale 1.
     private const float CardPad = 6, CardStrip = 3;
     // The outline width of a chosen card at UI scale 1. Other cards keep a one-pixel frame.
@@ -46,8 +47,8 @@ internal sealed partial class LiveInvestmentSection
     // The in-game screen each tab shows, counted from zero.
     private int questScreen, bountyScreen;
     private const string CompleteAllTitle = "Complete all bounties";
-    // The open bounties Complete all's confirmation names, or null while it is closed.
-    private LiveHeldPursuit[]? completeAllDraft;
+    // What Complete all's confirmation opened with, or null while it is closed.
+    private CompleteAllDraft? completeAllDraft;
     // The pursuit the inspector shows while the chosen held row is not a pursuit, such as one Open in Live or the chain chose.
     private uint? chosenPursuit;
     // A held copy that history asked for. With pendingFirstCopy, the next inventory snapshot chooses chosenPursuit's first copy.
@@ -70,7 +71,7 @@ internal sealed partial class LiveInvestmentSection
             string tab = pursuitTab switch { PursuitBoardTab.Bounties => "bounties",
                 PursuitBoardTab.Chain => "chain", _ => "quests" };
             return workspace.LiveInvestment.Selected is { BucketId: InvestmentPursuits.PursuitBucket } row ? $"{tab}/{HeldKey(row)}"
-                : chosenPursuit is { } hash ? $"{tab}/item:{hash:X8}" : tab;
+                : chosenPursuit is { } hash ? $"{tab}/{ItemRow(hash)}" : tab;
         }
     }
 
@@ -86,9 +87,7 @@ internal sealed partial class LiveInvestmentSection
             "bounties" => PursuitBoardTab.Bounties, _ => PursuitBoardTab.Chain };
         string chosen = parts.Length > 1 ? parts[1] : parts[0];
         if (ParseHeld(chosen) is { } held) { pendingPursuit = held; pendingFirstCopy = false; chosenPursuit = held.Hash; }
-        else if (chosen.StartsWith("item:", StringComparison.Ordinal)
-            && uint.TryParse(chosen.AsSpan(5), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint hash))
-        { pendingPursuit = null; pendingFirstCopy = true; chosenPursuit = hash; }
+        else if (ParseItemRow(chosen) is { } hash) { pendingPursuit = null; pendingFirstCopy = true; chosenPursuit = hash; }
         else if (tab && parts.Length == 1) { pendingPursuit = null; pendingFirstCopy = false; chosenPursuit = null; }
         else return;
         // The requested pursuit replaces another chosen held pursuit. Chosen rows in other buckets stay for Items and Inventory.
@@ -184,8 +183,8 @@ internal sealed partial class LiveInvestmentSection
             && quests.Concat(bounties).FirstOrDefault(card => card.Row.SameRow(chosen)) is { } shown)
         {
             pursuitTabRequest = shown.Bounty ? PursuitBoardTab.Bounties : PursuitBoardTab.Quests;
-            if (shown.Bounty) bountyScreen = Array.IndexOf(bounties, shown) / (BountyColumns * BountyRows);
-            else questScreen = Array.IndexOf(quests, shown) / (QuestColumns * QuestRows);
+            if (shown.Bounty) bountyScreen = Array.IndexOf(bounties, shown) / BountiesPerScreen;
+            else questScreen = Array.IndexOf(quests, shown) / QuestsPerScreen;
             revealPursuit = false;
         }
         int capacity = tables.Bucket(InvestmentPursuits.PursuitBucket) is { SlotCount: > 0 } bucket ? Math.Min(bucket.SlotCount,
@@ -201,7 +200,7 @@ internal sealed partial class LiveInvestmentSection
         {
             pursuitTab = PursuitBoardTab.Quests;
             BoardLine(missing, quests.Length, held, capacity, "No quests held.");
-            ScreenPager("quest-screens", ref questScreen, quests.Length, QuestColumns * QuestRows);
+            ScreenPager("quest-screens", ref questScreen, quests.Length, QuestsPerScreen);
             DrawQuestCards(context, live, catalog, tables, quests, free);
             ImGui.EndTabItem();
         }
@@ -210,7 +209,7 @@ internal sealed partial class LiveInvestmentSection
             pursuitTab = PursuitBoardTab.Bounties;
             BoardLine(missing, bounties.Length, held, capacity, "No bounties held.");
             DrawCompleteAll(live, catalog, bounties);
-            ScreenPager("bounty-screens", ref bountyScreen, bounties.Length, BountyColumns * BountyRows);
+            ScreenPager("bounty-screens", ref bountyScreen, bounties.Length, BountiesPerScreen);
             DrawBountyCells(context, live, catalog, tables, bounties, free);
             ImGui.EndTabItem();
         }
@@ -280,42 +279,69 @@ internal sealed partial class LiveInvestmentSection
             : capacity > 0 ? $"{held:N0} of {capacity:N0} held" : $"{held:N0} held");
     }
 
-    /** The held bounties the game reports with objectives still open, which Complete all asks it to complete. */
-    internal static LiveHeldPursuit[] OpenBounties(IEnumerable<HeldPursuitCard> bounties) =>
+    /**
+     * The held bounties Complete all asks the game to complete: those the game reports with objectives still open and with
+     * no request waiting on their copy. A copy leaves once its request is sent, so a second press never repeats it.
+     */
+    internal static LiveHeldPursuit[] OpenBounties(LiveInvestmentSession live, IEnumerable<HeldPursuitCard> bounties) =>
     [
         .. bounties.Select(card => card.Status).OfType<LiveHeldPursuit>()
             .Where(status => status.Flags.HasFlag(LivePursuitFlags.Bounty)
-                && !status.Flags.HasFlag(LivePursuitFlags.ObjectivesComplete))
+                && !status.Flags.HasFlag(LivePursuitFlags.ObjectivesComplete)
+                && !live.PendingFor(LiveAction.InstanceKey(status.Instance)))
     ];
 
-    /** Why Complete all cannot run now, or empty: the link's reason, then whether any held bounty is still open. */
+    /** Why Complete all cannot run now, or empty: the link's reason, then whether any held bounty is left to complete. */
     internal string CompleteAllRefusal(IReadOnlyList<LiveHeldPursuit> open)
     {
         string link = LiveGate.Reason(workspace, "");
-        return link.Length != 0 ? link : open.Count == 0 ? "Every held bounty's objectives are complete." : "";
+        return link.Length != 0 ? link : open.Count == 0 ? "No held bounty is left to complete." : "";
     }
 
     /**
      * What Complete all's confirmation does: asks the game to complete each open bounty's objectives, one request per copy,
-     * as Complete objectives does for one. The game judges each copy and Activity shows its result.
+     * as Complete objectives does for one. A copy that got a request since the confirmation opened is left out. The game
+     * judges each copy and Activity shows its result.
      * @return The requests sent.
      */
     internal IReadOnlyList<LiveOperation> CompleteAll(LiveInvestmentSession live, InvestmentCatalog? catalog,
         IReadOnlyList<LiveHeldPursuit> open) =>
-        [.. open.Select(held => live.Submit(new LiveCompleteObjectives(held, HeldName(catalog, held.ItemHash))))];
+    [
+        .. open.Where(held => !live.PendingFor(LiveAction.InstanceKey(held.Instance)))
+            .Select(held => live.Submit(new LiveCompleteObjectives(held, HeldName(catalog, held.ItemHash))))
+    ];
+
+    /** The bounties Complete all's confirmation names and the game identity it opened with. */
+    private sealed record CompleteAllDraft(LiveInvestmentContext Context, LiveHeldPursuit[] Open);
+
+    /**
+     * What the Complete all button does: opens its confirmation on the bounties still open, bound to the game's identity.
+     * @return True when the confirmation opens.
+     */
+    internal bool OpenCompleteAll(LiveInvestmentSession live, LiveHeldPursuit[] open)
+    {
+        if (CompleteAllRefusal(open).Length != 0 || live.Hello is not { } hello) return false;
+        completeAllDraft = new(hello.Context, open);
+        return true;
+    }
+
+    /** The bounties the open confirmation names, or null once it closed or the game's account or character changed. */
+    internal LiveHeldPursuit[]? CompleteAllOpen(LiveInvestmentSession live)
+    {
+        if (completeAllDraft is { } draft && live.Hello?.Context != draft.Context) completeAllDraft = null;
+        return completeAllDraft?.Open;
+    }
 
     /** Complete all and its confirmation, which names how many bounties it sends. */
     private void DrawCompleteAll(LiveInvestmentSession live, InvestmentCatalog? catalog, HeldPursuitCard[] bounties)
     {
-        var open = OpenBounties(bounties);
+        var open = OpenBounties(live, bounties);
         if (LiveGate.Button("Complete all", CompleteAllRefusal(open),
-            "Completes the objectives of every held bounty that is still open. Rewards are paid when you turn them in."))
-        {
-            completeAllDraft = open;
+            "Completes the objectives of every held bounty that is still open. Rewards are paid when you turn them in.")
+            && OpenCompleteAll(live, open))
             ImGui.OpenPopup(CompleteAllTitle);
-        }
         if (!ImGui.BeginPopupModal(CompleteAllTitle, ImGuiWindowFlags.AlwaysAutoResize)) return;
-        if (completeAllDraft is not { } draft)
+        if (CompleteAllOpen(live) is not { } draft)
         {
             ImGui.CloseCurrentPopup(); ImGui.EndPopup(); return;
         }
@@ -340,8 +366,8 @@ internal sealed partial class LiveInvestmentSection
     private static int Screens(int held, int perScreen) => Math.Max(1, (held + perScreen - 1) / perScreen);
 
     /**
-     * Steps between a tab's in-game screens and shows the range the current one holds, as the game's "1-28 / 31" does.
-     * Keeps the screen in range when entries leave. Nothing is drawn while one screen holds everything.
+     * Steps between a tab's in-game screens and shows the range the current one holds, as "first-last / held", the way the
+     * game's screens do. Keeps the screen in range when entries leave. Nothing is drawn while one screen holds everything.
      */
     private static void ScreenPager(string id, ref int screen, int held, int perScreen)
     {
@@ -363,16 +389,16 @@ internal sealed partial class LiveInvestmentSection
     }
 
     /**
-     * Draws the current in-game screen of quest cards, two across and five down. On the last screen, empty slots follow the
-     * last card as far as the bucket has room.
+     * Draws the current in-game screen of quest cards in the Quests screen's columns. On the last screen, empty slots follow
+     * the last card as far as the bucket has room.
      */
     private void DrawQuestCards(LiveSectionContext context, LiveInvestmentSession live,
         InvestmentCatalog? catalog, InvestmentTables? tables,
         HeldPursuitCard[] cards, int free)
     {
         int count = cards.Length;
-        int perScreen = QuestColumns * QuestRows, first = questScreen * perScreen;
-        int slots = Math.Min(perScreen, ScreenSlots(count, free, perScreen) - first);
+        int first = questScreen * QuestsPerScreen;
+        int slots = Math.Min(QuestsPerScreen, ScreenSlots(count, free, QuestsPerScreen) - first);
         ImGui.BeginChild("pursuit-quests", Vector2.Zero, ImGuiChildFlags.None);
         var style = ImGui.GetStyle();
         float width = ImGui.GetContentRegionAvail().X;
@@ -458,17 +484,18 @@ internal sealed partial class LiveInvestmentSection
      * entry falls on, as far as the bucket has room. With nothing held, that is one screen.
      */
     private static int ScreenSlots(int held, int free, int perScreen) =>
-        Math.Min(held + free, Math.Max(1, (held + perScreen - 1) / perScreen) * perScreen);
+        Math.Min(held + free, Screens(held, perScreen) * perScreen);
 
     /**
-     * Draws the current in-game screen of bounties as square icon cells with progress and completion, four across and seven
-     * down. On the last screen, empty cells follow the last bounty as far as the bucket has room. Names show in tooltips.
+     * Draws the current in-game screen of bounties as square icon cells with progress and completion, in the Bounties
+     * screen's columns and rows. On the last screen, empty cells follow the last bounty as far as the bucket has room. Names
+     * show in tooltips.
      */
     private void DrawBountyCells(LiveSectionContext context, LiveInvestmentSession live,
         InvestmentCatalog? catalog, InvestmentTables? tables,
         HeldPursuitCard[] cards, int free)
     {
-        int perScreen = BountyColumns * BountyRows, first = bountyScreen * perScreen;
+        int first = bountyScreen * BountiesPerScreen;
         IconCell Cell(int slot)
         {
             int index = first + slot;
@@ -479,7 +506,7 @@ internal sealed partial class LiveInvestmentSection
                 catalog is null || card.Item is null ? null : icons.Get(catalog, card.Item.Index), true, StudioIcon.Cube,
                 "", 0, card.Progress, card.Unknown, false, card.Complete, live.Selected?.SameRow(card.Row) == true, false);
         }
-        int slots = Math.Min(perScreen, ScreenSlots(cards.Length, free, perScreen) - first);
+        int slots = Math.Min(BountiesPerScreen, ScreenSlots(cards.Length, free, BountiesPerScreen) - first);
         int chosen = IconGrid.DrawScreen("pursuit-bounties", slots, BountyColumns, BountyRows, Cell, scale,
             out int hovered, out int opened);
         // The grid reports slots on this screen; the cards are counted across every screen.
@@ -540,7 +567,7 @@ internal sealed partial class LiveInvestmentSection
         bool complete = known && status!.Flags.HasFlag(LivePursuitFlags.ObjectivesComplete);
         int done = status?.Objectives.Count(objective => objective.Flags.HasFlag(LivePursuitObjectiveFlags.Complete)) ?? 0;
         float progress = !known ? IconGrid.NoProgress : status!.Objectives.Count == 0 ? complete ? 1 : 0 : (float)done / status.Objectives.Count;
-        bool tracked = status is not null && InvestmentTableViews.Tracked(status);
+        bool tracked = status is { Tracked: true };
         bool unknown = status is not null && !known;
         var tip = new List<string> { item?.Name ?? $"Item 0x{row.DefinitionHash:X8}" };
         if (item?.Description is { Length: > 0 } description) tip.Add(description);
