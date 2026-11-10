@@ -37,7 +37,6 @@ public sealed partial class InvestmentPage : IPreparedStudioPage, IFramePrepared
     public void PrepareFrame(StudioWorkspace workspace, Dx11Renderer renderer)
     {
         InvalidateDrafts(workspace);
-        inspector.PrepareFrame(workspace);
         var next = workspace.InvestmentDetailCurrent ? workspace.SelectedInvestmentIcon : null;
         var nextPerks = workspace.InvestmentDetailCurrent ? workspace.SelectedInvestmentPerkIcons : null;
         if (ReferenceEquals(next, preparedIcon) && ReferenceEquals(nextPerks, preparedPerkIcons)) return;
@@ -130,7 +129,6 @@ public sealed partial class InvestmentPage : IPreparedStudioPage, IFramePrepared
         ImGui.SeparatorText("ITEM");
         foreach (var field in detail.Fields) Field(context, field, field.Offset == ItemFields.Tier ? item.Rarity : null);
         DrawBucket(context, item);
-        DrawRewardsRow(context, detail);
         if (detail.Stats.Count != 0 || context.Workspace.CanEdit)
         {
             ImGui.SeparatorText("BASE STATS");
@@ -257,19 +255,6 @@ public sealed partial class InvestmentPage : IPreparedStudioPage, IFramePrepared
         context.ShowPage?.Invoke(BucketsPage.PageId, BucketsPage.RowOf(item.Bucket));
     }
 
-    /** A wrapper item's draw table in one line, with a link to the Rewards page that shows it. */
-    private static void DrawRewardsRow(StudioPageContext context, InvestmentItemDetail detail)
-    {
-        if (detail.Wrapper is not { } wrapper) return;
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextUnformatted("Rewards");
-        ImGui.SameLine();
-        ImGui.TextDisabled((wrapper.OpensOnAcquisition ? "Opens when acquired" : "Kept as an item when acquired")
-            + InvestmentTableViews.Dot + $"Pool {wrapper.Pool}");
-        ImGui.SameLine();
-        if (ImGui.SmallButton("Open in Rewards")) context.ShowPage?.Invoke(ItemRewardsPage.PageId, null);
-    }
-
     /** One base stat row; the bar shows only for values above zero. */
     private void StatRow(StudioPageContext context, InvestmentItemDetail detail, InvestmentStat stat)
     {
@@ -340,13 +325,12 @@ public sealed partial class InvestmentPage : IPreparedStudioPage, IFramePrepared
     internal static ItemCatalogOptions PlugOptions(InvestmentSocket socket) =>
         new(Candidates: socket.AllowedPlugs.Select(index => (int)index).ToHashSet());
 
-    /** Item fields add allowed plugs, rarity names and the displayed stat value to the shared popup. */
+    /** Item fields add allowed plugs, rarity names and the displayed stat value to the field popup. */
     private void DrawEdit(StudioPageContext context, InvestmentCatalog catalog)
     {
         var detail = context.Workspace.SelectedInvestmentItem;
         popup.Draw(context.Workspace, field =>
         {
-            if (popup.Table is not null) return false;
             if (detail?.Stats.Any(row => row.Field.Offset == field.Offset) == true) ImGui.TextDisabled("Base value");
             if (plugOptions is { Candidates.Count: > 0 } options
                 && plugPicker.DrawPicker("allowed-plugs", context.Workspace, catalog,
@@ -364,7 +348,7 @@ public sealed partial class InvestmentPage : IPreparedStudioPage, IFramePrepared
             return true;
         }, field =>
         {
-            var stat = popup.Table is null ? detail?.Stats.FirstOrDefault(row => row.Field.Offset == field.Offset) : null;
+            var stat = detail?.Stats.FirstOrDefault(row => row.Field.Offset == field.Offset);
             var curve = stat is not null && detail is not null ? DisplayCurve(detail, stat) : null;
             if (curve is not null
                 && int.TryParse(popup.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int previewValue))

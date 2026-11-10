@@ -13,8 +13,8 @@ internal static class InvestmentTableChecks
     // Fixture entry order; each tag is First plus its position in the package.
     private const int RootEntry = 0, ItemIndexEntry = 1, DisplayIndexEntry = 2, FlagSlotEntry = 3,
         ValueSlotEntry = 4, FlagMapEntry = 5,
-        ValueMapEntry = 6, SharedEntry = 7, PoolEntry = 8, ProgressionEntry = 9, ObjectiveEntry = 10,
-            FirstItemEntry = 11, ItemCount = 6,
+        ValueMapEntry = 6, SharedEntry = 7, ProgressionEntry = 8, ObjectiveEntry = 9,
+            FirstItemEntry = 10, ItemCount = 6,
         BucketEntry = FirstItemEntry + ItemCount, BankEntry = BucketEntry + 1, StringContainerEntry = BucketEntry + 2,
         StringDataEntry = BucketEntry + 3, ObjectiveTextEntry = BucketEntry + 4;
     // Sunrise reads the bucket table by its slot whatever its class, so the fixture gives it a class no reader names.
@@ -29,20 +29,15 @@ internal static class InvestmentTableChecks
     private const uint ObjectiveDisplayClass = 0x808059EC, ObjectiveDisplayRowClass = 0x808059F0;
     private const int ObjectiveDisplayStride = 64;
     private const string FixtureObjectiveText = "Fixture targets defeated";
-    // The reward site the fixture's pool entries name in root slot 84.
-    private const ushort FixtureSite = 3;
-    // A flag slot the account mapping table names (row 3), and item 0's maximum stack.
-    private const ushort AccountFlagSlot = 4;
-    private const uint ItemZeroStack = 3;
 
     /** A catalog with no root still loads; its tables report why they are empty. */
     public static void NoRoot(InvestmentCatalog catalog, uint itemTag, ReadOnlyMemory<byte> item)
     {
         var tables = catalog.Tables();
-        Check(tables.Root is null && tables.Pools.Count == 0
+        Check(tables.Root is null
             && tables.Diagnostics.Contains("This installation has no investment root."),
             "A catalog without a root did not report it.");
-        Check(catalog.ReadItem(itemTag, item) is { Pursuit: null, Wrapper: null, Diagnostics.Count: 0 },
+        Check(catalog.ReadItem(itemTag, item) is { Pursuit: null, Diagnostics.Count: 0 },
             "An item without blocks gained a pursuit.");
     }
 
@@ -64,7 +59,6 @@ internal static class InvestmentTableChecks
             new(Views.C80807d36.Class, 8 << 9, Maps(0x80807D48, [0, 5, 2, 4], [], [1, 5], [])),
             new(Views.C80807c80.Class, 8 << 9, Maps(0x80807C8D, [1], [0, 2, 3, 4], [], [])),
             new(Views.RewardExpressionTable.Class, 8 << 9, Shared()),
-            new(Views.RewardPoolTable.Class, 8 << 9, Pools()),
             new(Views.C80807cd9.Class, 8 << 9, Progressions()),
             new(Views.ObjectiveTable.Class, 8 << 9, Objectives()),
             .. items.Select(item => new AuthoredPackageEntry(InvestmentCatalog.ItemClass, 8 << 9, item)),
@@ -87,25 +81,21 @@ internal static class InvestmentTableChecks
         Check(root.ReadSlot(packages, InvestmentRootSlots.Classes,
             Views.CharacterClassTable.Class).State == InvestmentSlotState.WrongClass
             && tables.Diagnostics.Contains("Unlock slots: Slot 12 has an unexpected class."), "A wrong slot class was accepted.");
-        Check(tables.Slot84.State == InvestmentSlotState.Omitted, "Slot 84 was not omitted.");
         Expressions(tables);
         Bindings(tables);
         ProgressSources(tables);
-        Pools(tables);
         Pass(tables);
         Pursuits(catalog, packages, tables);
         ObjectiveText(tables);
         ObjectiveTextRefusals(parent);
         ItemCatalogChecks.Run(catalog);
-        Edits(catalog, packages, tables);
-        RewardEdits(catalog, tables);
         BucketTable(tables);
         BucketRefusals(parent);
         Shapes(packages, tables);
         Progress(catalog, packages, tables);
         TruncatedItems(parent);
         Ambiguous(parent);
-        Console.WriteLine($"investment_tables root=sweep slots={root.SlotCount} pools={tables.Pools.Count} "
+        Console.WriteLine($"investment_tables root=sweep slots={root.SlotCount} "
             + $"progressions={tables.Progressions.Count} objectives={tables.Objectives.Count} diagnostics={tables.Diagnostics.Count}");
     }
 
@@ -263,28 +253,6 @@ internal static class InvestmentTableChecks
         Console.WriteLine("investment_progress_gate set=checked never=hidden transient=disabled");
     }
 
-    private static void Pools(InvestmentTables tables)
-    {
-        var pools = tables.Pools;
-        Check(pools.Count == 3 && pools[0].Entries.Count == 4
-            && pools[2].Error == "Pool has no definition hash.", "Pool rows were dropped.");
-        var entries = pools[0].Entries;
-        Check(entries[0].Error == "Weight is negative or not finite." && entries[0].Weight == -1 && entries[0].AnyCategory,
-            "A negative weight row was not kept with its error.");
-        Check(tables.Unlocks.Format(entries[0].Condition) == "Account flag row 0 and (Account value row 0 >= 5)",
-            "A pool condition did not print infix.");
-        Check(entries[1].Error == "Socket override 0 has no socket type." && entries[1].Modifiers.Single().Value == 2
-            && entries[1].Unknown28 == 0x5EED, "A bad socket override or modifier was misread.");
-        Check(entries[2].Error == "Nested pool 7 is outside the pool table.", "An out-of-range nested pool was accepted.");
-        var graph = tables.RewardGraph;
-        Check(graph.Cycles.Single().SequenceEqual([1]) && graph.Depths.SequenceEqual([1, -1, 0]) && graph.MaximumDepth == 1
-            && tables.Diagnostics.Contains("Reward pools contain themselves: 1."), "The automatic-wrapper cycle was missed.");
-        Check(graph.WrappersOf(1).SequenceEqual([1]) && graph.WrappersOf(2).SequenceEqual([2])
-            && graph.ParentsOf(2).SequenceEqual([(0, 3)]),
-            "Pool references were not indexed.");
-        Check(InvestmentRewardGraph.BaseTotal(pools[0], 0x22) == 3.5 + 1, "A selection total included another category.");
-    }
-
     private static void Pass(InvestmentTables tables)
     {
         var pass = tables.PassCandidates.Single();
@@ -331,10 +299,6 @@ internal static class InvestmentTableChecks
         // objective block.
         Check(tables.Expires(3) && !tables.Expires(5) && !tables.Expires(0) && !tables.Expires(-1) && !tables.Expires(ItemCount),
             "The installed lifetime does not mark the pursuit Sunrise reports as a bounty.");
-        var wrapper = catalog.ReadItem(First + FirstItemEntry + 2, packages.Read(First + FirstItemEntry + 2)).Wrapper!;
-        Check(wrapper is { Pool: 2, OpensOnAcquisition: false, Error: "More selections than Sunrise accepts (4)." }
-            && wrapper.Selections.Count == 5,
-            "Wrapper selections were capped or accepted.");
     }
 
     /** Display rows join objectives by index and hash; a row naming another hash gives no text and one diagnostic. */
@@ -373,82 +337,6 @@ internal static class InvestmentTableChecks
             Check(tables.Objectives.Count == 8 && tables.Diagnostics.Contains("Objective text: " + expected)
                 && Enumerable.Range(0, 8).All(index => tables.ObjectiveText(index) == ""), $"The {name} display table was read.");
         }
-    }
-
-    private static void Edits(InvestmentCatalog catalog, PackageCatalog packages, InvestmentTables tables)
-    {
-        byte[] pools = packages.Read(First + PoolEntry), pass = packages.Read(First + ProgressionEntry),
-            objectives = packages.Read(First + ObjectiveEntry);
-        var entry = tables.Pools[0].Entries[1];
-        var reward = tables.PassCandidates[0].Rewards[2];
-        var objective = tables.Objectives[0];
-        foreach (var (field, bytes, value) in new[] { (entry.WeightField, pools, "4.5"), (entry.QuantityField, pools, "9"),
-            (reward.QuantityField, pass, "8"), (reward.ItemField, pass, "3"), (objective.CompletionField, objectives, "12") })
-        {
-            byte[] edited = catalog.EditTableField(field, bytes, value);
-            Check(OnlyRange(bytes, edited, field.Property.Offset, 4) && field.Property.Editable,
-                $"{field.Kind} changed bytes outside its field.");
-            Reject(() => catalog.EditTableField(field, edited, value), "This field changed. Reopen its editor.");
-        }
-        Check(BinaryPrimitives.ReadSingleLittleEndian(catalog.EditTableField(entry.WeightField, pools,
-            "4.5").AsSpan(entry.WeightField.Property.Offset)) == 4.5f,
-            "The weight edit wrote the wrong value.");
-        Check(reward.ItemField.Property.Offset == reward.Offset + 4 && BinaryPrimitives.ReadUInt32LittleEndian(
-            catalog.EditTableField(reward.ItemField, pass, "3").AsSpan(reward.Offset + 4)) == 3,
-                "The pass item edit wrote the wrong field.");
-        const string itemRange = "Item must be an index of this installation's item table (0 to 5).";
-        foreach (string item in new[] { "6", "65535", "-1",
-            "x" }) Reject(() => catalog.EditTableField(reward.ItemField, pass, item), itemRange);
-        Reject(() => catalog.EditTableField(entry.WeightField, pools, "NaN"), "Weight must be a finite number of zero or more.");
-        Reject(() => catalog.EditTableField(entry.WeightField, pools, "-1"), "Weight must be a finite number of zero or more.");
-        Reject(() => catalog.EditTableField(entry.QuantityField, pools, "0"), $"Quantity must be 1 to {int.MaxValue}.");
-        Reject(() => catalog.EditTableField(objective.CompletionField, objectives, "-1"),
-            "Completion value must be zero or more.");
-        Reject(() => catalog.EditTableField(entry.WeightField with { OwnerTag = First + ProgressionEntry }, pools, "4"),
-            "This table is no longer the investment root's reward pool table.");
-        Reject(() => catalog.EditTableField(entry.WeightField with { Element = 9 }, pools, "4"),
-            "This field changed. Reopen its editor.");
-    }
-
-    /**
-     * A pass row's quantity and a pool entry's quantity follow Sunrise's reward refusals: an opening wrapper and an automatic perk
-     * row take quantity 1 only, and an item granted as itself must fit its placement (fixture item 0 moved into each case).
-     */
-    private static void RewardEdits(InvestmentCatalog catalog, InvestmentTables tables)
-    {
-        Check(SeasonPassPage.RowRefusal(catalog, tables, 1, 3, false) == RewardRefusals.WrapperQuantity
-            && SeasonPassPage.RowRefusal(catalog, tables, 1, 1, false).Length == 0
-            && SeasonPassPage.RowRefusal(catalog, tables, 4, 2, false) == SeasonPassPage.PerkShapeRefusal
-            && SeasonPassPage.RowRefusal(catalog, tables, 4, 1, false).Length == 0
-            && SeasonPassPage.RowRefusal(catalog, tables, 0, 5, false).Length == 0,
-            "A pass row quantity Sunrise refuses was accepted, or one it accepts was refused.");
-        var item = catalog.Items[0];
-        (InvestmentItem Item, long Quantity, bool Sockets, string Refusal)[] placements =
-        [
-            (item with { Bucket = RewardRefusals.PerkBucket }, 1, false, RewardRefusals.PerkAcquisition),
-            (catalog.Items[4], 1, false, ""), (catalog.Items[4], 2, false, RewardRefusals.PerkAcquisition),
-            (item with { Bucket = 12 }, 1, false, RewardRefusals.OtherInventory),
-            (item with { Bucket = 10, Instanced = true }, 1, false, RewardRefusals.InstanceQuantity),
-            (item with { Bucket = PursuitsId, Instanced = true }, 2, false, RewardRefusals.InstanceQuantity),
-            (item with { Bucket = PursuitsId, Instanced = true }, 1, true, ""),
-            (item with { Bucket = 10 }, 9, true, RewardRefusals.StackSockets), (item with { Bucket = 10 }, 9, false, "")
-        ];
-        foreach (var (shown, quantity, sockets, refusal) in placements)
-            Check(RewardRefusals.Placement(tables, shown, quantity, sockets) == refusal,
-                $"Placing item 0 in bucket {shown.Bucket} (instanced {shown.Instanced}) x{quantity} was not refused as \"{refusal}\".");
-        // The pool entry popups refuse through the same rules: pool 1's entry is fixture item 1, which opens when acquired.
-        using var workspace = new StudioWorkspace();
-        var popup = new InvestmentFieldPopup();
-        popup.Begin(workspace, tables.Pools[1].Entries[0].QuantityField, "");
-        popup.Value = "2";
-        string wrapped = InvestmentRewardTree.QuantityRefusal(catalog, tables, popup);
-        popup.Value = "1";
-        string single = InvestmentRewardTree.QuantityRefusal(catalog, tables, popup);
-        popup.Begin(workspace, tables.Pools[0].Entries[1].QuantityField, "");
-        popup.Value = "0x9";
-        Check(wrapped == RewardRefusals.WrapperQuantity && single.Length == 0
-            && InvestmentRewardTree.QuantityRefusal(catalog, tables, popup).Length == 0,
-            "A pool entry quantity edit did not follow the wrapper rule.");
     }
 
     /** Two root entries never resolve to either; Load still succeeds. */
@@ -560,11 +448,9 @@ internal static class InvestmentTableChecks
         Check(explicitRoot.Tables().Root?.Tag == First + 1, "An explicit root tag was not used as-is.");
     }
 
-    /** Pass rows by pool, quest owners, and the pursuit page each item is classified onto. */
+    /** Quest owners, and the pursuit page each item is classified onto. */
     private static void Shapes(PackageCatalog packages, InvestmentTables tables)
     {
-        Check(tables.PassRowsOfPool(1).SequenceEqual([(1, 2)]) && tables.PassRowsOfPool(2).Count == 0,
-            "Pass rows by pool are wrong.");
         Check(tables.QuestOwner(3) == 4 && tables.QuestOwner(0) == -1 && tables.PursuitShape(3) == InvestmentPursuitShape.Quest
             && tables.PursuitShape(4) == InvestmentPursuitShape.Quest && tables.PursuitShape(0) == InvestmentPursuitShape.None,
             "Pursuit shapes or quest owners were misread.");
@@ -622,7 +508,7 @@ internal static class InvestmentTableChecks
         Slot(InvestmentRootSlots.Classes, ItemIndexEntry); Slot(InvestmentRootSlots.Items, ItemIndexEntry);
         Slot(InvestmentRootSlots.FlagSlots, FlagSlotEntry); Slot(InvestmentRootSlots.ValueSlots, ValueSlotEntry);
         Slot(InvestmentRootSlots.FlagMaps, FlagMapEntry); Slot(InvestmentRootSlots.ValueMaps, ValueMapEntry);
-        Slot(InvestmentRootSlots.SharedExpressions, SharedEntry); Slot(InvestmentRootSlots.Pools, PoolEntry);
+        Slot(InvestmentRootSlots.SharedExpressions, SharedEntry);
         Slot(InvestmentRootSlots.Progressions, ProgressionEntry); Slot(InvestmentRootSlots.Objectives, ObjectiveEntry);
         Slot(InvestmentRootSlots.Buckets, BucketEntry);
         return root.ToArray();
@@ -679,31 +565,6 @@ internal static class InvestmentTableChecks
             var body = Body(row);
             if (body.Length != 0) blob.Expression(data + row * 24 + 8, body);
         }
-        return blob.ToArray();
-    }
-
-    private static byte[] Pools()
-    {
-        var blob = new Blob(24);
-        int pools = blob.Array(8, 0x8080748C, 3, 24);
-        blob.U(pools, 0x11); blob.U(pools + 24, 0x12);
-        int entries = blob.Array(pools + 8, 0x8080748E, 4, 80);
-        void Entry(int at, ushort item, uint quantity, ushort nested, uint category, float weight)
-        {
-            blob.S(at, item); blob.U(at + 4, quantity); blob.S(at + 8, nested); blob.S(at + 10, 0xFFFF);
-            blob.U(at + 20, category); blob.F(at + 24, weight);
-        }
-        Entry(entries, 0, 2, 0xFFFF, InvestmentRewards.AnyCategory, -1);
-        blob.Expression(entries + 32, (1, 0), (10, 1), (11, 5), (14, 0xFFFFFFFF), (4, 0));
-        Entry(entries + 80, 0, 1, 0xFFFF, 0x22, 3.5f); blob.U(entries + 80 + 28, 0x5EED);
-        int modifier = blob.Array(entries + 80 + 48, 0x80807490, 1, 24);
-        blob.Expression(modifier, (12, 1)); blob.F(modifier + 20, 2);
-        int socket = blob.Array(entries + 80 + 64, 0x80803062, 1, 12);
-        blob.S(socket, 0xFFFF); blob.S(socket + 2, 0xFFFF);
-        Entry(entries + 160, 0xFFFF, 1, 7, 0x33, 1);
-        Entry(entries + 240, 0xFFFF, 1, 2, 0x22, 1); blob.S(entries + 240 + 10, FixtureSite);
-        int wrapped = blob.Array(pools + 24 + 8, 0x8080748E, 1, 80);
-        Entry(wrapped, 1, 1, 0xFFFF, InvestmentRewards.AnyCategory, 2); blob.S(wrapped + 10, FixtureSite);
         return blob.ToArray();
     }
 
@@ -793,25 +654,13 @@ internal static class InvestmentTableChecks
         return blob.ToArray();
     }
 
-    /**
-     * Items 1 and 2 wrap pools 1 and 2, item 1 with an acquisition flag and opening when acquired; item 0 stacks to
-     * ItemZeroStack; item 4 is a perk whose acquisition flag is an account flag; 3 and 5 are pursuits in item 4's quest set.
-     */
+    /** Item 4 is a perk; 3 and 5 are pursuits in item 4's quest set. */
     private static byte[][] Items()
     {
         var items = new byte[ItemCount][];
         for (int i = 0; i < ItemCount; i++)
         {
             var item = new Blob(512);
-            item.S(0xDA, i switch { 1 => 2, 4 => AccountFlagSlot, _ => 0xFFFF });
-            if (i == 0) item.U(180, ItemZeroStack);
-            if (i is 1 or 2)
-            {
-                int wrapper = item.Block(0x58, 0x808077CC, 32);
-                item.S(wrapper, (ushort)i); item.U(wrapper + 24, i == 1 ? 1u : 0u);
-                int selections = item.Array(wrapper + 8, 0x808077CF, i == 2 ? 5 : 1, 12);
-                item.U(selections + 4, 1);
-            }
             if (i is 3 or 5)
             {
                 item.B(184, 40);
@@ -884,7 +733,6 @@ internal static class InvestmentTableChecks
         public void B(int at, byte value) => bytes[at] = value;
         public void S(int at, ushort value) => BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(at), value);
         public void U(int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), value);
-        public void F(int at, float value) => BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(at), value);
         public void Q(int at, long value) => BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at), value);
         public void Bytes(int at, byte[] value) => value.CopyTo(bytes, at);
         /** Points the relative field at `target`. */
@@ -899,15 +747,5 @@ internal static class InvestmentTableChecks
         }
     }
 
-    private static bool OnlyRange(byte[] before, byte[] after, int offset, int size) => before.Length == after.Length
-        && before.Take(offset).SequenceEqual(after.Take(offset))
-        && before.Skip(offset + size).SequenceEqual(after.Skip(offset + size))
-        && !before.Skip(offset).Take(size).SequenceEqual(after.Skip(offset).Take(size));
     private static void Check(bool condition, string message) { if (!condition) throw new InvalidDataException(message); }
-    private static void Reject(Action action, string message)
-    {
-        try { action(); }
-        catch (InvalidDataException error) when (error.Message == message) { return; }
-        throw new Exception("Expected refusal: " + message);
-    }
 }

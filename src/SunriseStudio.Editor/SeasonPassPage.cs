@@ -2,25 +2,19 @@ using System.Globalization;
 using ImGuiNET;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
-using SunriseStudio.Rendering;
 using SunriseStudio.Tags.Generated;
 
 namespace SunriseStudio.Editor;
 
 /** The reward ladders of the progression table: a rank grid with the selected cell's rows under it. */
-public sealed partial class SeasonPassPage : IStudioPage, IStudioRowPage, IFramePreparedPage
+public sealed class SeasonPassPage : IStudioPage, IStudioRowPage
 {
     public const string PageId = "sunrise.season-pass";
     // A row that history or a link asked for. The first draw after the tables are read shows it.
     private (int Progression, int Row)? requested;
     private readonly InvestmentTablesLoader loader = new();
     private InvestmentIconCache icons = InvestmentIconCache.Unprepared;
-    private readonly InvestmentFieldPopup popup = new();
-    private readonly InvestmentPendingMarks pending = new();
-    private readonly InvestmentRewardTree rewardTree = new();
     private readonly SeasonPassGrid grid = new();
-    // The row the Rewards tree last showed. Selecting another row clears the tree's selected entry.
-    private (int Progression, int Row) treeRow = (-1, -1);
     public string Id => PageId;
     public string Title => "Season pass";
 
@@ -41,11 +35,6 @@ public sealed partial class SeasonPassPage : IStudioPage, IStudioRowPage, IFrame
         row.Split(':') is ["pass", var progression, var index]
         && int.TryParse(progression, NumberStyles.None, CultureInfo.InvariantCulture, out int shown)
         && int.TryParse(index, NumberStyles.None, CultureInfo.InvariantCulture, out int chosen) ? (shown, chosen) : null;
-
-    public void PrepareFrame(StudioWorkspace workspace, Dx11Renderer renderer)
-    {
-        popup.Invalidate(workspace);
-    }
 
     public void Draw(StudioPageContext context)
     {
@@ -70,8 +59,6 @@ public sealed partial class SeasonPassPage : IStudioPage, IStudioRowPage, IFrame
         DrawHeader(context, tables, shown, ladder);
         grid.Draw(catalog, icons, shown, ladder, null);
         DrawDetail(context, catalog, tables, shown, ladder);
-        popup.Draw(workspace, _ => ItemInput(workspace, catalog, tables), _ => ItemPreview(catalog, tables),
-            _ => FieldRefusal(catalog, tables));
     }
 
     /** The progression with the most reward rows, which the page shows until another is chosen. */
@@ -104,7 +91,7 @@ public sealed partial class SeasonPassPage : IStudioPage, IStudioRowPage, IFrame
         StudioLiveLink.Draw(context, StudioLiveLink.PassTarget(grid.Progression, grid.SelectedRow));
     }
 
-    /** Draws the selected cell: its row chips, the row's item and description, the editable item and quantity, and the rank. */
+    /** Draws the selected cell: its row chips, the row's item and description, and the rank. */
     private void DrawDetail(StudioPageContext context, InvestmentCatalog catalog,
         InvestmentTables tables, InvestmentProgression shown,
         SeasonPassGrid.Ladder ladder)
@@ -113,7 +100,6 @@ public sealed partial class SeasonPassPage : IStudioPage, IStudioRowPage, IFrame
         if (rows.Count == 0) return;
         StudioUi.Heading(grid.SelectedTitle, "Extracted: pass reward");
         grid.DrawRowChips(catalog, icons, shown, rows, ladder);
-        if (treeRow != (grid.Progression, grid.SelectedRow)) { treeRow = (grid.Progression, grid.SelectedRow); rewardTree.Reset(); }
         var row = shown.Rewards[grid.SelectedRow];
         var workspace = context.Workspace;
         float size = ImGui.GetFrameHeight() * 2;
@@ -132,10 +118,6 @@ public sealed partial class SeasonPassPage : IStudioPage, IStudioRowPage, IFrame
         }
         else ImGui.TextColored(StudioTheme.Failure, InvestmentTableViews.ItemLabel(catalog, (int)row.ItemIndex));
         float label = ImGui.CalcTextSize("Required rank").X + ImGui.GetStyle().ItemSpacing.X * 2;
-        EditLine("Item", row.ItemField, $"Row {row.Index}", label,
-            InvestmentTableViews.ItemLabel(catalog, (int)Math.Min(row.ItemIndex, int.MaxValue)));
-        EditLine("Quantity", row.QuantityField, $"Row {row.Index}", label);
-        // A new rank would move the reward onto another rank's cell, so the rank is shown, not edited.
         ImGui.AlignTextToFramePadding(); ImGui.TextDisabled("Required rank"); ImGui.SameLine(label);
         ImGui.TextUnformatted(row.Rank.ToString(CultureInfo.InvariantCulture));
         var facts = new List<(string Name, string Value, string Tip)> { ClaimFact(tables, row) };
@@ -145,28 +127,12 @@ public sealed partial class SeasonPassPage : IStudioPage, IStudioRowPage, IFrame
         for (int i = 0; i < conditions.Count; i++) facts.Add((i == 0 ? "Conditions" : "", conditions[i], conditionTip));
         if (row.Error.Length != 0) facts.Add(("Problem", row.Error, row.Error));
         StudioUi.Facts("pass-row", facts);
-        int pool = row.ItemIndex < catalog.Items.Count ? tables.WrapperPool((int)row.ItemIndex) : -1;
-        if (pool >= 0 && ImGui.CollapsingHeader($"Rewards (Pool {pool})###pass-rewards"))
-            rewardTree.Draw(context, catalog, tables, pool, popup, pending, icons, "pass-rewards");
         if (row.Sockets.Count != 0 && ImGui.CollapsingHeader($"Socket overrides ({row.Sockets.Count})###pass-sockets"))
             StudioUi.Facts("pass-sockets", row.Sockets.Select(socket =>
             {
                 var (text, tip) = InvestmentTableViews.SocketOverride(catalog, socket);
                 return ($"Socket type {socket.SocketType}", text, tip);
             }));
-
-        void EditLine(string name, InvestmentTableField field, string owner, float width, string? display = null)
-        {
-            ImGui.PushID(name);
-            ImGui.AlignTextToFramePadding(); ImGui.TextDisabled(name); ImGui.SameLine(width);
-            if (ImGui.SmallButton((display ?? field.Property.Value) + "##value"))
-            {
-                popup.Begin(workspace, field, owner);
-                if (field.Kind == InvestmentTableFieldKind.PassRewardItem) BeginItemEdit();
-            }
-            pending.Dot(workspace, field);
-            ImGui.PopID();
-        }
     }
 
     /** The row's claim flag by its installed label, or None. */

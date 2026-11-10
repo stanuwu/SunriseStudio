@@ -370,24 +370,19 @@ public sealed partial class StudioForm
         StudioUi.Tip("Type");
     }
 
-    /**
-     * The home view: the categories with rows in their groups, with the table rows in the Tables group. Counts come from the
-     * worker, so drawing scans no rows.
-     */
+    /** Categories with rows, grouped; counts come from the worker, so drawing scans no rows. */
     private void DrawCategoryHome()
     {
         ImGui.BeginChild("category-home", Vector2.Zero, ImGuiChildFlags.None);
         string? group = null;
-        void Header(string next) { if (next != group) { group = next; ImGui.SeparatorText(next.ToUpperInvariant()); } }
         int inCategories = 0;
-        bool tables = false, allItems = false;
+        bool allItems = false;
         foreach (var item in StudioCategories.All)
         {
             int count = workspace.CategoryCounts.GetValueOrDefault(item.Name);
             inCategories += count;
-            if (item.Group == StudioCategories.TablesGroup && !tables) { tables = true; DrawTableRows(Header); }
-            if (count == 0 || !item.Home) continue;
-            Header(item.Group);
+            if (count == 0) continue;
+            if (item.Group != group) { group = item.Group; ImGui.SeparatorText(group.ToUpperInvariant()); }
             // An All items row comes before the first item kind.
             if (!allItems && InvestmentItemKinds.Categories.Contains(item.Name))
             {
@@ -395,39 +390,20 @@ public sealed partial class StudioForm
                 // The catalog's own count once it is read, since the catalog also lists items no category holds.
                 int items = workspace.LoadedInvestment?.Items.Count
                     ?? InvestmentItemKinds.Categories.Sum(kind => workspace.CategoryCounts.GetValueOrDefault(kind));
-                if (CategoryRow("all-items", StudioIcon.Grid, ItemCatalogView.AllItems, items.ToString("N0"), AllItemsTip))
+                if (CategoryRow("all-items", StudioIcon.Grid, ItemCatalogView.AllItems, items, AllItemsTip))
                     OpenItems(ItemCatalogView.AllItems);
             }
-            if (CategoryRow(item.Name, item.Icon, item.Label, count.ToString("N0"), item.Tooltip)) OpenBrowserCategory(item.Name);
+            if (CategoryRow(item.Name, item.Icon, item.Label, count, item.Tooltip)) OpenBrowserCategory(item.Name);
         }
         if (group is not null) ImGui.Separator();
-        if (CategoryRow("other-assets", StudioIcon.Folder, "All other assets",
-            (workspace.Assets.Length - inCategories).ToString("N0"),
+        if (CategoryRow("other-assets", StudioIcon.Folder, "All other assets", workspace.Assets.Length - inCategories,
             "Assets with no category viewer"))
         { otherAssets = true; FilterBrowser(); }
         ImGui.EndChild();
     }
 
-    /** One row per table whose category has rows. A click opens that table on its page. */
-    private void DrawTableRows(Action<string> header)
-    {
-        foreach (var row in StudioCategories.Tables)
-        {
-            if (workspace.CategoryCounts.GetValueOrDefault(row.Category) == 0) continue;
-            header(StudioCategories.TablesGroup);
-            if (CategoryRow("table-" + row.Page, row.Icon, row.Label, "", row.Tooltip)) workspace.Run(() => OpenTable(row));
-        }
-    }
-
-    /** Opens a table row's table on its page. When the table cannot be found, the reason shows in the status line. */
-    internal void OpenTable(StudioTableRow row)
-    {
-        workspace.Open(row.Tag(workspace.Catalog!));
-        ShowAssetPage(row.Page);
-    }
-
-    /** A full-width row: icon, label, and the count text on the right. */
-    private bool CategoryRow(string id, StudioIcon icon, string label, string count, string tooltip)
+    /** A full-width row: icon, label, and the count on the right. */
+    private bool CategoryRow(string id, StudioIcon icon, string label, int count, string tooltip)
     {
         ImGui.PushID(id);
         float width = ImGui.GetContentRegionAvail().X, height = ImGui.GetFrameHeight();
@@ -439,8 +415,9 @@ public sealed partial class StudioForm
         uint text = ImGui.GetColorU32(ImGuiCol.Text);
         ImGuiIcons.Draw(draw, icon, new(start.X + 4 * scale, textTop), line, text);
         draw.AddText(new(start.X + 12 * scale + line, textTop), text, label);
-        draw.AddText(new(start.X + width - ImGui.CalcTextSize(count).X - 4 * scale, textTop),
-            ImGui.GetColorU32(ImGuiCol.TextDisabled), count);
+        string number = count.ToString("N0");
+        draw.AddText(new(start.X + width - ImGui.CalcTextSize(number).X - 4 * scale, textTop),
+            ImGui.GetColorU32(ImGuiCol.TextDisabled), number);
         ImGui.PopID();
         return clicked;
     }

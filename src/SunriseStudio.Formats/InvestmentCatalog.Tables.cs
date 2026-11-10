@@ -13,10 +13,6 @@ internal readonly record struct InvestmentItemLinks(ushort WrapperPool, byte Wra
 {
     private const ushort Absent = InvestmentCatalog.Absent;
     public static readonly InvestmentItemLinks None = new(Absent, 0, Absent, []);
-    /** The acquisition flag slot, kept only when the item has a readable wrapper block. */
-    public ushort AcquiredFlagSlot { get; init; } = Absent;
-    /** The same flag slot read on every item, as package_reward_build.cpp RewardBuild::read_item reads it. */
-    public ushort AcquisitionFlag { get; init; } = Absent;
     public InvestmentPursuitShape Shape { get; init; }
     /** True for a pursuit whose lifetime expression is one literal row with a positive operand. Sunrise reports it as a bounty. */
     public bool Expires { get; init; }
@@ -28,9 +24,7 @@ internal readonly record struct InvestmentItemLinks(ushort WrapperPool, byte Wra
         int wrapper = Block(item, nameof(ItemDefinition.SackItemBlock), RewardWrapper.Class);
         if (wrapper >= 0 && TagView.FitsThrough<RewardWrapper>(item, wrapper, nameof(RewardWrapper.Flags)))
             links = links with { WrapperPool = TagView.Member<RewardWrapper, ushort>(item, wrapper, nameof(RewardWrapper.Pool)),
-                WrapperFlags = TagView.Member<RewardWrapper, byte>(item, wrapper, nameof(RewardWrapper.Flags)),
-                AcquiredFlagSlot = InvestmentItemBlocks.Field(item, InvestmentItemBlocks.AcquiredFlag) };
-        links = links with { AcquisitionFlag = InvestmentItemBlocks.Field(item, InvestmentItemBlocks.AcquiredFlag) };
+                WrapperFlags = TagView.Member<RewardWrapper, byte>(item, wrapper, nameof(RewardWrapper.Flags)) };
         int objectives = Block(item, nameof(ItemDefinition.ObjectiveItemBlock), ItemObjectiveBlock.Class);
         if (objectives >= 0 && TagView.FitsThrough<ItemObjectiveBlock>(item, objectives,
             nameof(ItemObjectiveBlock.ParentItemIndex)))
@@ -68,12 +62,9 @@ internal readonly record struct InvestmentItemLinks(ushort WrapperPool, byte Wra
         .Instructions is [{ Opcode: InvestmentUnlocks.ConstantOpcode } only] && only.Operand is > 0 and <= int.MaxValue;
 }
 
-/** Blocks and fields of an item definition, located through the item layout. */
+/** Blocks of an item definition, located through the item layout. */
 internal static class InvestmentItemBlocks
 {
-    /** The flag slot the item sets once acquired (package_reward_build.cpp RewardBuild::read_item). */
-    public static readonly int AcquiredFlag = TagView.FieldOffset<ItemDefinition>(nameof(ItemDefinition.AcquiredUnlockFlagSlot));
-
     /**
      * Follows one of the item's block pointers. The block's class word sits just before it.
      * @param pointer An ItemDefinition block pointer member.
@@ -88,10 +79,6 @@ internal static class InvestmentItemBlocks
             target) != expectedClass) throw new InvalidDataException($"Unexpected block class at 0x{field:X}.");
         return target;
     }
-
-    /** The u16 at `field`, or 0xFFFF when the item is too short to hold it. */
-    public static ushort Field(ReadOnlySpan<byte> item, int field) =>
-        field >= 0 && field <= item.Length - sizeof(ushort) ? TagRead.U16(item, field) : ushort.MaxValue;
 }
 
 /**
@@ -106,23 +93,19 @@ public readonly record struct InvestmentProgressSource(InvestmentProgressKind Ki
 /** The root-slot tables of one catalog. A table that cannot be read leaves a diagnostic and an empty list. */
 public sealed partial class InvestmentTables
 {
-    /** Diagnostics name at most this many reward pool or shared expression cycles, so many cycles do not bury other problems. */
+    /** Diagnostics name at most this many shared expression cycles, so many cycles do not bury other problems. */
     internal const int ListedCycles = 8;
     private readonly Dictionary<int, List<int>> objectiveUsers;
     private readonly Dictionary<byte, InvestmentBucket> bucketsById = [];
     private readonly Dictionary<byte, int[]> itemsByBucket;
-    private readonly Dictionary<int, List<(int Progression, int Row)>> passRowsByPool = [];
     private readonly InvestmentItemLinks[] links;
     private readonly string[] objectiveText;
     public InvestmentRoot? Root { get; }
     public InvestmentUnlocks Unlocks { get; }
-    public IReadOnlyList<InvestmentRewardPool> Pools { get; }
-    public InvestmentRewardGraph RewardGraph { get; }
     public IReadOnlyList<InvestmentProgression> Progressions { get; }
     /** Progressions with at least one reward row. Any of them may be the pass Sunrise serves, so Studio does not pick one. */
     public IReadOnlyList<InvestmentProgression> PassCandidates { get; }
     public IReadOnlyList<InvestmentObjective> Objectives { get; }
-    public InvestmentSlotRead Slot84 { get; }
     /** Bucket descriptors in table order, or none when the table cannot be read. */
     public IReadOnlyList<InvestmentBucket> Buckets { get; }
     /** Why Sunrise would refuse the whole bucket table. Studio lists the rows either way. */
@@ -132,32 +115,24 @@ public sealed partial class InvestmentTables
     public uint BucketTableClass { get; }
     public IReadOnlyList<string> Diagnostics { get; }
 
-    private InvestmentTables(InvestmentRoot? root, InvestmentUnlocks unlocks, IReadOnlyList<InvestmentRewardPool> pools,
+    private InvestmentTables(InvestmentRoot? root, InvestmentUnlocks unlocks,
         IReadOnlyList<InvestmentProgression> progressions,
-            IReadOnlyList<InvestmentObjective> objectives, InvestmentSlotRead slot84,
+            IReadOnlyList<InvestmentObjective> objectives,
         InvestmentItemLinks[] links, List<string> diagnostics, IReadOnlyList<InvestmentItem> items,
         IReadOnlyList<InvestmentBucket> buckets, IReadOnlyList<string> bucketProblems, uint bucketClass, string[] objectiveText)
     {
-        Root = root; Unlocks = unlocks; Pools = pools; Progressions = progressions; Objectives = objectives; this.objectiveText = objectiveText;
-        Slot84 = slot84;
+        Root = root; Unlocks = unlocks; Progressions = progressions; Objectives = objectives; this.objectiveText = objectiveText;
         Buckets = buckets; BucketTableProblems = bucketProblems; BucketTableClass = bucketClass;
         foreach (var bucket in buckets) bucketsById.TryAdd(bucket.Id, bucket);
         itemsByBucket = items.GroupBy(item => item.Bucket).ToDictionary(group => group.Key, group => group
             .OrderBy(item => item.Name,
                 StringComparer.OrdinalIgnoreCase).ThenBy(item => item.Index).Select(item => item.Index).ToArray());
         PassCandidates = progressions.Where(row => row.Rewards.Count != 0).ToArray();
-        RewardGraph = InvestmentRewardGraph.Build(pools, links.Select(row => row.WrapperPool).ToArray(),
-            links.Select(row => (uint)row.WrapperFlags).ToArray());
         this.links = links;
         objectiveUsers = new();
         for (int item = 0; item < links.Length; item++)
             foreach (ushort objective in links[item].Objectives.Distinct()) Add(objectiveUsers, objective, item);
-        foreach (var ladder in PassCandidates)
-            foreach (var row in ladder.Rewards)
-                if (WrapperPool((int)Math.Min(row.ItemIndex, int.MaxValue)) is >= 0 and var pool) Add(passRowsByPool,
-                    pool, (ladder.Index, row.Index));
         diagnostics.AddRange(unlocks.GraphDiagnostics);
-        foreach (var cycle in RewardGraph.Cycles.Take(ListedCycles)) diagnostics.Add($"Reward pools contain themselves: {string.Join(", ", cycle)}.");
         Diagnostics = diagnostics;
     }
 
@@ -179,15 +154,9 @@ public sealed partial class InvestmentTables
         && item < links.Length ? links[item].Shape : InvestmentPursuitShape.None;
     /** True when Sunrise would report the held item as a bounty: a pursuit with a positive installed lifetime. */
     public bool Expires(int item) => item >= 0 && item < links.Length && links[item].Expires;
-    /** Pass candidate rows whose item's wrapper opens the pool. */
-    public IReadOnlyList<(int Progression, int Row)> PassRowsOfPool(int pool) => passRowsByPool.GetValueOrDefault(pool) ?? [];
     /** The item's wrapper pool, or -1 when the item has no readable wrapper. */
     public int WrapperPool(int item) => item >= 0 && item < links.Length
         && links[item].WrapperPool != ushort.MaxValue ? links[item].WrapperPool : -1;
-    /** The flag slot the item's wrapper sets once acquired, or 0xFFFF when it names none. */
-    public ushort AcquiredFlagSlot(int item) => item >= 0 && item < links.Length ? links[item].AcquiredFlagSlot : ushort.MaxValue;
-    /** The flag slot any item names at +0xDA (package_reward_build.cpp RewardBuild::read_item), or 0xFFFF. */
-    public ushort AcquisitionFlag(int item) => item >= 0 && item < links.Length ? links[item].AcquisitionFlag : ushort.MaxValue;
     /** True when the item's wrapper opens as soon as it is acquired; false without a wrapper. */
     public bool OpensOnAcquisition(int item) => WrapperPool(item) >= 0 && (links[item].WrapperFlags & 1) != 0;
 
@@ -262,7 +231,7 @@ public sealed partial class InvestmentTables
     };
 
     /**
-     * Reads the root, unlocks, pools, progressions, objectives, objective text, buckets and slot 84 in that order. A section
+     * Reads the root, unlocks, progressions, objectives, objective text and buckets in that order. A section
      * that fails leaves a diagnostic and does not stop the next.
      * @param text Resolves a (bank, string hash) pair through the catalog's string banks.
      */
@@ -272,12 +241,10 @@ public sealed partial class InvestmentTables
         var diagnostics = new List<string>();
         token.ThrowIfCancellationRequested();
         var root = InvestmentRoot.Locate(catalog, sources.Root, out string located);
-        var omitted = new InvestmentSlotRead(InvestmentRootSlots.Slot84, 0, InvestmentSlotState.Missing, default,
-            "The investment root is unavailable.");
         if (root is null)
         {
             diagnostics.Add(located);
-            return new(null, InvestmentUnlocks.Empty, [], [], [], omitted, links, diagnostics, items, [], [], 0, []);
+            return new(null, InvestmentUnlocks.Empty, [], [], links, diagnostics, items, [], [], 0, []);
         }
         T Section<T>(string section, T fallback, Func<T> read)
         {
@@ -289,8 +256,6 @@ public sealed partial class InvestmentTables
             diagnostics.Add("The item index differs from the investment root's item table; reward item names may be wrong.");
         var unlocks = Section("Unlock slots", InvestmentUnlocks.Empty,
             () => InvestmentUnlocks.Read(root, catalog, items, diagnostics, token));
-        var pools = Section<IReadOnlyList<InvestmentRewardPool>>("Reward pools", [], () => InvestmentRewards.Read(
-            root.ReadSlot(catalog, InvestmentRootSlots.Pools, RewardPoolTable.Class), items.Count, diagnostics, token));
         var progressions = Section<IReadOnlyList<InvestmentProgression>>("Progressions", [], () => InvestmentSeasonPass.Read(
             root.ReadSlot(catalog, InvestmentRootSlots.Progressions, C80807cd9.Class), items.Count, unlocks, diagnostics, token));
         var objectives = Section<IReadOnlyList<InvestmentObjective>>("Objectives", [], () => InvestmentPursuits.ReadObjectives(
@@ -303,8 +268,7 @@ public sealed partial class InvestmentTables
             root.ReadSlotAnyClass(catalog, InvestmentRootSlots.Buckets), bucketProblems, token));
         uint bucketClass = InvestmentRootSlots.Buckets < root.SlotCount
             && catalog.TryGetEntry(root.SlotTag(InvestmentRootSlots.Buckets), out var bucketEntry) ? bucketEntry.Reference : 0;
-        var slot84 = Section("Slot 84", omitted, () => root.ReadSlot(catalog, InvestmentRootSlots.Slot84, C808078bb.Class));
-        return new(root, unlocks, pools, progressions, objectives, slot84, links, diagnostics, items, buckets,
+        return new(root, unlocks, progressions, objectives, links, diagnostics, items, buckets,
             bucketProblems, bucketClass, objectiveText);
     }
 

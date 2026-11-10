@@ -16,7 +16,7 @@ public sealed partial class InvestmentCatalog
         ReadItem(tag, bytes, investment: true, token);
 
     /**
-     * The item's fields, stats, sockets and perks without its reward wrapper and pursuit, so the read never loads the root-slot
+     * The item's fields, stats, sockets and perks without its pursuit, so the read never loads the root-slot
      * tables. Window-thread callers that edit those rows use it.
      */
     public InvestmentItemDetail ReadItemRows(uint tag, ReadOnlyMemory<byte> bytes) => ReadItem(tag,
@@ -114,14 +114,10 @@ public sealed partial class InvestmentCatalog
                     allowed.OrderBy(index => ItemName(index), StringComparer.OrdinalIgnoreCase).ToArray()));
             }
         }, "Sockets");
-        InvestmentRewardWrapper? wrapper = null; InvestmentPursuit? pursuit = null;
-        if (investment)
-        {
-            Read(() => wrapper = InvestmentRewards.ReadWrapper(bytes.Span), "Rewards");
-            Read(() => pursuit = ReadPursuit(item, bytes, token), "Objectives");
-        }
+        InvestmentPursuit? pursuit = null;
+        if (investment) Read(() => pursuit = ReadPursuit(item, bytes, token), "Objectives");
         var curves = ReadDisplayCurves(item, errors);
-        return new(item, stats, sockets, perks, fields, errors) { DisplayCurves = curves, Wrapper = wrapper, Pursuit = pursuit };
+        return new(item, stats, sockets, perks, fields, errors) { DisplayCurves = curves, Pursuit = pursuit };
     }
 
     /** Conditional cost expressions remain visible and are never labelled a final price. */

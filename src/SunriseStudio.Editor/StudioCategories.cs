@@ -7,7 +7,6 @@ namespace SunriseStudio.Editor;
 /**
  * One browser category with its own viewer; Name is the category part of a browser kind. Views counts the leading
  * Sections that are alternative primary views, and an asset has no view of the category only when none of them opens.
- * Home false keeps the category off the home view, for categories a Tables row opens.
  */
 public sealed record StudioCategory(
     string Name,
@@ -18,15 +17,7 @@ public sealed record StudioCategory(
     string[] Sections,
     bool ModelPane = false,
     Func<uint, AssetOpenContext?>? OpenContext = null,
-    int Views = 1,
-    bool Home = true);
-
-/**
- * A row of the home view's Tables group. It opens its table asset on Page and is listed while Category has rows. Tag throws
- * with the reason when the table cannot be found.
- */
-public sealed record StudioTableRow(string Label, StudioIcon Icon, string Tooltip, string Category, string Page,
-    Func<PackageCatalog, uint> Tag);
+    int Views = 1);
 
 /** Kind is "Name / Type" or "Name"; Tags join the search text; Tier >= 0 colours the row. */
 public readonly record struct StudioCategoryMatch(string Kind, string Tags = "", int Tier = -1);
@@ -34,17 +25,17 @@ public readonly record struct StudioCategoryMatch(string Kind, string Tags = "",
 /** The browser categories with a viewer. Each hook below is implemented once, in its own category file. */
 public static partial class StudioCategories
 {
-    public const string ItemsGroup = "Items", TablesGroup = "Tables", WorldGroup = "World", ContentGroup = "Content";
+    public const string ItemsGroup = "Items", WorldGroup = "World", ContentGroup = "Content";
     public const string PreviewPageId = "sunrise.preview";
     // Pages that draw the model view themselves; the model pane hides while one is shown.
     public static readonly IReadOnlySet<string> OwnViewPages = new HashSet<string>(StringComparer.Ordinal) { "sunrise.scene" };
-    private static readonly string[] Groups = [ItemsGroup, TablesGroup, WorldGroup, ContentGroup];
+    private static readonly string[] Groups = [ItemsGroup, WorldGroup, ContentGroup];
     // Both are replaced whole, never changed in place, so worker threads read them without a lock.
     private static StudioCategory[] all = [];
     private static Dictionary<string, StudioCategory> byName = new(StringComparer.Ordinal);
     private static Func<PackageEntry, StudioCategoryMatch?>[] testRules = [];
 
-    /** Items, then Tables, then World, then Content; registration order within a group. */
+    /** Items, then World, then Content; registration order within a group. */
     public static IReadOnlyList<StudioCategory> All => all;
 
     static StudioCategories()

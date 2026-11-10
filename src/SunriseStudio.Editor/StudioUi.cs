@@ -133,18 +133,4 @@ public static class StudioUi
         }
         return text[..low].TrimEnd() + "...";
     }
-
-    /** The text, or "..." and its longest ending that fits, for labels whose last word tells them apart. */
-    internal static string FitTail(string text, float width)
-    {
-        if (width <= 0 || ImGui.CalcTextSize(text).X <= width) return text;
-        int low = 0, high = text.Length;
-        while (low < high)
-        {
-            int middle = (low + high + 1) / 2;
-            if (ImGui.CalcTextSize("..." + text[^middle..]).X <= width) low = middle;
-            else high = middle - 1;
-        }
-        return "..." + text[^low..].TrimStart();
-    }
 }
