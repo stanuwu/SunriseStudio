@@ -45,8 +45,8 @@ internal static class InvestmentDraftChecks
             else
             {
                 var stat = catalog.ReadItem(tag, workspace.Document!.Bytes).Stats[0];
-                Invoke("BeginEdit", context, stat.Field); Set("editValue", "99");
-                save = "SaveEditDraft"; draft = "editingDocument";
+                Invoke("BeginEdit", context, stat.Field); Set("popup.Value", "99");
+                save = "SaveEditDraft"; draft = "popup.Document";
             }
             var document = workspace.Document;
             byte[] original = document!.Bytes.ToArray(), manifest = File.ReadAllBytes(workspace.Project!.ManifestPath);
@@ -56,7 +56,7 @@ internal static class InvestmentDraftChecks
             Check(workspace.Error.Length != 0 && ReferenceEquals(Get(draft), document), kind + " save failure discarded its draft.");
             Check((kind == "cost" && (string)Get("costQuantity")! == "325")
                 || (kind == "row" && (int)Get("rowIndex")! == 0 && (int)Get("rowValue")! == 99)
-                || (kind == "field" && (string)Get("editValue")! == "99"), kind + " failed save changed its entered values.");
+                || (kind == "field" && (string)Get("popup.Value")! == "99"), kind + " failed save changed its entered values.");
             Check(workspace.Project.Changes.Count == 0 && !workspace.CanUndo && Files().SequenceEqual(files)
                 && File.ReadAllBytes(workspace.Project.ManifestPath).AsSpan().SequenceEqual(manifest)
                 && workspace.Catalog!.Read(tag).AsSpan().SequenceEqual(original), kind + " failed save published partial data.");
@@ -73,8 +73,17 @@ internal static class InvestmentDraftChecks
             Console.WriteLine($"investment_draft kind={kind} failure=retained retry=pass undo=pass redo=pass source=unchanged");
 
             object? Invoke(string method, params object[] arguments) => typeof(InvestmentPage).GetMethod(method, Private)!.Invoke(page, arguments);
-            void Set(string name, object value) => typeof(InvestmentPage).GetField(name, Private)!.SetValue(page, value);
-            object? Get(string name) => typeof(InvestmentPage).GetField(name, Private)!.GetValue(page);
+            // "popup.Name" reaches a property of the page's field popup.
+            void Set(string name, object value)
+            {
+                if (!name.StartsWith("popup.", StringComparison.Ordinal)) typeof(InvestmentPage).GetField(name,
+                    Private)!.SetValue(page, value);
+                else Popup().GetType().GetProperty(name[6..])!.SetValue(Popup(), value);
+            }
+            object? Get(string name) => name.StartsWith("popup.", StringComparison.Ordinal)
+                ? Popup().GetType().GetProperty(name[6..])!.GetValue(Popup()) : typeof(InvestmentPage).GetField(name,
+                    Private)!.GetValue(page);
+            object Popup() => typeof(InvestmentPage).GetField("popup", Private)!.GetValue(page)!;
             string[] Files() => Directory.GetFiles(workspace.Project!.DirectoryPath, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToArray();
         }
     }

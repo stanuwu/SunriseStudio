@@ -39,16 +39,18 @@ internal static class InvestmentUiChecks
             var page = form.Pages.Pages.OfType<InvestmentPage>().Single();
             var context = new StudioPageContext(work, form.SceneViewport!, _ => { });
             void Row() => typeof(InvestmentPage).GetMethod("BeginRow", access)!.Invoke(page, [context, false]);
+            object Popup() => typeof(InvestmentPage).GetField("popup", access)!.GetValue(page)!;
             switch (phase)
             {
                 case 0:
                     count = detail.Stats.Count;
                     typeof(InvestmentPage).GetMethod("BeginEdit", access)!.Invoke(page, [context, detail.Stats[0].Field]);
-                    typeof(InvestmentPage).GetField("editValue", access)!.SetValue(page, "123");
+                    Popup().GetType().GetProperty("Value")!.SetValue(Popup(), "123");
                     phase++; break;
                 case 1: work.OpenProject(two.ManifestPath); phase++; break;
                 case 2:
-                    Check(typeof(InvestmentPage).GetField("editing", access)!.GetValue(page) is null, "Old field draft survived a project switch.");
+                    Check(Popup().GetType().GetProperty("Field")!.GetValue(Popup()) is null,
+                        "Old field draft survived a project switch.");
                     Check(work.Project!.Changes.Count == 0, "Old draft changed the second project.");
                     Row(); phase++; break;
                 case 3: work.OpenProject(one.ManifestPath); phase++; break;

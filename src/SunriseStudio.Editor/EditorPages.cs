@@ -2,15 +2,23 @@ using System.Globalization;
 using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Formats;
+using SunriseStudio.Rendering;
 using SunriseStudio.Scene;
 using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
-/** ExportFullAsset asks for a folder, then exports the open asset to Blender; null where no export applies. */
+/**
+ * ExportFullAsset asks for a folder, then exports the open asset to Blender; null where no export applies.
+ * ShowPage(page, row) focuses a page of the open document on the next draw, so a page that opens another asset can land on
+ * one of its pages. The row is chosen when that page draws, and a null row keeps the page's own choice.
+ * Live opens the Live tab's investment section from an asset page. It is null where Live cannot be shown.
+ * Icons is the window's item icon cache, or null where none is prepared.
+ */
 public sealed record StudioPageContext(StudioWorkspace Workspace, AssetViewport Viewport,
     Action<AssetProperty> SelectProperty, Action<MeshInstance>? SelectMesh = null,
-    MeshInstance? SelectedMesh = null, ImFontPtr MonospaceFont = default, Action? ExportFullAsset = null);
+    MeshInstance? SelectedMesh = null, ImFontPtr MonospaceFont = default, Action? ExportFullAsset = null,
+    Action<string, string?>? ShowPage = null, StudioLiveLink? Live = null, InvestmentIconCache? Icons = null);
 
 public interface IStudioPage
 {
@@ -18,6 +26,22 @@ public interface IStudioPage
     string Title { get; }
     bool CanOpen(StudioDocument document);
     void Draw(StudioPageContext context);
+}
+
+/**
+ * A page whose chosen row the navigation history records. Row is the page's own id for the chosen row, or null when nothing
+ * is chosen. ShowRow chooses a recorded or linked row, just before the page draws.
+ */
+public interface IStudioRowPage
+{
+    string? Row { get; }
+    void ShowRow(string row);
+}
+
+/** A page that uploads textures between frames, before ImGui borrows their views. */
+internal interface IFramePreparedPage
+{
+    void PrepareFrame(StudioWorkspace workspace, Dx11Renderer renderer);
 }
 
 /** Registration order is tab order; pages keep their own transient UI state. */
@@ -40,6 +64,10 @@ public sealed class StudioPageRegistry
         Register(new PropertiesPage());
         Register(new ReferencesPage());
         Register(new HexPage());
+        Register(new BucketsPage(), first: true);
+        Register(new SeasonPassPage(), first: true);
+        Register(new PursuitPage(), first: true);
+        Register(new QuestPage(), first: true);
         Register(new InvestmentPage(), first: true);
         Register(new WeaponPage(), first: true);
         Register(new PerkBehaviorPage(), first: true);

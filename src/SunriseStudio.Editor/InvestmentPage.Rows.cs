@@ -17,9 +17,7 @@ public sealed partial class InvestmentPage
     private void InvalidateDrafts(StudioWorkspace workspace)
     {
         InvalidateCostDraft(workspace);
-        if (editingDocument is not null && (!ReferenceEquals(editingDocument, workspace.Document)
-            || !ReferenceEquals(editingProject, workspace.Project) || editingOverlayRevision != workspace.Catalog?.OverlayRevision))
-            ClearEdit();
+        popup.Invalidate(workspace);
         if (rowDocument is not null && (!ReferenceEquals(rowDocument, workspace.Document)
             || !ReferenceEquals(rowProject, workspace.Project) || rowOverlayRevision != workspace.Catalog?.OverlayRevision))
             ClearRow();

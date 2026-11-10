@@ -17,6 +17,8 @@ Mod Editor for Sunrise
 - Edit mission scripts as graphs
 - Export to Blender, Import from Blender, Rebuild from Blender edits
 - Attach to Sunrise with live cui or inworld view
+- Attach to a running game in Live to see its inventory, pursuits and season pass, grant items and set quantities, XP,
+  claims and pursuit objective progress
 - Build and install projects as Sunrise mods
 
 ## Alpha

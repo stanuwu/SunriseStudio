@@ -172,6 +172,9 @@ public sealed partial class AssetViewport
         Array.Resize(ref nativeHandleOffsets, count + 1); Array.Resize(ref itemKinds, count);
         Array.Resize(ref markerLineStarts, count); Array.Resize(ref backdropItems, count); Array.Resize(ref itemBubbles, count);
         Array.Resize(ref itemLod, count);
+        // Runtime slots get no decorator LOD test (-1), so CollectVisible never drops them for decorator LOD.
+        int indexed = itemDecorators.Length;
+        Array.Resize(ref itemDecorators, count); Array.Fill(itemDecorators, -1, indexed, count - indexed);
         var extra = new List<int>();
         for (int index = firstIndex; index < count; index++)
         {

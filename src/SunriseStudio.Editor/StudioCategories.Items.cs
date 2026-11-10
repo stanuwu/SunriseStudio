@@ -11,6 +11,13 @@ public static partial class StudioCategories
 {
     internal const string VendorsName = "Vendors", PerksName = "Perks";
     private static readonly string[] ItemSections = ["sunrise.investment", "sunrise.related"];
+    // Categories follow the type line rather than the pursuit's shape, so Quests and Bounties both list both pursuit pages.
+    // Either page counts as the category's view.
+    private static readonly string[] QuestSections = [QuestPage.PageId, PursuitPage.PageId, "sunrise.investment",
+        "sunrise.related"];
+    private static readonly string[] BountySections = [PursuitPage.PageId, QuestPage.PageId, "sunrise.investment",
+        "sunrise.related"];
+    private const int PursuitViews = 2;
     // One shared kind string per category and type; item and content rows repeat a few hundred kinds.
     private static readonly ConcurrentDictionary<(string Category, string Type), string> ItemKinds = new();
 
@@ -49,7 +56,10 @@ public static partial class StudioCategories
             var (icon, tooltip) = ItemLooks.TryGetValue(name, out var look) ? look : (StudioIcon.Cube, name);
             bool model = name is InvestmentItemKinds.Armor or InvestmentItemKinds.Ghosts
                 or InvestmentItemKinds.Vehicles or InvestmentItemKinds.Ships;
-            categories.Add(new(name, name, ItemsGroup, icon, tooltip, ItemSections, ModelPane: model));
+            bool pursuits = name is InvestmentItemKinds.Quests or InvestmentItemKinds.Bounties;
+            var sections = name == InvestmentItemKinds.Quests ? QuestSections : name == InvestmentItemKinds.Bounties ? BountySections : ItemSections;
+            categories.Add(new(name, name, ItemsGroup, icon, tooltip, sections, ModelPane: model,
+                Views: pursuits ? PursuitViews : 1));
         }
         categories.Add(new(VendorsName, VendorsName, ItemsGroup, StudioIcon.Group, "Vendors and what they sell", ItemSections));
         categories.Add(new(PerksName, PerksName, ItemsGroup, StudioIcon.Build, "Perk gameplay programs",

@@ -9,6 +9,10 @@ public static class StudioTheme
     public static readonly Vector4 Muted = new(0.48f, 0.53f, 0.61f, 1);
     public static readonly Vector4 Canvas = new(0.035f, 0.043f, 0.058f, 1);
     public static readonly Vector4 Panel = new(0.068f, 0.080f, 0.104f, 1);
+    /** Status colours: done or connected, needs attention, failed or refused. */
+    public static readonly Vector4 Good = new(.45f, .85f, .5f, 1);
+    public static readonly Vector4 Caution = new(1, .75f, .35f, 1);
+    public static readonly Vector4 Failure = new(1, .45f, .35f, 1);
 
     /** Item name colour by rarity tier: 2 uncommon, 3 rare, 4 legendary, 5 exotic; others are plain. */
     public static Vector4 Rarity(int tier) => tier switch
