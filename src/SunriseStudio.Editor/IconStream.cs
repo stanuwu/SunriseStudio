@@ -122,11 +122,12 @@ internal sealed class IconStream<TImage, TTexture> : IDisposable where TImage : 
             if (start) Task.Run(Drain);
         }
 
-        public List<(int Item, TImage? Image)> Take()
+        /** The results read since the last call. The worker never touches the returned collection again. */
+        public IReadOnlyList<(int Item, TImage? Image)> Take()
         {
             lock (gate)
             {
-                if (results.Count == 0) return results;
+                if (results.Count == 0) return [];
                 var done = results; results = [];
                 foreach (var (item, _) in done) taken.Remove(item);
                 return done;

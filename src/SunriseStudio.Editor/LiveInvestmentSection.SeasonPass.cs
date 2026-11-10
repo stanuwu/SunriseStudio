@@ -146,15 +146,24 @@ internal sealed partial class LiveInvestmentSection
     {
         if (shownLive is not { } states || rows.Count == 0) return;
         var live = workspace.LiveInvestment;
-        var row = rows.Where(index => index < states.Count).Select(index => states[index])
-            .OrderByDescending(state => state.Flags.HasFlag(LiveSeasonPassRowFlags.ConditionMet)).FirstOrDefault();
+        // The cell shows its first row whose condition the game met, else its first row the game reports.
+        LiveSeasonPassRow? row = null;
+        bool waiting = false;
+        for (int at = 0; at < rows.Count; at++)
+        {
+            int index = rows[at];
+            waiting |= live.PendingFor(LiveAction.PassRowKey(index));
+            if (index >= states.Count) continue;
+            bool met = states[index].Flags.HasFlag(LiveSeasonPassRowFlags.ConditionMet);
+            if (row is null || met && !row.Flags.HasFlag(LiveSeasonPassRowFlags.ConditionMet)) row = states[index];
+        }
         if (row is null) return;
         var draw = ImGui.GetWindowDrawList();
         float rounding = ImGui.GetStyle().FrameRounding, mark = ImGui.GetTextLineHeight() * .8f;
         if (!row.Flags.HasFlag(LiveSeasonPassRowFlags.RankMet))
             draw.AddRectFilled(min, max, ImGui.GetColorU32(Unreached), rounding);
         else if (Claimable(row) && !chosen) draw.AddRect(min, max, ImGui.GetColorU32(StudioTheme.Accent), rounding);
-        if (rows.Any(index => live.LastFor(LiveAction.PassRowKey(index))?.Pending == true))
+        if (waiting)
             draw.AddText(new(min.X + 2, max.Y - ImGui.GetTextLineHeight()), ImGui.GetColorU32(StudioTheme.Caution), "...");
         else if (Owned(row))
             ImGuiIcons.Draw(draw, StudioIcon.Check, new(max.X - mark - 2, max.Y - mark - 2), mark,
@@ -166,7 +175,7 @@ internal sealed partial class LiveInvestmentSection
         InvestmentTables tables, InvestmentProgression shown,
         SeasonPassGrid.Ladder ladder)
     {
-        var rows = passGrid.SelectedRows(shown, ladder);
+        var rows = passGrid.SelectedRows(ladder);
         if (rows.Count == 0) { ImGui.TextDisabled("Choose a reward to see its claim."); return; }
         const string open = "Open in Season pass";
         ImGui.AlignTextToFramePadding();

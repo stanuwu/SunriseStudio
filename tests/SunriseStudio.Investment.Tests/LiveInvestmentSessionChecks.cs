@@ -2,6 +2,7 @@ using System.Diagnostics;
 using SunriseStudio.Editor;
 using SunriseStudio.Formats;
 using SunriseStudio.Live;
+using SunriseStudio.Packages;
 using SunriseStudio.Viewport;
 
 /** The workspace's investment session against a scripted game: what it reads, drops, sends and never sends again. */
@@ -109,9 +110,19 @@ internal static class LiveInvestmentSessionChecks
         Answer(session, fake, now, FakeInvestmentLink.Receipt(refused.Identity, LiveReceiptState.Refused, "rank"),
             $"claim {refused.Identity.Id:X16}");
         Check(refused.Phase == LiveOperationPhase.Refused, "A refused receipt did not refuse the operation.");
+        // An acknowledgement that fails is noted beside the refusal's own reason and asked again.
+        const string unanswered = "The game did not answer within 5 seconds.";
+        now += LiveInvestmentConnection.ReceiptPollMilliseconds;
+        Check(Next(session, fake, now) == $"ack {refused.Identity.Id:X16}", "A refused receipt was not acknowledged.");
+        fake.Fail(new TimeoutException(unanswered));
+        Settle(session, now);
+        Check(refused is { Phase: LiveOperationPhase.Refused, Details: "rank", ReadError: unanswered }
+            && LiveOperationLine.Tooltip(refused).EndsWith("rank\nResult not read: " + unanswered, StringComparison.Ordinal),
+            "A failed acknowledgement replaced the refusal's reason: " + LiveOperationLine.Tooltip(refused));
         now += LiveInvestmentConnection.ReceiptPollMilliseconds;
         Answer(session, fake, now, FakeInvestmentLink.Receipt(refused.Identity, LiveReceiptState.Refused, "rank"),
             $"ack {refused.Identity.Id:X16}");
+        Check(refused is { Details: "rank", ReadError: "" }, "An acknowledged receipt kept the failed read's note.");
         var unwritten = session.Submit(new LiveResetPassClaim(3, ItemHash, "Fixture rifle"));
         Check(Next(session, fake, now) == $"reset {unwritten.Identity.Id:X16}", "The reset was not sent.");
         fake.Fail(new LiveInvestmentNotSentException("The game did not open the investment link.", new TimeoutException()));
@@ -149,12 +160,14 @@ internal static class LiveInvestmentSessionChecks
             "Attach kept the silent game's link.");
         Reconnected(session, fake, answering, cut, ref now);
 
-        // A link that closes is lost, and nothing is opened again.
+        // A link that closes is lost with the link's own reason, and nothing is opened again.
+        const string failure = "The investment link failed: fixture.";
+        answering.Diagnostic = failure;
         answering.State = LiveInvestmentLinkState.Closed;
         session.Poll(now);
-        Check(session.State == LiveInvestmentState.Lost
-            && session.StateText == LiveInvestmentSession.GameClosed && answering.Disposed,
-            "A closed game was not lost.");
+        Check(session.State == LiveInvestmentState.Lost && session.StateText == failure && answering.Disposed
+            && LiveGate.Missing(session, session.Inventory, LiveNeed.Inventory)?.Tip.StartsWith(failure, StringComparison.Ordinal) == true,
+            "A closed link was not lost, or lost its reason.");
         int lostOpens = opened.Count;
         now += 10 * LiveInvestmentSession.RefreshMilliseconds;
         session.Poll(now);
@@ -177,7 +190,114 @@ internal static class LiveInvestmentSessionChecks
         HeldIndex();
         HeldActions();
         NoCharacter();
+        StoppedAnswering();
+        CompleteAllBounties();
+        SharedLimits();
     }
+
+    /**
+     * A game that stops answering Hello is shown as not answering with the error, keeps its last snapshot and is asked only
+     * Hello, at the refresh pace, until one succeeds. A view whose own read fails keeps its snapshot beside the error.
+     */
+    private static void StoppedAnswering()
+    {
+        const string unanswered = "The game did not answer within 5 seconds.";
+        var (session, fake, workspace) = Connected(Hello(Bound, 2, Ready, Owned));
+        using var owner = workspace;
+        long now = 10_000;
+        session.Want(LiveViewKind.Inventory);
+        Answer(session, fake, now, Inventory(Bound, 5), "inventory");
+
+        // A failed view read alone leaves the link connected, with the old snapshot and the error for the status line.
+        now += LiveInvestmentSession.RefreshMilliseconds;
+        session.Poll(now);
+        session.Want(LiveViewKind.Inventory);
+        Answer(session, fake, now, Hello(Bound, 2, Ready, Owned), "hello");
+        Check(Next(session, fake, now) == "inventory", "A drawn inventory was not read again.");
+        fake.Fail(new InvalidOperationException("The game is still reading items."));
+        Settle(session, now);
+        Check(session.Connected && session.Inventory.Value?.Items.Single().Quantity == 5
+            && LiveGate.Missing(session, session.Inventory, LiveNeed.Inventory) is null
+            && LiveGate.Stale(session).SequenceEqual([(LiveNeed.Inventory, "The game is still reading items.")]),
+            "A failed read dropped the last snapshot or hid its error.");
+
+        now += LiveInvestmentSession.RefreshMilliseconds;
+        session.Poll(now);
+        session.Want(LiveViewKind.Inventory);
+        Check(Next(session, fake, now) == "hello", "A drawn view did not keep the game's identity fresh.");
+        fake.Fail(new TimeoutException(unanswered));
+        Settle(session, now);
+        Check(session is { State: LiveInvestmentState.NoAnswer, Connected: false, StateText: unanswered }
+            && session.Inventory.Value is not null
+            && session.Blocked(LiveAction.ItemKey(ItemHash)) == "The game is not connected."
+            && LiveGate.Missing(session, session.Inventory, LiveNeed.Inventory) is ("The game is not answering.", unanswered),
+            "A game that stopped answering stayed connected, or lost its last snapshot.");
+        session.Want(LiveViewKind.Inventory);
+        Quiet(session, fake, now, "A game that stopped answering was asked again before a refresh.");
+        now += LiveInvestmentSession.RefreshMilliseconds;
+        session.Want(LiveViewKind.Inventory);
+        Answer(session, fake, now, Hello(Bound, 2, Ready, Owned), "hello");
+        Check(session is { Connected: true, StateText: "" } && session.Inventory.Value is not null,
+            "A game that answered again was not connected again.");
+        session.Want(LiveViewKind.Inventory);
+        Answer(session, fake, now, Inventory(Bound, 6), "inventory");
+        Check(session.Inventory.Value?.Items.Single().Quantity == 6 && !LiveGate.Stale(session).Any(),
+            "The view was not read again once the game answered, or kept its error.");
+        Console.WriteLine("investment_live_silence view_error=kept_beside_data hello_error=no_answer retry=hello_only recovery=reads");
+    }
+
+    /**
+     * Complete all asks once per open bounty. A copy whose request still waits is left out of the next press, and the
+     * confirmation closes when the game's character changes.
+     */
+    private static void CompleteAllBounties()
+    {
+        const ulong first = 0x4000000000000201, second = 0x4000000000000202, done = 0x4000000000000203;
+        var (session, fake, workspace) = Connected(Hello(Bound, 2, Ready, Owned));
+        using var owner = workspace;
+        using var section = new LiveInvestmentSection(workspace);
+        long now = 10_000;
+        LiveHeldPursuit Bounty(ulong instance, LivePursuitFlags state) => new(instance, ItemHash, 3, 0,
+            LivePursuitFlags.Bounty | LivePursuitFlags.ObjectivesKnown | state, [new(0x11, 0, 1, LivePursuitObjectiveFlags.Known)]);
+        var pursuits = new LivePursuitSnapshot(Bound, [Bounty(first, LivePursuitFlags.None),
+            Bounty(second, LivePursuitFlags.None), Bounty(done, LivePursuitFlags.ObjectivesComplete)]);
+        var rows = pursuits.Held.Select(held => new LiveHeld(LiveInventoryScope.CharacterItem, held.Instance, held.ItemHash, 1,
+            held.MutationSerial, InvestmentPursuits.PursuitBucket, false));
+        var bounties = LiveInvestmentSection.PursuitCards(null, null, rows, pursuits).Bounties;
+        ulong[] Open() => [.. LiveInvestmentSection.OpenBounties(session, bounties).Select(held => held.Instance)];
+        var open = LiveInvestmentSection.OpenBounties(session, bounties);
+        Check(Open().SequenceEqual([first, second]) && section.OpenCompleteAll(session, open)
+            && ReferenceEquals(section.CompleteAllOpen(session), open),
+            "Complete all did not open on exactly the bounties still open.");
+        var sent = section.CompleteAll(session, null, open);
+        Check(sent.Select(operation => ((LiveCompleteObjectives)operation.Action).Held.Instance).SequenceEqual([first, second])
+            && Open().Length == 0 && section.CompleteAllRefusal([]) == "No held bounty is left to complete."
+            && !section.OpenCompleteAll(session, LiveInvestmentSection.OpenBounties(session, bounties))
+            && section.CompleteAll(session, null, open).Count == 0 && session.Operations.Count == 2,
+            "A second Complete all repeated a request that still waits.");
+        // The pursuit snapshot still reports a finished copy open until it is read again, so that copy can be asked again.
+        Answer(session, fake, now, FakeInvestmentLink.Receipt(sent[0].Identity, LiveReceiptState.Published),
+            $"complete {sent[0].Identity.Id:X16}");
+        Check(Open().SequenceEqual([first]), "A copy whose request finished stayed left out, or a waiting one came back.");
+        Answer(session, fake, now, FakeInvestmentLink.Receipt(sent[1].Identity, LiveReceiptState.Published),
+            $"complete {sent[1].Identity.Id:X16}");
+        now += LiveInvestmentConnection.ReceiptPollMilliseconds;
+        foreach (var operation in sent)
+            Answer(session, fake, now, FakeInvestmentLink.Receipt(operation.Identity, LiveReceiptState.Published),
+                $"ack {operation.Identity.Id:X16}");
+
+        Check(section.OpenCompleteAll(session, LiveInvestmentSection.OpenBounties(session, bounties))
+            && section.CompleteAllOpen(session) is not null, "Complete all did not open again.");
+        Rehello(session, fake, ref now, Hello(Bound with { CharacterSoid = Hunter }, 1, Ready, Owned));
+        Check(section.CompleteAllOpen(session) is null, "Complete all's confirmation outlived a character change.");
+        Console.WriteLine("investment_live_complete_all open=once pending=left_out character_change=closed");
+    }
+
+    /** The link and the package readers each name these Sunrise limits, and Studio joins rows across the two. */
+    private static void SharedLimits() =>
+        Check(LiveInvestmentProtocol.PursuitObjectiveCapacity == InvestmentItemKinds.PursuitObjectiveCapacity
+            && LiveInvestmentProtocol.NoBucket == InvestmentItemKinds.NoBucket,
+            "The link and the package readers disagree on a pursuit's objective capacity or the no-bucket id.");
 
     /** Saved row reads: nine to a request while drawn, never without the command, and dropped with the character or a finished operation. */
     private static void Unlocks()
@@ -514,7 +634,6 @@ internal static class LiveInvestmentSessionChecks
             "Two stacks of one item in different buckets read as one row.");
         // Nothing draws the inventory from here on, so a finished change does not read it again.
         session.Inventory.WantedUntil = 0;
-        var keys = new HashSet<string>();
         foreach (var chosen in stacks)
         {
             session.Selected = chosen;
@@ -528,12 +647,10 @@ internal static class LiveInvestmentSessionChecks
             Check(fake.Sent[^1].Is("quantity", LiveInventoryScope.CharacterStack, 0UL, ammo, chosen.MutationSerial,
                 chosen.Quantity, chosen.Quantity + 1),
                 $"Editing the stack in bucket {chosen.BucketId} sent {fake.Sent[^1]}.");
-            keys.Add($"{chosen.MutationSerial}");
             now += LiveInvestmentConnection.ReceiptPollMilliseconds;
             Answer(session, fake, now, FakeInvestmentLink.Receipt(sent.Identity, LiveReceiptState.Published),
                 $"ack {sent.Identity.Id:X16}");
         }
-        Check(keys.Count == 2, "Both choices edited the same stack.");
 
         // Detach before an action is sent: it is marked not sent, and the game never receives it.
         var unsent = session.Submit(new LiveGrantItem(ammo, "Fixture item", 1));

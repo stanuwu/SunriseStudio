@@ -112,13 +112,28 @@ internal static class LiveGate
     public static (string Text, string Tip) NotLinked(LiveInvestmentSession live, string see) =>
         Unlinked(live, $"Live shows {see} once a game is attached.");
 
-    /** The line shown while no game answers, with what to do as its tooltip. detached is the tooltip while none is attached. */
+    /**
+     * The drawn areas that still show an earlier snapshot because their last read failed, each with the read's error. The
+     * link status names them, since the areas themselves keep drawing their data.
+     */
+    public static IEnumerable<(LiveNeed Need, string Error)> Stale(LiveInvestmentSession live)
+    {
+        if (live.StaleError(live.Inventory) is { Length: > 0 } inventory) yield return (LiveNeed.Inventory, inventory);
+        if (live.StaleError(live.SeasonPass) is { Length: > 0 } pass) yield return (LiveNeed.SeasonPass, pass);
+        if (live.StaleError(live.Pursuits) is { Length: > 0 } pursuits) yield return (LiveNeed.Pursuits, pursuits);
+        if (live.StaleUnlockError is { Length: > 0 } unlocks) yield return (LiveNeed.Unlocks, unlocks);
+    }
+
+    /**
+     * The line shown while no game answers, with what to do as its tooltip. detached is the tooltip while none is attached.
+     * A game that has never answered needs the attach setting; one that stopped answering shows the failed Hello's error.
+     */
     private static (string Text, string Tip) Unlinked(LiveInvestmentSession live, string detached) => live.State switch
     {
         LiveInvestmentState.Connecting => ("Connecting to the game.", live.StateText),
-        LiveInvestmentState.NoAnswer => ("The game is not answering.", AttachHelp),
+        LiveInvestmentState.NoAnswer => ("The game is not answering.", live.Hello is null ? AttachHelp : live.StateText),
         LiveInvestmentState.Unsupported => ("The game's link version differs.", live.StateText),
-        LiveInvestmentState.Lost => (AttachSentence, (LiveInvestmentSession.GameClosed + " " + detached).TrimEnd()),
+        LiveInvestmentState.Lost => (AttachSentence, (live.StateText + " " + detached).TrimEnd()),
         LiveInvestmentState.Detached when live.OpenFailed => ("The investment link did not open.", live.StateText),
         _ => (AttachSentence, detached)
     };

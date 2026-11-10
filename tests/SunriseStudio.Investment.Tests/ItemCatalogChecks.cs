@@ -31,19 +31,23 @@ internal static class ItemCatalogChecks
         Check(Listed().Length == 0, "A row was listed without every search word.");
         view.Search = "";
 
-        // Every order keeps the same rows: installed, by name, rarity first, or type first.
-        var byName = StringComparer.CurrentCultureIgnoreCase;
-        (ItemSort Sort, InvestmentItem[] Expected)[] orders =
+        // Four items whose name, tier and type each give another order than their index, so every order is its own sequence.
+        static InvestmentItem Mixed(int index, string name, string type, byte tier) =>
+            new(index, (uint)index, 0, 0, name, type, "", 0, tier, 1, false);
+        InvestmentItem[] mixed = [Mixed(0, "Cedar", "Rifle", 5), Mixed(1, "birch", "Bow", 2), Mixed(2, "Aspen", "rifle", 2),
+            Mixed(3, "Dogwood", "Bow", 4)];
+        (ItemSort Sort, int[] Expected)[] orders =
         [
-            (ItemSort.Catalog, [.. catalog.Items]),
-            (ItemSort.Name, [.. catalog.Items.OrderBy(row => row.Name, byName)]),
-            (ItemSort.Rarity, [.. catalog.Items.OrderByDescending(row => row.Tier).ThenBy(row => row.Name, byName)]),
-            (ItemSort.Type, [.. catalog.Items.OrderBy(row => row.TypeName, byName).ThenBy(row => row.Name, byName)])
+            (ItemSort.Catalog, [0, 1, 2, 3]), (ItemSort.Name, [2, 1, 0, 3]), (ItemSort.Rarity, [0, 3, 2, 1]),
+            (ItemSort.Type, [1, 3, 2, 0])
         ];
         foreach (var (sort, expected) in orders)
         {
+            int[] listed = [.. ItemCatalogView.Ordered(mixed, sort).Select(row => row.Index)];
+            Check(listed.SequenceEqual(expected), $"Sorting by {sort} listed items {string.Join(", ", listed)}.");
+            // The view lists every row of the catalog in each order.
             view.Sort = sort;
-            Check(Listed().SequenceEqual(expected), $"Sorting by {sort} listed the rows out of order.");
+            Check(Listed().Length == catalog.Items.Count, $"Sorting by {sort} dropped or repeated a row.");
         }
         view.Sort = ItemSort.Catalog;
 

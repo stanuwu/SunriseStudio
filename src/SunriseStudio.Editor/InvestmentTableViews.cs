@@ -1,7 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using ImGuiNET;
 using SunriseStudio.Formats;
-using SunriseStudio.Live;
 using SunriseStudio.Packages;
 
 namespace SunriseStudio.Editor;
@@ -90,6 +89,19 @@ internal sealed class InvestmentTablesLoader
         if (workspace.Error.Length != 0) ImGui.TextWrapped(workspace.Error);
         if (ImGui.Button("Retry")) retry();
     }
+
+    /**
+     * Requests the open document's item detail and, until it is read, draws the reading line or the last error with Retry.
+     * @return True once the detail belongs to the open document.
+     */
+    public static bool DetailReady(StudioWorkspace workspace)
+    {
+        workspace.RequestInvestmentDetail();
+        if (workspace.InvestmentDetailCurrent) return true;
+        if (workspace.IsBusy) ImGui.TextDisabled("Reading item");
+        else Failed(workspace, workspace.RetryInvestmentDetail);
+        return false;
+    }
 }
 
 /** Marks table fields whose project bytes differ from the installation. */
@@ -139,9 +151,12 @@ internal static class InvestmentTableViews
     public static string ConditionTip(InvestmentUnlocks unlocks, InvestmentExpression condition) =>
         string.Join("\n", unlocks.Problems(condition).Prepend(unlocks.Format(condition)));
 
-    /** The name of a table's item index: "No item" for the absent index, or "Item 9001 (unreadable)" when no item has it. */
-    public static string ItemLabel(InvestmentCatalog catalog, int item) => item == ushort.MaxValue ? "No item"
-        : item >= 0 && item < catalog.Items.Count ? catalog.Items[item].Name : $"Item {item} (unreadable)";
+    /**
+     * The catalog's name for a table's item index, with "No item" for the absent index and "(unreadable)" after an index
+     * no item has.
+     */
+    public static string ItemLabel(InvestmentCatalog catalog, int item) => item == InvestmentCatalog.Absent ? "No item"
+        : catalog.ItemName(item) + (item >= 0 && item < catalog.Items.Count ? "" : " (unreadable)");
 
     /** An objective's description, or its hash when it has none. The tooltip names its index and hash. */
     public static (string Text, string Tip) ObjectiveName(InvestmentTables tables, InvestmentObjective objective)
@@ -188,17 +203,6 @@ internal static class InvestmentTableViews
     /** "1 day" or "3 days". Pass plural for a noun that does not take a plain "s". */
     public static string Count(long count, string noun, string? plural = null) =>
         count == 1 ? $"1 {noun}" : $"{count:N0} {plural ?? noun + "s"}";
-
-    /** "2 of 3 objectives" when the objectives are known, otherwise "progress unknown". */
-    public static string PursuitStatus(LiveHeldPursuit held) => held.Flags.HasFlag(LivePursuitFlags.ObjectivesKnown)
-        ? $"{held.Objectives.Count(row => row.Flags.HasFlag(LivePursuitObjectiveFlags.Complete))} of {held.Objectives.Count} objectives"
-        : "progress unknown";
-
-    /** The saved item state bit of a tracked item (Sunrise state/account/inventory/item_state.h kTrackedItemFlag). */
-    private const uint TrackedItemFlag = 0x2;
-
-    /** True when the player tracks this held pursuit, from its saved item flags. */
-    public static bool Tracked(LiveHeldPursuit held) => (held.ItemFlags & TrackedItemFlag) != 0;
 
     /** The width of an InputInt that fits widest and its two step buttons. */
     public static float InputWidth(string widest) => ImGui.CalcTextSize(widest).X + 2 * ImGui.GetStyle().FramePadding.X

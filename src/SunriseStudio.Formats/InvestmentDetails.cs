@@ -8,21 +8,18 @@ namespace SunriseStudio.Formats;
 
 public sealed partial class InvestmentCatalog
 {
-    /**
-     * Detail rows keep exact byte offsets so edits never resize native arrays.
-     * Reading a pursuit loads the root-slot tables once per catalog, on the caller's worker.
-     */
-    public InvestmentItemDetail ReadItem(uint tag, ReadOnlyMemory<byte> bytes, CancellationToken token = default) =>
-        ReadItem(tag, bytes, investment: true, token);
+    /** Detail rows keep exact byte offsets so edits never resize native arrays. */
+    public InvestmentItemDetail ReadItem(uint tag, ReadOnlyMemory<byte> bytes) =>
+        ReadItem(tag, bytes, withPursuit: false, default);
 
     /**
-     * The item's fields, stats, sockets and perks without its pursuit, so the read never loads the root-slot
-     * tables. Window-thread callers that edit those rows use it.
+     * The item's detail with its pursuit: the objective block, quest chain, reward previews and lifetime. Reading a pursuit
+     * loads the root-slot tables once per catalog, on the caller's worker.
      */
-    public InvestmentItemDetail ReadItemRows(uint tag, ReadOnlyMemory<byte> bytes) => ReadItem(tag,
-        bytes, investment: false, default);
+    public InvestmentItemDetail ReadItemWithPursuit(uint tag, ReadOnlyMemory<byte> bytes, CancellationToken token = default) =>
+        ReadItem(tag, bytes, withPursuit: true, token);
 
-    private InvestmentItemDetail ReadItem(uint tag, ReadOnlyMemory<byte> bytes, bool investment, CancellationToken token)
+    private InvestmentItemDetail ReadItem(uint tag, ReadOnlyMemory<byte> bytes, bool withPursuit, CancellationToken token)
     {
         var summary = FindItem(tag) ?? throw new InvalidDataException("Item is absent from the investment index.");
         if (tag != summary.Tag) throw new InvalidDataException("Open the gameplay definition to edit this item.");
@@ -115,7 +112,7 @@ public sealed partial class InvestmentCatalog
             }
         }, "Sockets");
         InvestmentPursuit? pursuit = null;
-        if (investment) Read(() => pursuit = ReadPursuit(item, bytes, token), "Objectives");
+        if (withPursuit) Read(() => pursuit = ReadPursuit(item, bytes, token), "Objectives");
         var curves = ReadDisplayCurves(item, errors);
         return new(item, stats, sockets, perks, fields, errors) { DisplayCurves = curves, Pursuit = pursuit };
     }
@@ -164,7 +161,7 @@ public sealed partial class InvestmentCatalog
         List<AssetProperty> allowed = [];
         if (FindItem(tag) is not null)
         {
-            var detail = ReadItemRows(tag, current);
+            var detail = ReadItem(tag, current);
             allowed.AddRange(detail.Fields); allowed.AddRange(detail.Stats.Select(row => row.Field));
             allowed.AddRange(detail.Sockets.SelectMany(row => new[] { row.TypeField, row.PlugField }));
             allowed.AddRange(detail.Perks.Select(row => row.Field));

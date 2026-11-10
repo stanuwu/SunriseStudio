@@ -260,4 +260,11 @@ public sealed partial class InvestmentCatalog
     }
     internal static bool Recoverable(Exception error) => error is InvalidDataException or NotSupportedException
         or ArgumentException or IndexOutOfRangeException or OverflowException or KeyNotFoundException;
+
+    /** Reads one section of a table. A recoverable failure adds "section: message" to the diagnostics and gives the fallback. */
+    internal static T ReadSection<T>(List<string> diagnostics, string section, T fallback, Func<T> read)
+    {
+        try { return read(); }
+        catch (Exception error) when (Recoverable(error)) { diagnostics.Add($"{section}: {error.Message}"); return fallback; }
+    }
 }

@@ -372,6 +372,6 @@ internal sealed partial class LiveInvestmentSection
             && entry.ItemHash == row.DefinitionHash) is not { } held)
             return plain;
         string kind = held.Flags.HasFlag(LivePursuitFlags.Bounty) ? "Bounty" : item?.TypeName is { Length: > 0 } type ? type : "Quest step";
-        return bucket + Dot + kind + Dot + InvestmentTableViews.PursuitStatus(held);
+        return bucket + Dot + kind + Dot + PursuitProgress.Status(held);
     }
 }

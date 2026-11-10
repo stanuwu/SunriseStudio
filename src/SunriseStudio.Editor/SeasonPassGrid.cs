@@ -25,8 +25,12 @@ internal sealed class SeasonPassGrid
     private bool revealOutside;
     private Ladder? cache;
 
-    /** Each row's lane and class, the rank count and the rows no rank cell shows, cached per table snapshot and progression. */
-    public sealed record Ladder(InvestmentTables Tables, int Progression, int[] Lanes, int[] Classes, int Ranks, int[] Outside);
+    /**
+     * Each row's lane and class, the rank count, the rows of each rank cell and the rows no rank cell shows, cached per table
+     * snapshot and progression.
+     */
+    public sealed record Ladder(InvestmentTables Tables, int Progression, int[] Lanes, int[] Classes, int Ranks, int[] Outside,
+        IReadOnlyDictionary<(uint Rank, int Lane), int[]> Cells);
 
     /** Draws over one cell, given the rows it shows, its corners and whether it is the chosen cell. */
     public delegate void CellOverlay(IReadOnlyList<int> rows, Vector2 min, Vector2 max, bool chosen);
@@ -64,7 +68,9 @@ internal sealed class SeasonPassGrid
         int ranks = Math.Max(1, Math.Max(shown.Steps.Count,
             rows.Select(row => (int)Math.Min(row.Rank, InvestmentSeasonPass.MaximumRank)).DefaultIfEmpty(0).Max()));
         var outside = Enumerable.Range(0, rows.Count).Where(row => rows[row].Rank == 0 || rows[row].Rank > ranks).ToArray();
-        return cache = new(tables, shown.Index, lanes, classes, ranks, outside);
+        var cells = Enumerable.Range(0, rows.Count).GroupBy(row => (rows[row].Rank, lanes[row]))
+            .ToDictionary(cell => cell.Key, cell => cell.ToArray());
+        return cache = new(tables, shown.Index, lanes, classes, ranks, outside, cells);
     }
 
     /** Draws one page of ten ranks, paged like the in-game pass, then the rows outside the ranks. */
@@ -143,9 +149,9 @@ internal sealed class SeasonPassGrid
         Ladder ladder, int rank, int lane,
         Vector2 size, CellOverlay? overlay)
     {
-        var rows = Rows(shown, ladder, rank, lane);
+        int[] rows = Rows(ladder, rank, lane);
         var min = ImGui.GetCursorScreenPos();
-        if (ImGui.InvisibleButton("cell", size) && rows.Count != 0) { SelectedRank = rank; SelectedLane = lane; SelectedRow = rows[0]; }
+        if (ImGui.InvisibleButton("cell", size) && rows.Length != 0) { SelectedRank = rank; SelectedLane = lane; SelectedRow = rows[0]; }
         bool hovered = ImGui.IsItemHovered();
         var draw = ImGui.GetWindowDrawList();
         var max = min + size;
@@ -154,7 +160,7 @@ internal sealed class SeasonPassGrid
         bool matches = find.Length == 0 || rows.Any(row => Matches(catalog, shown.Rewards[row]));
         draw.AddRectFilled(min, max, ImGui.GetColorU32(hovered ? ImGuiCol.FrameBgHovered : ImGuiCol.FrameBg), rounding);
         if (chosen) draw.AddRect(min, max, ImGui.GetColorU32(StudioTheme.Accent), rounding, ImDrawFlags.None, 2);
-        if (rows.Count == 0) { StudioUi.Tip("No reward at this rank."); return; }
+        if (rows.Length == 0) { StudioUi.Tip("No reward at this rank."); return; }
         var first = shown.Rewards[rows[0]];
         var iconMin = min + new Vector2(ImGui.GetStyle().FramePadding.X, ImGui.GetStyle().FramePadding.X);
         if (first.Error.Length != 0)
@@ -167,9 +173,9 @@ internal sealed class SeasonPassGrid
             draw.AddText(new(min.X + (size.X - ImGui.CalcTextSize(quantity).X) / 2, max.Y - ImGui.GetTextLineHeight()),
                 ImGui.GetColorU32(ImGuiCol.TextDisabled), quantity);
         }
-        if (rows.Count > 1)
+        if (rows.Length > 1)
         {
-            string badge = $"+{rows.Count - 1}";
+            string badge = $"+{rows.Length - 1}";
             var at = new Vector2(max.X - ImGui.CalcTextSize(badge).X - 2, min.Y + 1);
             draw.AddText(at, ImGui.GetColorU32(StudioTheme.Accent), badge);
         }
@@ -201,10 +207,10 @@ internal sealed class SeasonPassGrid
     }
 
     /** The chosen cell's rows, empty while no cell is chosen. A chosen row outside the cell moves to the cell's first row. */
-    public List<int> SelectedRows(InvestmentProgression shown, Ladder ladder)
+    public IReadOnlyList<int> SelectedRows(Ladder ladder)
     {
-        var rows = Rows(shown, ladder, SelectedRank, SelectedLane);
-        if (rows.Count != 0 && !rows.Contains(SelectedRow)) SelectedRow = rows[0];
+        int[] rows = Rows(ladder, SelectedRank, SelectedLane);
+        if (rows.Length != 0 && Array.IndexOf(rows, SelectedRow) < 0) SelectedRow = rows[0];
         return rows;
     }
 
@@ -228,9 +234,9 @@ internal sealed class SeasonPassGrid
     /** The row's item index for its icon; an index past the items draws no icon. */
     private static int ItemOf(InvestmentSeasonPassRow row) => (int)Math.Min(row.ItemIndex, int.MaxValue);
 
-    public static List<int> Rows(InvestmentProgression shown, Ladder ladder, int rank, int lane) =>
-        Enumerable.Range(0, shown.Rewards.Count).Where(row => shown.Rewards[row].Rank == rank
-            && ladder.Lanes[row] == lane).ToList();
+    /** The rows one rank cell shows, in row order, or none for a cell without rewards. */
+    private static int[] Rows(Ladder ladder, int rank, int lane) =>
+        rank >= 0 && ladder.Cells.TryGetValue(((uint)rank, lane), out int[]? rows) ? rows : [];
 
     private bool Matches(InvestmentCatalog catalog, InvestmentSeasonPassRow row) => row.ItemIndex < catalog.Items.Count
         && catalog.Items[(int)row.ItemIndex].Name.Contains(find, StringComparison.OrdinalIgnoreCase);

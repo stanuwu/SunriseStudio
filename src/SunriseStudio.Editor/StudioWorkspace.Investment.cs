@@ -105,7 +105,7 @@ public sealed partial class StudioWorkspace
         {
             InvestmentItemDetail? item = null; InvestmentVendorDetail? vendor = null;
             if (data.FindItem(document.Entry.TagHash) is { } summary && summary.Tag == document.Entry.TagHash)
-                item = data.ReadItem(document.Entry.TagHash, document.Bytes, OperationToken);
+                item = data.ReadItemWithPursuit(document.Entry.TagHash, document.Bytes, OperationToken);
             if (data.FindVendor(document.Entry.TagHash) is { } seller && seller.Tag == document.Entry.TagHash)
                 vendor = data.ReadVendor(document.Entry.TagHash, document.Bytes);
             InvestmentIcon? icon = null;

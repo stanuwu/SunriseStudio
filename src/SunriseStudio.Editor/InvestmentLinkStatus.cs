@@ -92,12 +92,15 @@ internal static class InvestmentLinkStatus
             LiveInvestmentState.Connected when live.Hello is { } hello => (StudioTheme.Good, Connected(live, hello)),
             LiveInvestmentState.Connecting => (StudioTheme.Muted,
                 [new("Connecting to the game", StudioTheme.Muted, live.StateText.Length != 0 ? live.StateText : process)]),
+            // A game that answered before needs no attach setting, so its note is the failed Hello's error.
+            LiveInvestmentState.NoAnswer when live.Hello is not null => (StudioTheme.Caution,
+                [new("Game not answering", StudioTheme.Caution, Joined(process, live.StateText))]),
             LiveInvestmentState.NoAnswer => (StudioTheme.Caution,
                 [new("Game not answering", StudioTheme.Caution, process), new("(?)", null, LiveGate.AttachHelp, Help: true)]),
             LiveInvestmentState.Unsupported => (StudioTheme.Failure,
                 [new("Game link version differs", StudioTheme.Caution, live.StateText)]),
             LiveInvestmentState.Lost => (StudioTheme.Muted,
-                [new("Not attached", StudioTheme.Muted, LiveInvestmentSession.GameClosed + " " + LiveGate.AttachSentence)]),
+                [new("Not attached", StudioTheme.Muted, live.StateText + " " + LiveGate.AttachSentence)]),
             LiveInvestmentState.Detached when live.OpenFailed => (StudioTheme.Caution,
                 [new("Link did not open", StudioTheme.Caution, live.StateText)]),
             LiveInvestmentState.Detached when live.Pending => (StudioTheme.Muted,
@@ -106,7 +109,10 @@ internal static class InvestmentLinkStatus
         };
     }
 
-    /** The connected parts: the class, then "reading items", "client not signed in" and the session's note when they apply. */
+    /**
+     * The connected parts: the class, then "reading items", "client not signed in", the session's note and each area whose
+     * last read failed, when they apply.
+     */
     private static List<Part> Connected(LiveInvestmentSession live, LiveInvestmentHello hello)
     {
         var character = live.Character;
@@ -123,6 +129,8 @@ internal static class InvestmentLinkStatus
             parts.Add(new("client not signed in", StudioTheme.Caution,
                 "Changes need a game client signed in to this account, so the game can show them."));
         if (live.StateText.Length != 0) parts.Add(new(live.StateText, StudioTheme.Caution, ""));
+        foreach (var (need, error) in LiveGate.Stale(live))
+            parts.Add(new($"{need.Name} not read", StudioTheme.Caution, "Showing the last values read.\n" + error));
         return parts;
     }
 

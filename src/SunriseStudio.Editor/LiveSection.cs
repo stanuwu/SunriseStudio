@@ -48,11 +48,12 @@ public sealed record StudioLiveLink(bool Attached, Action<string, string?> Open)
 
     /** An item page's target: Items with the item chosen. */
     internal static (string View,
-        string? Row) ItemTarget(InvestmentItem item) => (LiveInvestmentSection.ItemsView, $"item:{item.Hash:X8}");
+        string? Row) ItemTarget(InvestmentItem item) => (LiveInvestmentSection.ItemsView, LiveInvestmentSection.ItemRow(item.Hash));
 
     /** A quest or pursuit page's target: Pursuits showing the step, with its first held copy chosen. */
     internal static (string View,
-        string? Row) PursuitTarget(InvestmentItem item) => (LiveInvestmentSection.PursuitsView, $"item:{item.Hash:X8}");
+        string? Row) PursuitTarget(InvestmentItem item) =>
+        (LiveInvestmentSection.PursuitsView, LiveInvestmentSection.ItemRow(item.Hash));
 
     /** The season pass page's target: Season pass with the chosen row, if any. */
     internal static (string View, string? Row) PassTarget(int progression, int row) =>

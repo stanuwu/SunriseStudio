@@ -28,42 +28,68 @@ public sealed record InvestmentSlotMap(int Descriptor, IReadOnlyList<short> Dest
 /** Unlock expressions, decoded for display. Studio never evaluates them. */
 public sealed class InvestmentUnlocks
 {
-    public const uint FlagOpcode = 1, ValueOpcode = 10, ConstantOpcode = 11, SharedOpcode = 12;
-    /** Sunrise's limit on nesting through shared rows (rewards/definition.h kTraversalDepth). Studio reports deeper nesting. */
+    /** The opcodes Studio reads by name: a flag read, or, a value read, a constant, and a shared row to inline. */
+    public const uint FlagOpcode = 1, OrOpcode = 3, ValueOpcode = 10, ConstantOpcode = 11, SharedOpcode = 12;
+    /**
+     * Sunrise refuses an expression whose shared rows nest this deep, counting the expression itself as depth 0
+     * (rewards/definition.h kTraversalDepth, package_reward_build.cpp RewardConditions::append_expression).
+     */
     public const int ServerNestingLimit = 32;
     // Slot rows hold a hash, the kind (a u16 for flags, or a kind byte and an aggregation byte for values), then the bank row.
     // The row layouts name only the hash and the flag bank row.
     private const int SlotKind = 4, SlotAggregation = 5, SlotBankRow = 6;
-    /** Flag kind 1 is the account bank, whose mapping array is the first. */
-    private const int AccountFlagKind = 1;
-    /** Value kinds 1 and 2 are the account and character banks, whose mapping arrays are the first two. */
-    private const int AccountValueKind = 1, CharacterValueKind = 2;
+    /**
+     * The flag slot kinds whose saved bank is known: the account, profile and character banks. FourthFlagKind picks the last
+     * mapping array, whose bank is unconfirmed. Any other kind is computed and has no mapping array.
+     */
+    public const int AccountFlagKind = 1, ProfileFlagKind = 2, CharacterFlagKind = 3, FourthFlagKind = 4;
+    /**
+     * The value slot kinds whose saved bank is known: the account and character banks. ThirdValueKind and FourthValueKind
+     * pick the last two mapping arrays, whose banks are unconfirmed, and ItemValueKind is a per-item value with no mapping
+     * array. Any other kind is computed.
+     */
+    public const int AccountValueKind = 1, CharacterValueKind = 2, ThirdValueKind = 3, ItemValueKind = 4, FourthValueKind = 5;
     /** The mapping arrays a slot's kind picks from (FlagMap and ValueMap), in kind order. */
     private static readonly int[] FlagMapArrays = [.. new[] { nameof(C80807d36.H826fd8c8), nameof(C80807d36.HC93e5c6b),
         nameof(C80807d36.H1c76a86c), nameof(C80807d36.H201ada27) }.Select(TagView.FieldOffset<C80807d36>)];
     private static readonly int[] ValueMapArrays = [.. new[] { nameof(C80807c80.H826fd8c8), nameof(C80807c80.H1c76a86c),
         nameof(C80807c80.H201ada27), nameof(C80807c80.HD4a626c1) }.Select(TagView.FieldOffset<C80807c80>)];
-    /** The opcodes Sunrise evaluates (unlocks_expression.h) and opcode 12, each with its name, infix symbol, pops and pushes. */
+    /**
+     * The opcodes Sunrise evaluates (unlocks_expression.h Opcode, unlocks_expression.cpp step) and opcode 12, which its
+     * extraction inlines, each with its name, infix symbol, pops and pushes. Opcodes 6 and 9 are the same test.
+     */
     private static readonly Dictionary<uint, (string Name, string Symbol, int Pops, int Pushes)> Opcodes = new()
     {
         [1] = ("flag", "", 0, 1), [2] = ("not", "not ", 1, 1), [3] = ("or", "or", 2, 1), [4] = ("and", "and", 2, 1),
-        [8] = ("equal", "=", 2, 1), [10] = ("value", "", 0, 1), [11] = ("constant", "", 0, 1), [12] = ("shared", "", 0, 1),
+        [5] = ("nor", "nor", 2, 1), [6] = ("not equal", "!=", 2, 1), [7] = ("nand", "nand", 2, 1), [8] = ("equal", "=", 2, 1),
+        [9] = ("not equal", "!=", 2, 1), [10] = ("value", "", 0, 1), [11] = ("constant", "", 0, 1), [12] = ("shared", "", 0, 1),
         [13] = (">", ">", 2, 1), [14] = (">=", ">=", 2, 1), [15] = ("<", "<", 2, 1), [16] = ("<=", "<=", 2, 1),
-        [17] = ("add", "+", 2, 1), [22] = ("negate", "-", 1, 1)
+        [17] = ("add", "+", 2, 1), [18] = ("subtract", "-", 2, 1), [19] = ("multiply", "*", 2, 1),
+        [20] = ("divide", "/", 2, 1), [21] = ("remainder", "%", 2, 1), [22] = ("negate", "-", 1, 1),
+        [23] = ("hash", "hash ", 1, 1), [24] = ("seeded hash", "seeds hash of", 2, 1), [25] = ("bit and", "&", 2, 1),
+        [26] = ("bit or", "|", 2, 1), [27] = ("bit xor", "^", 2, 1), [28] = ("bit not", "~", 1, 1)
     };
+    /**
+     * An expression's instructions once its shared rows are inlined: whether Sunrise binds every one, how many there are
+     * up to Several, and the first.
+     */
+    private readonly record struct Inlined(bool Binds, int Count, InvestmentUnlockInstruction First);
+    /** The Count of an inlined program of more than one instruction. */
+    private const int Several = 2;
     private readonly InvestmentExpression[] shared;
-    // Per shared row: its longest opcode-12 chain (-1 when broken or cyclic) and net stack effect (null when undecoded).
+    // Per shared row: its longest shared-row chain (-1 when broken or cyclic), its net stack effect (null when undecoded)
+    // and its inlined program (not bound when broken or cyclic).
     private readonly int[] sharedDepth;
     private readonly int?[] sharedEffect;
+    private readonly Inlined[] sharedPrograms;
     private readonly InvestmentFlagSlot[] flagSlots;
     private readonly InvestmentValueSlot[] valueSlots;
     private readonly InvestmentSlotMap[] flagMaps, valueMaps;
     private readonly Dictionary<uint, (int Class, string Label)> classFlags;
     // Slots whose bank row disagrees with their mapping table, each with the row the table names for it, or -1.
     private readonly Dictionary<int, int> flagDisagreements, valueDisagreements;
-    private HashSet<int>? accountFlagSlots, boundValueSlots;
+    private HashSet<int>? boundFlagSlots, boundValueSlots;
     public static InvestmentUnlocks Empty { get; } = new([], [], [], [], [], new(), new(), new(), []);
-    public int SharedCount => shared.Length;
     public IReadOnlyList<InvestmentFlagSlot> FlagSlots => flagSlots;
     public IReadOnlyList<InvestmentValueSlot> ValueSlots => valueSlots;
     public IReadOnlyList<InvestmentSlotMap> FlagMaps => flagMaps;
@@ -80,7 +106,7 @@ public sealed class InvestmentUnlocks
         this.shared = shared; this.flagSlots = flagSlots; this.valueSlots = valueSlots;
         this.flagMaps = flagMaps; this.valueMaps = valueMaps; this.classFlags = classFlags;
         this.flagDisagreements = flagDisagreements; this.valueDisagreements = valueDisagreements;
-        (sharedDepth, sharedEffect) = WalkShared(graphDiagnostics);
+        (sharedDepth, sharedEffect, sharedPrograms) = WalkShared(graphDiagnostics);
         GraphDiagnostics = graphDiagnostics;
     }
 
@@ -94,11 +120,7 @@ public sealed class InvestmentUnlocks
             if (read.Loaded) return read.Bytes;
             diagnostics.Add("Unlock slots: " + read.Diagnostic); return null;
         }
-        T Section<T>(string section, T fallback, Func<T> read)
-        {
-            try { return read(); }
-            catch (Exception error) when (InvestmentCatalog.Recoverable(error)) { diagnostics.Add($"{section}: {error.Message}"); return fallback; }
-        }
+        T Section<T>(string section, T fallback, Func<T> read) => InvestmentCatalog.ReadSection(diagnostics, section, fallback, read);
         token.ThrowIfCancellationRequested();
         var flagSlots = Section<InvestmentFlagSlot[]>("Flag slots", [], () =>
             Table(InvestmentRootSlots.FlagSlots, UnlockFlagTable.Class) is { } table ? FlagSlotRows(table.Span) : []);
@@ -190,7 +212,8 @@ public sealed class InvestmentUnlocks
         var problems = new List<string>();
         int depth = Depth(expression);
         if (depth < 0) problems.Add("Refers to a missing, empty or cyclic shared expression.");
-        else if (depth > ServerNestingLimit) problems.Add($"Sunrise refuses expressions nested deeper than {ServerNestingLimit} shared rows.");
+        else if (depth >= ServerNestingLimit)
+            problems.Add($"Sunrise refuses expressions that nest {ServerNestingLimit} shared rows or deeper.");
         foreach (uint opcode in expression.Instructions.Select(row => row.Opcode).Where(opcode => !Opcodes.ContainsKey(opcode)).Distinct())
             problems.Add($"Studio does not decode opcode {opcode}.");
         return problems;
@@ -200,10 +223,53 @@ public sealed class InvestmentUnlocks
     public int ClassOf(InvestmentUnlockInstruction instruction) =>
         instruction.Opcode == FlagOpcode && classFlags.TryGetValue(instruction.Operand, out var owner) ? owner.Class : -1;
 
+    /** The opcode's name for a postfix listing, or "op N" for one Studio does not decode. */
     public static string OpcodeName(uint opcode) => Opcodes.TryGetValue(opcode, out var row) ? row.Name : $"op {opcode}";
 
-    /** True for an opcode Sunrise evaluates (unlocks_expression.cpp decode_opcode). Shared rows are inlined before evaluation. */
-    public static bool Evaluated(uint opcode) => opcode != SharedOpcode && Opcodes.ContainsKey(opcode);
+    /**
+     * Counts an expression's instructions once its shared rows are inlined, as package_reward_build.cpp
+     * RewardConditions::append_expression builds the program Sunrise evaluates.
+     * @param first The program's first instruction.
+     * @return 1 for one instruction and 2 for more, or 0 when Sunrise refuses the expression: it is unreadable or empty,
+     * a shared row is missing, unreadable, empty or on a cycle, the rows nest to ServerNestingLimit, or an instruction
+     * does not bind.
+     */
+    internal int InlinedCount(InvestmentExpression expression, out InvestmentUnlockInstruction first)
+    {
+        first = default;
+        // Sunrise has no cycle check of its own: a cycle nests until the depth limit refuses it.
+        if (Depth(expression) is < 0 or >= ServerNestingLimit) return 0;
+        var program = Inline(expression.Instructions, sharedPrograms);
+        first = program.First;
+        return program.Binds ? program.Count : 0;
+    }
+
+    /** Folds instructions into one program, taking each shared row's program from sharedRows. */
+    private Inlined Inline(IReadOnlyList<InvestmentUnlockInstruction> instructions, Inlined[] sharedRows)
+    {
+        int count = 0;
+        InvestmentUnlockInstruction first = default;
+        foreach (var instruction in instructions)
+        {
+            var part = instruction.Opcode == SharedOpcode ? sharedRows[instruction.Operand]
+                : new Inlined(Binds(instruction), 1, instruction);
+            if (!part.Binds) return default;
+            if (count == 0) first = part.First;
+            count = Math.Min(Several, count + part.Count);
+        }
+        return new(true, count, first);
+    }
+
+    /**
+     * Sunrise binds a flag or value read only to a slot its table holds, and any other instruction only when it evaluates
+     * its opcode (package_reward_build.cpp RewardConditions::bind, unlocks_expression.cpp decode_opcode).
+     */
+    private bool Binds(InvestmentUnlockInstruction instruction) => instruction.Opcode switch
+    {
+        FlagOpcode => instruction.Operand < flagSlots.Length,
+        ValueOpcode => instruction.Operand < valueSlots.Length,
+        _ => instruction.Opcode != SharedOpcode && Opcodes.ContainsKey(instruction.Opcode)
+    };
 
     public InvestmentOperandLabel Label(InvestmentUnlockInstruction instruction) => instruction.Opcode switch
     {
@@ -219,14 +285,16 @@ public sealed class InvestmentUnlocks
     };
 
     /**
-     * True when Sunrise binds a flag read of this slot to the account bank: the slot is in the slot table, is not a class
-     * flag, and the account mapping table names it (package_reward_build.cpp RewardConditions::bind).
+     * True when Sunrise binds a flag read of this slot to a saved bank: the account, profile or character flag mapping table
+     * names it (package_reward_build.cpp RewardConditions::bind). Any other flag read that is not a class flag is an
+     * external input, which no saved row holds.
      */
-    public bool AccountFlag(uint slot)
+    public bool BoundFlag(uint slot)
     {
-        if (slot >= flagSlots.Length || classFlags.ContainsKey(slot) || flagMaps.Length == 0) return false;
-        accountFlagSlots ??= flagMaps[FlagMap(AccountFlagKind)].Destinations.Select(destination => (int)destination).ToHashSet();
-        return accountFlagSlots.Contains((int)slot);
+        if (slot >= flagSlots.Length || flagMaps.Length == 0) return false;
+        boundFlagSlots ??= new[] { FlagMap(AccountFlagKind), FlagMap(ProfileFlagKind), FlagMap(CharacterFlagKind) }
+            .SelectMany(map => flagMaps[map].Destinations).Select(destination => (int)destination).ToHashSet();
+        return boundFlagSlots.Contains((int)slot);
     }
 
     /**
@@ -252,10 +320,10 @@ public sealed class InvestmentUnlocks
         string detail = $"Flag slot {slot}, kind {row.Kind}" + (disagrees ? MapNote(mapped) : "");
         var (text, proven) = row.Kind switch
         {
-            1 => ($"Account flag row {row.BankRow}", true),
-            2 => ($"Profile flag row {row.BankRow}", true),
-            3 => ($"Character flag row {row.BankRow}", true),
-            4 => ($"Flag map 4 row {row.BankRow}", false),
+            AccountFlagKind => ($"Account flag row {row.BankRow}", true),
+            ProfileFlagKind => ($"Profile flag row {row.BankRow}", true),
+            CharacterFlagKind => ($"Character flag row {row.BankRow}", true),
+            FourthFlagKind => ($"Flag map 4 row {row.BankRow}", false),
             _ => ($"Computed flag 0x{row.Hash:X8}", false)
         };
         return new(InvestmentOperandKind.Flag, text, detail, proven && !disagrees);
@@ -270,14 +338,14 @@ public sealed class InvestmentUnlocks
         string detail = $"Value slot {slot}, kind {row.Kind}" + (disagrees ? MapNote(mapped) : "");
         var (text, proven) = row.Kind switch
         {
-            1 => ($"Account value row {row.BankRow}", true),
-            2 => ($"Character value row {row.BankRow}", true),
-            3 => ($"Value map 3 row {row.BankRow}", false),
-            5 => ($"Value map 4 row {row.BankRow}", false),
-            4 => ($"Item value (aggregation {row.Aggregation})", false),
+            AccountValueKind => ($"Account value row {row.BankRow}", true),
+            CharacterValueKind => ($"Character value row {row.BankRow}", true),
+            ThirdValueKind => ($"Value map 3 row {row.BankRow}", false),
+            FourthValueKind => ($"Value map 4 row {row.BankRow}", false),
+            ItemValueKind => ($"Item value (aggregation {row.Aggregation})", false),
             _ => ($"Computed value 0x{row.Hash:X8}", false)
         };
-        if (row.Kind == 4) detail += ". Per-item value; 2 may mean the maximum over held items.";
+        if (row.Kind == ItemValueKind) detail += ". Per-item value; 2 may mean the maximum over held items.";
         return new(InvestmentOperandKind.Value, text, detail, proven && !disagrees);
     }
 
@@ -321,10 +389,16 @@ public sealed class InvestmentUnlocks
         : InvestmentOperandKind.Value, $"{kind} slot {slot}",
             count == 0 ? $"The {kind.ToLowerInvariant()} slot table is not loaded."
         : $"Outside the {kind.ToLowerInvariant()} slot table.", false);
-    /** Flag kinds 1-4 pick maps +8/+24/+40/+56. */
-    private static int FlagMap(int kind) => kind is >= 1 and <= 4 ? kind - 1 : -1;
-    /** Value kinds 1/2/3/5 pick maps +8/+24/+40/+56. Kind 4 is a per-item value with no map. */
-    private static int ValueMap(int kind) => kind switch { 1 => 0, 2 => 1, 3 => 2, 5 => 3, _ => -1 };
+    /** The index in FlagMaps of the mapping table a flag kind picks, or -1 for a kind with none. */
+    public static int FlagMap(int kind) => kind switch
+    {
+        AccountFlagKind => 0, ProfileFlagKind => 1, CharacterFlagKind => 2, FourthFlagKind => 3, _ => -1
+    };
+    /** The index in ValueMaps of the mapping table a value kind picks, or -1 for a kind with none. */
+    public static int ValueMap(int kind) => kind switch
+    {
+        AccountValueKind => 0, CharacterValueKind => 1, ThirdValueKind => 2, FourthValueKind => 3, _ => -1
+    };
 
     private static InvestmentFlagSlot[] FlagSlotRows(ReadOnlySpan<byte> table)
     {
@@ -415,14 +489,17 @@ public sealed class InvestmentUnlocks
         return result;
     }
 
-    /** Walks the opcode-12 edges once. It needs no depth cap, because the walk is iterative and stops at every cycle. */
-    private (int[] Depth, int?[] Effect) WalkShared(List<string> diagnostics)
+    /**
+     * Walks the shared-row references once, each row after the rows it names. It needs no depth cap, because the walk is
+     * iterative and stops at every cycle.
+     */
+    private (int[] Depth, int?[] Effect, Inlined[] Programs) WalkShared(List<string> diagnostics)
     {
         int count = shared.Length;
         var edges = shared.Select(row => (IReadOnlyList<int>)row.Instructions.Where(instruction => instruction.Opcode == SharedOpcode)
             .Select(instruction => instruction.Operand < count ? (int)instruction.Operand : -1).ToArray()).ToArray();
         var (order, cycles) = InvestmentGraphWalk.Walk(edges);
-        var depth = new int[count]; var effect = new int?[count];
+        var depth = new int[count]; var effect = new int?[count]; var programs = new Inlined[count];
         var cyclic = cycles.SelectMany(cycle => cycle).ToHashSet();
         int outside = 0, empty = 0, unreadable = 0, firstOutside = -1, firstEmpty = -1, firstUnreadable = -1;
         foreach (int row in order)
@@ -439,6 +516,7 @@ public sealed class InvestmentUnlocks
             }
             depth[row] = broken ? -1 : deepest;
             if (broken) continue;
+            programs[row] = Inline(shared[row].Instructions, programs);
             int? net = 0;
             foreach (var instruction in shared[row].Instructions)
                 net = instruction.Opcode == SharedOpcode ? net + effect[instruction.Operand]
@@ -449,8 +527,9 @@ public sealed class InvestmentUnlocks
         if (empty != 0) diagnostics.Add($"{empty} shared expression references name an empty row (first in row {firstEmpty}).");
         if (unreadable != 0) diagnostics.Add($"{unreadable} shared expressions could not be read (first: row {firstUnreadable}).");
         foreach (var cycle in cycles.Take(InvestmentTables.ListedCycles)) diagnostics.Add($"Shared expressions form a cycle: {string.Join(", ", cycle)}.");
-        if (cycles.Count > 8) diagnostics.Add($"{cycles.Count - 8} more shared expression cycles.");
-        return (depth, effect);
+        if (cycles.Count > InvestmentTables.ListedCycles)
+            diagnostics.Add($"{cycles.Count - InvestmentTables.ListedCycles} more shared expression cycles.");
+        return (depth, effect, programs);
     }
 }
 

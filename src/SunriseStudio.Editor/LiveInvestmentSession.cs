@@ -2,13 +2,20 @@ using SunriseStudio.Live;
 
 namespace SunriseStudio.Editor;
 
+/**
+ * Where the session's link stands. Unsupported is a game whose link version differs, NoAnswer a game that does not answer,
+ * and Lost a link that closed by itself.
+ */
 public enum LiveInvestmentState { Detached, Connecting, Connected, Unsupported, NoAnswer, Lost }
+/** The snapshots the session reads while a page draws them. */
 public enum LiveViewKind { Inventory, SeasonPass, Pursuits }
 
 /** One snapshot read from the game. Value is the last snapshot adopted, and Error the last failed read until a read succeeds. */
 public sealed class LiveView<T> where T : class
 {
+    /** The last snapshot adopted, or null before one. A failed read keeps it. */
     public T? Value { get; private set; }
+    /** Why the last read failed, or empty once a read succeeds. */
     public string Error { get; private set; } = "";
     internal long WantedUntil, InvalidatedAt;
     /** When the last read started, or null when the view has not been read since it was cleared. */
@@ -35,6 +42,7 @@ public sealed record LiveHeld(LiveInventoryScope Scope, ulong Instance, uint Def
         && DefinitionHash == other.DefinitionHash
         && BucketId == other.BucketId;
 
+    /** Every row of a snapshot: the character's items, its stacks, then the profile's rows. */
     public static IEnumerable<LiveHeld> All(LiveInventorySnapshot inventory) =>
         inventory.Items.Select(row => new LiveHeld(LiveInventoryScope.CharacterItem, row.Instance,
             row.DefinitionHash, row.Quantity,
@@ -52,6 +60,7 @@ public sealed class LiveHeldIndex
 {
     private readonly Dictionary<uint, LiveHeld[]> byItem;
 
+    /** Groups the snapshot's rows. */
     public LiveHeldIndex(LiveInventorySnapshot snapshot)
     {
         Snapshot = snapshot;
@@ -60,8 +69,11 @@ public sealed class LiveHeldIndex
         byItem = All.GroupBy(row => row.DefinitionHash).ToDictionary(group => group.Key, group => group.ToArray());
     }
 
+    /** The snapshot the rows came from. */
     public LiveInventorySnapshot Snapshot { get; }
+    /** Every held row, in LiveHeld.All's order. */
     public LiveHeld[] All { get; }
+    /** The held rows of each bucket that holds any. */
     public IReadOnlyDictionary<byte, LiveHeld[]> ByBucket { get; }
 
     /** The held rows of one item, or none when it is not held. */
@@ -92,8 +104,11 @@ public sealed partial class LiveInvestmentSession : IDisposable
     private long now, watchedUntil;
     private long? helloAt;
     private bool helloStale;
+    // True from a Hello that failed after the game had answered one until a Hello succeeds. The state is NoAnswer meanwhile.
+    private bool helloFailed;
     // The saved rows pages draw, each with its read schedule and the game's last value.
     private readonly Dictionary<LiveUnlockSource, UnlockRead> unlocks = [];
+    /** Where the link stands. */
     public LiveInvestmentState State { get; private set; }
     /** Why the link is not connected, or a note such as "Character changed" that the next matching Hello or read clears. */
     public string StateText { get; private set; } = "";
@@ -101,12 +116,15 @@ public sealed partial class LiveInvestmentSession : IDisposable
     public LiveProcess? Process { get; private set; }
     /** The game's last answer to Hello; null until the link has answered once. */
     public LiveInvestmentHello? Hello { get; private set; }
+    /** What the selected character and the profile hold. */
     public LiveView<LiveInventorySnapshot> Inventory { get; } = new();
     /** The last inventory snapshot's rows, grouped on first use, or null before a snapshot is read. */
     public LiveHeldIndex? Held => Inventory.Value is not { } snapshot ? null
         : heldIndex is { } index && ReferenceEquals(index.Snapshot, snapshot) ? index : heldIndex = new(snapshot);
     private LiveHeldIndex? heldIndex;
+    /** The account's seasonal XP, rank and pass rows. */
     public LiveView<LiveSeasonPassSnapshot> SeasonPass { get; } = new();
+    /** The selected character's held pursuits and their objectives. */
     public LiveView<LivePursuitSnapshot> Pursuits { get; } = new();
     /** The last failed read of saved rows, cleared by the next success. */
     public string UnlockError { get; private set; } = "";
@@ -127,8 +145,10 @@ public sealed partial class LiveInvestmentSession : IDisposable
 
     /** True after the link failed to open, the only case that leaves StateText set while detached. */
     public bool OpenFailed => State == LiveInvestmentState.Detached && StateText.Length != 0;
+    /** True while the game answers Hello, so views can be read and actions sent. */
     public bool Connected => State == LiveInvestmentState.Connected && Hello is not null;
-    public LiveInvestmentCharacter? Character => Hello?.Characters.FirstOrDefault(row => row.Selected);
+    /** The character selected in the game, or null while none is. */
+    public LiveInvestmentCharacter? Character { get; private set; }
     /** The selected character's class for a sentence, or "the character" before one is selected. */
     public string CharacterName => Character is { } character ? InvestmentTableViews.ClassName(character.CharacterClass) : "the character";
 
@@ -171,6 +191,13 @@ public sealed partial class LiveInvestmentSession : IDisposable
         onUse = null;
         Unbind(gameClosed ? LiveInvestmentState.Lost : LiveInvestmentState.Detached, gameClosed ? GameClosed : "");
     }
+
+    /** Why a drawn view's last read failed while the view still shows an earlier snapshot, or empty. */
+    public string StaleError<T>(LiveView<T> view) where T : class =>
+        view.Value is not null && now < view.WantedUntil ? view.Error : "";
+
+    /** Why the last read of saved rows failed while pages still draw rows, or empty. */
+    public string StaleUnlockError => unlocks.Count != 0 ? UnlockError : "";
 
     /**
      * Whether the game can answer a read of this view. Inventory, pursuits and saved rows (a null view) need a selected
@@ -226,7 +253,7 @@ public sealed partial class LiveInvestmentSession : IDisposable
         switch (current.State)
         {
             case LiveInvestmentLinkState.Closed:
-                Unbind(LiveInvestmentState.Lost, GameClosed);
+                Unbind(LiveInvestmentState.Lost, current.Diagnostic.Length != 0 ? current.Diagnostic : GameClosed);
                 return false;
             case LiveInvestmentLinkState.VersionDiffers:
                 SetState(LiveInvestmentState.Unsupported, current.Diagnostic);
@@ -238,7 +265,8 @@ public sealed partial class LiveInvestmentSession : IDisposable
                 if (Hello is null) SetState(LiveInvestmentState.Connecting, current.Diagnostic);
                 return false;
         }
-        if (State is LiveInvestmentState.NoAnswer or LiveInvestmentState.Unsupported)
+        // An open link whose game stopped answering Hello stays NoAnswer until AdoptHello.
+        if (!helloFailed && State is LiveInvestmentState.NoAnswer or LiveInvestmentState.Unsupported)
             SetState(Hello is null ? LiveInvestmentState.Connecting : LiveInvestmentState.Connected, "");
         return true;
     }
@@ -249,10 +277,13 @@ public sealed partial class LiveInvestmentSession : IDisposable
         State = state; StateText = text; Revision++;
     }
 
-    /** Starts the next request: Hello until the game has answered, then operations, then Hello again when due, then reads. */
+    /**
+     * Starts the next request: Hello until the game answers it, then operations, then Hello again when due, then reads. While
+     * the game does not answer Hello, nothing else is sent.
+     */
     private void StartNext()
     {
-        if (Hello is null) { if (HelloDue()) RequestHello(); return; }
+        if (Hello is null || helloFailed) { if (HelloDue()) RequestHello(); return; }
         if (NextOperationRequest()) return;
         if (helloStale || now < watchedUntil && HelloDue()) { RequestHello(); return; }
         if (Readable(LiveViewKind.Inventory) && Inventory.Due(now, RefreshMilliseconds))
@@ -268,7 +299,19 @@ public sealed partial class LiveInvestmentSession : IDisposable
     /** Forgets saved rows no page draws and returns up to one request's worth of the due ones, least recently read first. */
     private LiveUnlockSource[] DueUnlocks()
     {
-        foreach (var source in unlocks.Where(row => now >= row.Value.WantedUntil).Select(row => row.Key).ToArray()) unlocks.Remove(source);
+        // Most frames nothing expired and nothing is due, so the rows are only looked at.
+        bool expired = false, due = false;
+        foreach (var read in unlocks.Values)
+        {
+            expired |= now >= read.WantedUntil;
+            due |= read.ReadAt is not { } at || now - at >= RefreshMilliseconds;
+        }
+        if (expired)
+        {
+            var undrawn = unlocks.Where(row => now >= row.Value.WantedUntil).Select(row => row.Key).ToArray();
+            foreach (var source in undrawn) unlocks.Remove(source);
+        }
+        if (!due) return [];
         return [.. unlocks.Where(row => row.Value.ReadAt is not { } read || now - read >= RefreshMilliseconds)
             .OrderBy(row => row.Value.ReadAt ?? long.MinValue).Take(LiveInvestmentProtocol.UnlockReadCapacity).Select(row => row.Key)];
     }
@@ -297,30 +340,30 @@ public sealed partial class LiveInvestmentSession : IDisposable
 
     private bool HelloDue() => helloAt is not { } asked || now - asked >= RefreshMilliseconds;
 
+    /**
+     * Asks who the game is. A failure before the first answer leaves the link connecting with the error as its note. A later
+     * one means the game stopped answering: the state becomes NoAnswer, with the error, until a Hello succeeds.
+     */
     private void RequestHello()
     {
         helloAt = now;
         Start((target, token) => target.HelloAsync(token), AdoptHello, error =>
         {
-            if (Hello is null) StateText = error.Message;
-            else helloStale = true;
+            if (Hello is null) { StateText = error.Message; return; }
+            helloFailed = true;
+            State = LiveInvestmentState.NoAnswer; StateText = error.Message;
         });
     }
 
-    /**
-     * Adopts the game's identity. A new account, character or catalog clears every view, and a game restart loses the
-     * operations still waiting on the previous game.
-     */
+    /** Adopts the game's identity. A new account, character or catalog clears every view. */
     private void AdoptHello(LiveInvestmentHello hello)
     {
-        helloStale = false;
+        helloStale = helloFailed = false;
         if (Hello is { } previous && previous.Context != hello.Context) ClearViews(ChangeText(previous.Context, hello.Context));
         else StateText = "";
         Hello = hello;
+        Character = hello.Characters.FirstOrDefault(row => row.Selected);
         State = LiveInvestmentState.Connected;
-        foreach (var operation in operations.Where(row => row.Phase == LiveOperationPhase.Waiting
-            && row.Identity.GameStarted != hello.GameStarted))
-            operation.Lose("The game restarted; its results are gone.");
     }
 
     /** Reads one view. A snapshot for another identity than the last Hello is dropped and Hello is asked again. */
@@ -393,13 +436,14 @@ public sealed partial class LiveInvestmentSession : IDisposable
         }
         link?.Dispose(); link = null;
         bool changed = Hello is not null || Process is not null || State != state;
-        Hello = null; Process = null; helloAt = null; helloStale = false;
+        Hello = null; Character = null; Process = null; helloAt = null; helloStale = helloFailed = false;
         Inventory.Clear(); SeasonPass.Clear(); Pursuits.Clear(); ClearUnlocks();
         Selected = null;
         State = state; StateText = text;
         if (changed) Revision++;
     }
 
+    /** Drops the link, as Detach does. */
     public void Dispose() => Unbind(LiveInvestmentState.Detached, "");
 
     /** The read schedule of one drawn saved row and the game's last answer for it. */
