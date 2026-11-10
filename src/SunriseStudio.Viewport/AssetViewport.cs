@@ -252,6 +252,8 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     public void SetNativeScene(NativeScenePlan plan)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        // A new scene replaces what the held image shows, and may replace the target it lives in.
+        heldImage = null;
         if (Scene is null) throw new InvalidOperationException("Load geometry before game shaders.");
         NativeSceneRenderer next;
         try { next = new NativeSceneRenderer(renderer, plan, target?.Width ?? 640, target?.Height ?? 480,
@@ -305,6 +307,8 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     public void SetScene(SceneDocument scene)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        // A new scene replaces what the held image shows, and may replace the target it lives in.
+        heldImage = null;
         var kept = new Dictionary<MeshData, GpuMesh>();
         var uploads = new List<MeshData>();
         foreach (var mesh in scene.Instances.Select(x => x.Mesh).Distinct())
@@ -576,6 +580,16 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         }
     }
 
+    /**
+     * The least time between two renders of the scene, in seconds. Between them the last image is shown again, while the
+     * rest of the window still draws every frame. Zero renders every frame.
+     */
+    public double RenderInterval { get; set; }
+    // The last scene image, the size it was rendered at and when, for frames RenderInterval holds back.
+    private GpuTexture? heldImage;
+    private (int Width, int Height) heldSize;
+    private long heldAt;
+
     /** Draw inside an ImGui window after NewFrame and before the host renders ImGui. */
     public void DrawImGui(Vector2 size)
     {
@@ -606,13 +620,24 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         else
         {
             simulationSeconds += ImGui.GetIO().DeltaTime;
-            var image = RenderImage(Math.Max(1, (int)size.X), Math.Max(1, (int)size.Y), simulationSeconds);
+            var image = SceneImage(Math.Max(1, (int)size.X), Math.Max(1, (int)size.Y));
             draw.AddImage(image.ImGuiId, origin, origin + size);
             Animation?.DrawImGuiBones(draw, origin, size, Camera.ViewProjection(size.X / size.Y));
             DrawObjectNames(draw, origin, size, hovered);
             DrawGizmo(draw, origin, size, hovered);
         }
         draw.PopClipRect();
+    }
+
+    /** The scene at this size: a new render, or the last one again while RenderInterval holds the next back. */
+    private GpuTexture SceneImage(int width, int height)
+    {
+        if (heldImage is { } held && RenderInterval > 0 && heldSize == (width, height)
+            && System.Diagnostics.Stopwatch.GetElapsedTime(heldAt).TotalSeconds < RenderInterval) return held;
+        heldImage = RenderImage(width, height, simulationSeconds);
+        heldSize = (width, height);
+        heldAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        return heldImage;
     }
 
     /** Toolbar controls affect this viewport alone. */
