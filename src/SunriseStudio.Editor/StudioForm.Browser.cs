@@ -227,14 +227,13 @@ public sealed partial class StudioForm
 
     /**
      * Lists an item category through the item catalog: the header with Back, the grid toggle, New and Clone, then Changed only
-     * and the catalog. A row opens its item, and rows show what the game's character holds while Live reads it.
+     * and the catalog. A row opens its item.
      */
     private void DrawItemCatalog()
     {
         var catalog = itemCatalog.RequestCatalog(workspace, followEdits: true);
         var open = StudioCategories.Find(itemBrowser.Kind);
-        var options = new ItemCatalogOptions(Held: LiveGate.Held(workspace.LiveInvestment),
-            Menu: DrawItemContext, ChangedOnly: changesOnly);
+        var options = new ItemCatalogOptions(Menu: DrawItemContext, ChangedOnly: changesOnly);
         DrawListHeader(open?.Label ?? itemBrowser.Kind, open?.Tooltip ?? AllItemsTip,
             catalog is null ? 0 : itemBrowser.Count(workspace, catalog, options));
         if (itemBrowser.Kind == InvestmentItemKinds.Bounties) StudioUi.Wip("Some rows here are not bounties.");

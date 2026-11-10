@@ -214,14 +214,17 @@ public sealed partial class StudioForm : Form
         catch (Exception error) { Failure = error.ToString(); Close(); }
     }
 
+    /** Scene frames per second while a game is attached, which shares this GPU: focused, then in the background. */
+    private const double AttachedSceneRate = 30, AttachedBackgroundSceneRate = 10;
+
     /** Worker results are adopted before the frame; native dialogs cannot reenter rendering. */
     private void TickFrame()
     {
         if (drawing || nativeDialog || closed || renderer is null || gui is null || viewport is null
             || WindowState == FormWindowState.Minimized) return;
-        // An attached game shares this GPU, so the scene views render at most 30 times a second, and 10 in the
-        // background. The rest of the window keeps its frame rate.
-        double sceneInterval = liveTab.Attached && !options.Smoke ? (ContainsFocus ? 1 / 30.0 : 1 / 10.0) : 0;
+        // Only the scene views are held back; the rest of the window keeps its frame rate.
+        double sceneInterval = liveTab.Attached && !options.Smoke
+            ? 1 / (ContainsFocus ? AttachedSceneRate : AttachedBackgroundSceneRate) : 0;
         viewport.RenderInterval = sceneInterval;
         if (assetViewport is not null) assetViewport.RenderInterval = sceneInterval;
         drawing = true;
