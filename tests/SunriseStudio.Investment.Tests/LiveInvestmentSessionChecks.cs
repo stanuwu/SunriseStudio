@@ -485,7 +485,7 @@ internal static class LiveInvestmentSessionChecks
         using var owner = workspace;
         long now = 10_000;
         InvestmentItem Item(uint hash, int stack, bool instanced) =>
-            new(0, hash, 0, 0, "Fixture item", "", "", bucket, 0, stack, instanced, true);
+            new(0, hash, 0, 0, "Fixture item", "", "", bucket, 0, stack, instanced);
         session.Want(LiveViewKind.Inventory);
         Answer(session, fake, now, new LiveInventorySnapshot(Bound, [],
             [new LiveProfileRow(0x5000000000000001, armor, 1, 6, 4), new LiveProfileRow(0, currency, 900, 7, 4)],

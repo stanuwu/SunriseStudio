@@ -19,7 +19,7 @@ public sealed record InvestmentProgression(int Index, int Offset, uint Hash, byt
 /** One reward row. Its index is the native claim index, so rows are never reordered or dropped. */
 public sealed record InvestmentSeasonPassRow(int Progression, int Index, int Offset, uint Rank, uint ItemIndex, uint Quantity,
     uint ClaimSlot, InvestmentExpressionList Conditions, IReadOnlyList<InvestmentSocketOverride> Sockets,
-    InvestmentTableField QuantityField, InvestmentTableField ItemField, string Error = "");
+    InvestmentTableField ItemField, string Error = "");
 
 /** Progression definitions (root slot 68) with their steps and reward rows (package_season_pass_build.cpp). */
 public static class InvestmentSeasonPass
@@ -127,8 +127,6 @@ public static class InvestmentSeasonPass
         problems.AddRange(conditions.Members.Where(member => member.Error.Length != 0).Select(member => "Condition: " + member.Error));
         var sockets = InvestmentRewards.ReadSockets(table, TagView.OffsetOf(table, in row.SocketOverrides), itemCount, problems);
         return new(progression, index, at, rank, item, row.Quantity, claim, conditions, sockets,
-            new(InvestmentTableFieldKind.PassRewardQuantity, owner, progression, index,
-                ViewProperty.Of(table, "Quantity", in row.Quantity, true)),
             new(InvestmentTableFieldKind.PassRewardItem, owner, progression, index,
                 ViewProperty.Of(table, "Item", in item, true)),
             string.Join(" ", problems));

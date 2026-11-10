@@ -14,9 +14,8 @@ public sealed record InvestmentSources(uint Items = InvestmentTags.ItemIndex, ui
     uint Perks = 0x81613D28, uint StatGroups = 0x81613D08, uint Collectibles = 0x81327CDE,
     uint CollectibleDisplays = 0x81327D67, uint PresentationNodes = 0x8131933F, uint PresentationNodeDisplays = 0x81613CF8,
     uint ItemArt = InvestmentItemArt.TableTag, uint Root = 0, uint ObjectiveDisplays = 0);
-/** Named is false when Name falls back to the package name or "Item {index}" because the display strings give none. */
 public sealed record InvestmentItem(int Index, uint Hash, uint Tag, uint DisplayTag, string Name,
-    string TypeName, string Description, byte Bucket, byte Tier, int MaximumStack, bool Instanced, bool Named)
+    string TypeName, string Description, byte Bucket, byte Tier, int MaximumStack, bool Instanced)
 {
     public InvestmentCategory Category => Bucket <= 2 ? InvestmentCategory.Weapons : Bucket is >= 3 and <= 7
         ? InvestmentCategory.Armor : InvestmentItemKinds.IsCurrency(Bucket, TypeName)
@@ -37,7 +36,6 @@ public sealed record InvestmentItemDetail(InvestmentItem Item, IReadOnlyList<Inv
     IReadOnlyList<AssetProperty> Fields, IReadOnlyList<string> Diagnostics)
 {
     public IReadOnlyDictionary<byte, InvestmentStatCurve> DisplayCurves { get; init; } = new Dictionary<byte, InvestmentStatCurve>();
-    public InvestmentRewardWrapper? Wrapper { get; init; }
     public InvestmentPursuit? Pursuit { get; init; }
 }
 public sealed record InvestmentCost(ushort ItemIndex, string Name, uint Quantity, AssetProperty ItemField,
@@ -170,10 +168,8 @@ public sealed partial class InvestmentCatalog
                 }
             }
             catch (Exception error) when (Recoverable(error)) { diagnostics.Add($"Item {i}: {error.Message}"); }
-            bool named = name.Length != 0;
-            if (!named) name = catalog.GetName(definition.Tag) ?? $"Item {i}";
-            items[i] = new(i, definition.Hash, definition.Tag, displayTag, name, type, description, bucket,
-                tier, maximum, instanced, named);
+            if (name.Length == 0) name = catalog.GetName(definition.Tag) ?? $"Item {i}";
+            items[i] = new(i, definition.Hash, definition.Tag, displayTag, name, type, description, bucket, tier, maximum, instanced);
             if ((i & 255) == 0) progress?.Invoke($"Reading items {i + 1}/{definitions.Length}");
         }
         var stats = new Dictionary<byte, string>();

@@ -1,6 +1,5 @@
 using ImGuiNET;
 using SunriseStudio.Formats;
-using SunriseStudio.Rendering;
 
 namespace SunriseStudio.Editor;
 
@@ -8,7 +7,7 @@ namespace SunriseStudio.Editor;
  * A single-step pursuit in the Pursuits bucket, with its objectives, sources, completion and data as sections. The page is
  * titled Pursuit because not every such item is a bounty, and the item's own type line says what it is.
  */
-public sealed class PursuitPage : IStudioPage, IFramePreparedPage
+public sealed class PursuitPage : IStudioPage
 {
     public const string PageId = "sunrise.pursuit";
     private const string Dot = InvestmentTableViews.Dot;
@@ -22,8 +21,6 @@ public sealed class PursuitPage : IStudioPage, IFramePreparedPage
 
     public bool CanOpen(StudioDocument document) =>
         PursuitDocuments.Of(document) == (InvestmentPursuitShape.Single, InvestmentPursuits.PursuitBucket);
-
-    public void PrepareFrame(StudioWorkspace workspace, Dx11Renderer renderer) => inspector.PrepareFrame(workspace);
 
     public void Draw(StudioPageContext context)
     {

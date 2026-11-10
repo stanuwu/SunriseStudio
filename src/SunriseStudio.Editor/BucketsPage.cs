@@ -20,7 +20,7 @@ public sealed class BucketsPage : IStudioPage, IStudioRowPage
         "When this FIFO bucket evicts a row, Sunrise discards it instead of moving it to the item's recovery bucket.";
     /** The INSTALLED grid is at least half a grid row tall. A column shorter than that scrolls as a whole. */
     private const float ShortGridRows = .5f;
-    /** The list column's share of the page and its bounds in font heights, as on the Reward pools page. */
+    /** The list column's share of the page and its bounds in font heights. */
     private const float ListShare = .35f, ListMinimumFonts = 14, ListMaximumFonts = 26;
     private const string Dot = InvestmentTableViews.Dot;
     // A bucket that history or a link asked for. The first draw after the tables are read selects it.

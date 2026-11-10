@@ -9,7 +9,7 @@ namespace SunriseStudio.Formats;
 public sealed record InvestmentObjective(int Index, int Offset, uint Hash, InvestmentExpression Source,
     bool Optional, bool AllowNegative,
     bool AllowChangeWhenCompleted, bool CountsDown, int CompletionValue, InvestmentExpression TargetAdjustment,
-    InvestmentTableField CompletionField, ReadOnlyMemory<byte> Raw, string Error = "");
+    ReadOnlyMemory<byte> Raw, string Error = "");
 /** A reward the item shows on its pursuit screen. Sunrise does not grant from this list. */
 public sealed record InvestmentRewardPreview(int Slot, ushort ItemIndex, int Quantity, ushort ConditionRow,
     InvestmentExpression? Condition);
@@ -96,8 +96,6 @@ public static class InvestmentPursuits
             if (adjustment.Error.Length != 0) problems.Add("Target adjustment: " + adjustment.Error);
             objectives[i] = new(i, at, row.Unk0, source, optional != 0, TagRead.U8(table, at + AllowNegativeControl) != 0,
                 TagRead.U8(table, at + AllowChangeControl) != 0, countsDown != 0, completion, adjustment,
-                new(InvestmentTableFieldKind.ObjectiveCompletionValue, slot.Tag, i, -1,
-                    ViewProperty.Of(table, "Completion value", in completion, true)),
                 slot.Bytes.Slice(at, stride), string.Join(" ", problems));
         }
         return objectives;

@@ -26,9 +26,6 @@ public static class InvestmentRootSlots
     public static readonly int Objectives = Of(nameof(RootView.Slot58Objectives));
     /** Progression definitions, including the season pass ladders. */
     public static readonly int Progressions = Of(nameof(RootView.Slot68Progressions));
-    /** The table pool entries name as supplemental rewards. The installed build omits it. */
-    public static readonly int Slot84 = Of(nameof(RootView.Slot84SupplementalRewards));
-    public static readonly int Pools = Of(nameof(RootView.Slot88RewardPools));
     /** Shared unlock expressions that opcode 12 inlines. */
     public static readonly int SharedExpressions = Of(nameof(RootView.Slot109RewardExpressions));
     /** Unlock flag and value mapping tables, and the slot tables keyed by unlock slot. */
@@ -42,7 +39,7 @@ public static class InvestmentRootSlots
 
 /**
  * The one installed investment root. Its table slots follow an 8-byte prefix and are 16 bytes each, tag first. Where the
- * root layout names a slot's tag, the name carries the slot number (Slot88RewardPools is slot 88).
+ * root layout names a slot's tag, the name carries the slot number (Slot68Progressions is slot 68).
  */
 public sealed class InvestmentRoot
 {

@@ -1,6 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Globalization;
-using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Formats;
 using SunriseStudio.Live;
@@ -94,26 +92,12 @@ internal sealed class InvestmentTablesLoader
     }
 }
 
-/** Marks table fields whose project bytes differ from the installation. The tooltip says when the game will load the change. */
+/** Marks table fields whose project bytes differ from the installation. */
 internal sealed class InvestmentPendingMarks
 {
     private PackageCatalog? source;
     private long revision = -1;
     private readonly Dictionary<uint, (byte[] Original, byte[] Current)?> tables = [];
-
-    /** Draws an accent dot after the last item when the project changes this field. */
-    public void Dot(StudioWorkspace workspace, InvestmentTableField field)
-    {
-        if (!Changed(workspace, field)) return;
-        // The dot is a fifth of the font size across in radius, close to the browser's modified-row dot at the body font.
-        float line = ImGui.GetFrameHeight(), radius = ImGui.GetFontSize() * .2f;
-        ImGui.SameLine(0, radius);
-        var at = ImGui.GetCursorScreenPos();
-        ImGui.Dummy(new(2 * radius, line));
-        ImGui.GetWindowDrawList().AddCircleFilled(at + new Vector2(radius, line / 2), radius,
-            ImGui.GetColorU32(StudioTheme.Accent));
-        StudioUi.Tip("Changed in the project. Build and install, then restart the game.");
-    }
 
     public bool Changed(StudioWorkspace workspace, InvestmentTableField field)
     {
@@ -170,9 +154,6 @@ internal static class InvestmentTableViews
     /** With no plug item, this socket override selection keeps the initial plug (Sunrise apply_reward_sockets). */
     private const uint KeepInitialPlug = 0;
 
-    /** True when a root table tag names a table to open, being neither unset nor omitted by the build. */
-    public static bool Usable(uint tag) => tag != 0 && tag != InvestmentRoot.OmittedSlot;
-
     /**
      * One socket override's line and tooltip, checked in the order Sunrise applies or refuses it
      * (state_account_reward_grant_runtime.cpp apply_reward_sockets).
@@ -203,8 +184,6 @@ internal static class InvestmentTableViews
         >= 60 when seconds % 60 == 0 => $"{seconds / 60} min",
         _ => $"{seconds} s"
     };
-
-    public static string Weight(float weight) => weight.ToString("0.###", CultureInfo.InvariantCulture);
 
     /** "1 day" or "3 days". Pass plural for a noun that does not take a plain "s". */
     public static string Count(long count, string noun, string? plural = null) =>
@@ -254,9 +233,6 @@ internal static class InvestmentTableViews
 
     /** The separator between parts of one line. */
     public const string Dot = " \u00B7 ";
-
-    /** What a pursuit's reward preview is, for its tooltips. */
-    public const string PreviewTip = "Preview (display only; not a grant)";
 
     /** Character class names in the order the game numbers them. */
     public static string ClassName(int index) => index >= 0 && index < SunriseStudio.Scene.GuardianClasses.All.Count

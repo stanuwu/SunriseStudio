@@ -106,8 +106,6 @@ public sealed partial class StudioWorkspace
             InvestmentItemDetail? item = null; InvestmentVendorDetail? vendor = null;
             if (data.FindItem(document.Entry.TagHash) is { } summary && summary.Tag == document.Entry.TagHash)
                 item = data.ReadItem(document.Entry.TagHash, document.Bytes, OperationToken);
-            // A wrapper's pool tree comes from the root tables. Reading an item with objectives has already loaded them.
-            if (item?.Wrapper is not null) data.Tables(OperationToken);
             if (data.FindVendor(document.Entry.TagHash) is { } seller && seller.Tag == document.Entry.TagHash)
                 vendor = data.ReadVendor(document.Entry.TagHash, document.Bytes);
             InvestmentIcon? icon = null;
@@ -142,7 +140,7 @@ public sealed partial class StudioWorkspace
             return () =>
             {
                 InvestmentRevision++;
-                Status = $"{tables.Pools.Count:N0} reward pools / {tables.PassCandidates.Count:N0} reward ladders";
+                Status = $"{tables.PassCandidates.Count:N0} reward ladders";
             };
         }, blocking: false, keepNotice: true);
     }
@@ -158,15 +156,6 @@ public sealed partial class StudioWorkspace
         var document = Document ?? throw new InvalidOperationException("Choose an item or vendor.");
         byte[] edited = data.Edit(document.Entry.TagHash, document.Bytes, field, value);
         ApplyBytes(edited, "Investment delta saved");
-    }
-
-    /** Saves a table-owned field against the table's current overlay bytes. The open document stays selected. */
-    public void ApplyInvestmentTableEdit(InvestmentTableField field, string value)
-    {
-        RequireEditable();
-        var data = Investment ?? throw new InvalidOperationException("Load investment first.");
-        byte[] edited = data.EditTableField(field, Catalog!.Read(field.OwnerTag), value);
-        ApplyAssetEdits(new Dictionary<uint, byte[]> { [field.OwnerTag] = edited }, "Investment delta saved");
     }
 
     public void AddInvestmentStat(byte index, int value) => ApplyInvestmentRows((data, tag, bytes) => data.AddStat(tag, bytes, index, value));

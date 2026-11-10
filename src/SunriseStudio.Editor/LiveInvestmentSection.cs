@@ -79,7 +79,6 @@ internal sealed partial class LiveInvestmentSection(StudioWorkspace workspace) :
     {
         pursuitDetail.Prepare();
         pursuitChain.Prepare();
-        inspector.PrepareFrame(workspace);
     }
 
     public void Dispose() { pursuitDetail.Dispose(); pursuitChain.Dispose(); }

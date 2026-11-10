@@ -51,7 +51,6 @@ public sealed class QuestPage : IStudioPage, IStudioRowPage, IFramePreparedPage,
     public void PrepareFrame(StudioWorkspace workspace, Dx11Renderer renderer)
     {
         chain.Prepare();
-        inspector.PrepareFrame(workspace);
     }
 
     public void Dispose() => chain.Dispose();

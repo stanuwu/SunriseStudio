@@ -11,7 +11,6 @@ Mod Editor for Sunrise
 
 ## Features
 - View assets, maps, missions and investment data
-- Browse reward pools, the season pass and quest chains, and edit their weights and amounts
 - Move objects, copy and remove statics; edit properties, tag fields and collision
 - create weapons, items, vendors, static props, textures, materials,
   perk behaviors, destinations and more

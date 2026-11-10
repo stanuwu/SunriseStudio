@@ -8,9 +8,8 @@ namespace SunriseStudio.Editor;
 
 /**
  * One pursuit step's objectives, with their completion and installed data. The Quest page and Live's Pursuits show
- * it as tabs, while the Pursuit page and the Investment page of other objective items show it as sections. On asset pages
- * it edits objective targets. In Live it shows the held copy's progress and saved values, with Set progress and Complete
- * objectives.
+ * it as tabs, while the Pursuit page and the Investment page of other objective items show it as sections. In Live it shows
+ * the held copy's progress and saved values, with Set progress and Complete objectives.
  */
 internal sealed partial class PursuitInspector
 {
@@ -22,8 +21,6 @@ internal sealed partial class PursuitInspector
     private const float StepIconSide = 32;
     /** Height of an objective's progress bar, in pixels. */
     private const float ProgressHeight = 5;
-    private readonly InvestmentFieldPopup popup = new();
-    private readonly InvestmentPendingMarks pending = new();
     // The held copy chosen in the In game combo when several are held.
     private ulong chosenCopy;
     private uint shownItem;
@@ -44,9 +41,6 @@ internal sealed partial class PursuitInspector
         public InvestmentItem Item => Detail.Item;
         public bool Live => Links is not null;
     }
-
-    /** Runs between frames: closes the target popup once its document changed. */
-    public void PrepareFrame(StudioWorkspace workspace) => popup.Invalidate(workspace);
 
     /**
      * @param tabbed True for a tab bar, as on the Quest page and in Live; false for uppercase sections.
@@ -73,7 +67,6 @@ internal sealed partial class PursuitInspector
                 DrawContent(step, shown);
             }
         }
-        popup.Draw(context.Workspace);
         if (live is not null) DrawProgressPopups(session);
         ImGui.PopID();
     }
@@ -211,7 +204,7 @@ internal sealed partial class PursuitInspector
     }
 
     /**
-     * One objective: its description, target (editable on asset pages), flags and progress source, and in Live the held copy's
+     * One objective: its description, target, flags and progress source, and in Live the held copy's
      * progress.
      * @param settable True when Live draws Set progress for this objective.
      */
@@ -236,21 +229,11 @@ internal sealed partial class PursuitInspector
         int users = tables.ObjectiveUsers(index).Count;
         ImGui.TextUnformatted(line);
         StudioUi.Tip((line == name ? "" : name + "\n\n") + tip
-            + (users > 1 ? $"\nShared by {users} items; a target change applies to all of them." : ""));
+            + (users > 1 ? $"\nShared by {users} items." : ""));
         ImGui.Indent();
         ImGui.TextDisabled("Target"); ImGui.SameLine();
-        if (step.Live)
-        {
-            ImGui.TextUnformatted($"{objective.CompletionValue}");
-            StudioUi.Tip("Completion value\nEdit it in Assets.");
-        }
-        else
-        {
-            if (ImGui.SmallButton($"{objective.CompletionValue}##target")) popup.Begin(step.Workspace,
-                objective.CompletionField, line);
-            StudioUi.Tip("Completion value");
-            pending.Dot(step.Workspace, objective.CompletionField);
-        }
+        ImGui.TextUnformatted($"{objective.CompletionValue}");
+        StudioUi.Tip("Completion value");
         if (!objective.TargetAdjustment.IsEmpty)
         {
             ImGui.SameLine(); ImGui.TextDisabled("Adjusted");

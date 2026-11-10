@@ -65,9 +65,7 @@ public sealed class StudioPageRegistry
         Register(new ReferencesPage());
         Register(new HexPage());
         Register(new BucketsPage(), first: true);
-        Register(new RewardPoolsPage(), first: true);
         Register(new SeasonPassPage(), first: true);
-        Register(new ItemRewardsPage(), first: true);
         Register(new PursuitPage(), first: true);
         Register(new QuestPage(), first: true);
         Register(new InvestmentPage(), first: true);
