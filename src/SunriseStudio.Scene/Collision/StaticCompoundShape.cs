@@ -18,8 +18,8 @@ public readonly record struct CompoundInstance(int Index, int Offset, QsTransfor
 {
     /** Index into the owning tag's import list, or -1 for an in-file child. */
     public int ImportIndex => ChildImport is ['i', .. var digits] && int.TryParse(digits, out int n) ? n : -1;
-    /** Index into the owning tag's carrier list for an import `tK`, or -1. */
-    public int CarrierIndex => ChildImport is ['t', .. var digits] && int.TryParse(digits, out int n) ? n : -1;
+    /** Index into the owner's material maps for an import `tK`, or -1. */
+    public int MaterialMapIndex => ChildImport is ['t', .. var digits] && int.TryParse(digits, out int n) ? n : -1;
     /** Instance +0x38 collision filter info; 0 leaves the child's own filter. */
     public uint FilterInfo { get; init; }
 }
