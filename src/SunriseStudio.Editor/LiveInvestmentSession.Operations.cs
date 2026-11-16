@@ -215,7 +215,7 @@ public sealed class LiveOperation(LiveInvestmentOperation identity, LiveAction a
 
 public sealed partial class LiveInvestmentSession
 {
-    // A receipt changes at most once per BAP service interval, so pending receipts are read at that pace.
+    // A queued receipt is read every game tick. A deferred one waits on the game, so it is read at RefreshMilliseconds.
     private const long ReceiptMilliseconds = LiveInvestmentConnection.ReceiptPollMilliseconds;
     private readonly List<LiveOperation> operations = [];
     // The operations on each target, oldest first, so a drawn row finds its own without searching every operation.
@@ -263,9 +263,8 @@ public sealed partial class LiveInvestmentSession
     }
 
     /**
-     * Why an action cannot be sent, in the order the user can fix it, or empty when it can. Each check is one the game
-     * makes on submission (investment_operations.cpp check_submission), so this only avoids requests it would refuse. A
-     * catalog the game is still reading defers the operation there, so it is not a reason here.
+     * Why an action cannot be sent, in the order the user can fix it, or empty when it can. Each check is one the game makes
+     * on submission. A catalog the game is still reading defers the operation, so it is not a reason here.
      */
     public string Blocked(string targetKey)
     {
@@ -290,7 +289,8 @@ public sealed partial class LiveInvestmentSession
         {
             if (row.Phase == LiveOperationPhase.Sending && !row.Sent) { unsent = row; break; }
             if (row.Identity.GameStarted != started) continue;
-            bool due = now - row.ReadAt >= ReceiptMilliseconds;
+            long interval = row.Receipt?.State == LiveReceiptState.Deferred ? RefreshMilliseconds : ReceiptMilliseconds;
+            bool due = now - row.ReadAt >= interval;
             if (row.CheckRequested || row.Phase == LiveOperationPhase.Waiting && due) waiting ??= row;
             else if (row.Receipt?.Terminal == true && !row.Acknowledged && due) finished ??= row;
         }

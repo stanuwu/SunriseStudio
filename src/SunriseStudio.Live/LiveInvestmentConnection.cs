@@ -55,7 +55,8 @@ public interface ILiveInvestmentLink : IDisposable
 }
 
 /** A mutation that was never written to the mapping, so the game never saw it and nothing changed. */
-public sealed class LiveInvestmentNotSentException(string message, Exception inner) : InvalidOperationException(message, inner);
+public sealed class LiveInvestmentNotSentException(string message, Exception? inner = null)
+    : InvalidOperationException(message, inner);
 
 /** A mutation got no answer, so the game may or may not have applied it. Studio never sends it again. */
 public sealed class LiveInvestmentOutcomeUnknownException(LiveInvestmentOperation operation,
@@ -74,7 +75,7 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
     private const int PollMilliseconds = 25;
     // Studio's own limit, not a game rule. The game answers in the slice that copies a request, so this only catches a stall.
     private const int ReplyTimeoutMilliseconds = 5000;
-    /** A receipt changes at most once per BAP service interval (kServiceIntervalMs, server/transport/internal.h). */
+    /** A queued receipt changes at most once per game service tick of 50 ms. */
     public const int ReceiptPollMilliseconds = 50;
     // Request ids do not repeat within one Studio run, even across connections.
     private static int lastRequest;
@@ -227,7 +228,7 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
         lock (gate)
         {
             if (hello is null || operation.GameStarted != hello.GameStarted)
-                throw new InvalidOperationException("The operation was not made from this game's hello.");
+                throw new LiveInvestmentNotSentException("The operation was not made from this game's hello.");
             if (unresolved.ContainsKey(operation.Id))
                 throw new InvalidOperationException("The operation was already sent. Read its receipt instead.");
         }
@@ -282,11 +283,12 @@ public sealed class LiveInvestmentConnection : ILiveInvestmentLink
     {
         var block = new byte[LiveInvestmentProtocol.RequestBlockBytes];
         LiveInvestmentProtocol.EncodeRequest(block, opcode, operationId, expected, payload);
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
         bool slot = false;
         Pending? sent = null;
         try
         {
+            // A disposed link throws ObjectDisposedException here, which the not-sent catch takes.
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
             await active.WaitAsync(cancellation.Token).ConfigureAwait(false);
             slot = true;
             long deadline = Environment.TickCount64 + ReplyTimeoutMilliseconds;

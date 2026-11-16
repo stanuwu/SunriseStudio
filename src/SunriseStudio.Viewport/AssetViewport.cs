@@ -403,6 +403,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
         Animation = null;
         framedAnimationClip = null;
         animationPoseFramed = false;
+        heldImage = null;
         nativeScene?.Dispose();
         nativeScene = null;
         nativeHandles.Clear();

@@ -56,8 +56,6 @@ public sealed partial class LivePage : IDisposable, ILiveSection
     public LivePlacements? MatchedPlacements => MatchesWorld() ? connection?.Placements : null;
     public IReadOnlyCollection<LivePlacement> RuntimePlacements => dynamic.Owners;
     public long RuntimeRevision => dynamic.Revision;
-    /** True while the world view is connected to the game. */
-    public bool IsAttached => connection is not null;
 
     string ILiveSection.Id => "world";
     string ILiveSection.Title => "World";

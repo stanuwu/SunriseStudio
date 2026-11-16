@@ -27,7 +27,7 @@ public sealed record InvestmentProgression(int Index, int Offset, uint Hash, byt
         return sums;
     }
 
-    /** Scope 0 is the account and 1 the character. Other scopes are not replicated (package_progression_build.cpp). */
+    /** Scope 0 is the account and 1 the character. Sunrise does not replicate other scopes. */
     public string ScopeLabel => Scope switch { 0 => "Account", 1 => "Character", _ => "Not replicated" };
 }
 /** One reward row. Its index is the native claim index, so rows are never reordered or dropped. */
@@ -35,15 +35,12 @@ public sealed record InvestmentSeasonPassRow(int Progression, int Index, int Off
     uint ClaimSlot, InvestmentExpressionList Conditions, IReadOnlyList<InvestmentSocketOverride> Sockets,
     InvestmentTableField ItemField, string Error = "");
 
-/** Progression definitions (root slot 68) with their steps and reward rows (package_season_pass_build.cpp). */
+/** Progression definitions (root slot 68) with their steps and reward rows. */
 public static class InvestmentSeasonPass
 {
-    /** Sunrise stores a reward's rank in one byte (package_season_pass_build.cpp read_season_reward). */
+    /** Sunrise stores a reward's rank in one byte. */
     public const int MaximumRank = byte.MaxValue;
-    /**
-     * Sunrise reads a reward's item index and claim slot as 32-bit words where the layout names 16-bit fields
-     * (package_season_pass_build.cpp read_season_reward).
-     */
+    /** Sunrise reads a reward's item index and claim slot as 32-bit words where the layout names 16-bit fields. */
     internal static readonly int RewardItem = TagView.FieldOffset<ProgressionReward>(nameof(ProgressionReward.ItemIndex)),
         RewardClaim = TagView.FieldOffset<ProgressionReward>(nameof(ProgressionReward.ClaimFlagSlot));
     /** The instructions LooksLikeOwnership reads: two flag reads and the or that joins them. */
@@ -95,10 +92,8 @@ public static class InvestmentSeasonPass
     }
 
     /**
-     * Studio's guess at the paid track: conditions that start with an account flag, a profile flag and an or. The data
-     * names no tracks, so this is a heuristic. Shared rows are inlined the way Sunrise binds them
-     * (package_reward_build.cpp RewardConditions::append_expression). A shared row on a cycle or at
-     * InvestmentUnlocks.ServerNestingLimit, where Sunrise refuses the expression, stays as its own instruction.
+     * Studio's guess at the paid track, which the data does not name: conditions that start with an account flag, a profile
+     * flag and an or. Shared rows are inlined as Sunrise binds them; one on a cycle or at ServerNestingLimit stays as is.
      */
     public static bool LooksLikeOwnership(InvestmentExpressionList conditions, InvestmentUnlocks unlocks)
     {
@@ -143,7 +138,7 @@ public static class InvestmentSeasonPass
         problems.AddRange(conditions.Members.Where(member => member.Error.Length != 0).Select(member => "Condition: " + member.Error));
         var sockets = InvestmentRewards.ReadSockets(table, TagView.OffsetOf(table, in row.SocketOverrides), itemCount, problems);
         return new(progression, index, at, rank, item, row.Quantity, claim, conditions, sockets,
-            new(InvestmentTableFieldKind.PassRewardItem, owner, progression, index,
+            new(owner, progression, index,
                 ViewProperty.Of(table, "Item", in item, true)),
             string.Join(" ", problems));
     }
