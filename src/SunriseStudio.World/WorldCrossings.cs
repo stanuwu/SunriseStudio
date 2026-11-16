@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using SunriseStudio.Packages;
 using SunriseStudio.Packages.Registry;
@@ -286,6 +287,10 @@ public static class WorldCrossings
     private const int StateSize = 76, StateMaskAt = 32;
     // The payload that places a hi-mip cell table, class 0x80806F8D.
     private const string CellGeometryPayload = "0x80806F78";
+    // The bubble parent's metadata: its mask follows the name hash (parent +28), unnamed up to the bounds array.
+    private static readonly int ParentMetadataSize = Unsafe.SizeOf<C8080960e>(),
+        ParentMaskAt = TagView.FieldOffset<C8080960e>(nameof(C8080960e.BubbleNameHash)) + sizeof(uint),
+        ParentGapSize = TagView.FieldOffset<C8080960e>(nameof(C8080960e.BoundsRefs)) - ParentMaskAt;
 
     /** The bundle's crossing name for a pair; the connector row and its spawn set take its FNV-1. */
     public static string ConnectorName(string from, string to) => $"{from}:{to}:crossing";
@@ -308,6 +313,7 @@ public static class WorldCrossings
             throw new InvalidOperationException($"The map already has a region row named {name}.");
         int rowA = WorldBubbles.ScenarioRow(world, a), rowB = WorldBubbles.ScenarioRow(world, b);
         var model = regions.FirstOrDefault(region => Kind(region) == ConnectorRow) ?? regions[0];
+        var masks = new Dictionary<uint, string>();
         world.Edit(mapNames.Name, (_, fields) =>
         {
             var copy = (JsonObject)model.DeepClone();
@@ -319,16 +325,28 @@ public static class WorldCrossings
             copy["owner_bubble"] = NoOwner;
             ((JsonArray)WorldFiles.Field(fields, "slices")).Add(copy);
             var sets = (JsonArray)WorldFiles.Field(fields, "slice_sets");
-            foreach (int target in new[] { rowA, rowB })
+            foreach (var (bubble, target) in new[] { (a, rowA), (b, rowB) })
             {
                 var set = (JsonObject)sets[target]!;
                 if (set["h_0d537865"] is not JsonArray list) set["h_0d537865"] = list = new JsonArray();
                 var element = new byte[2];
                 BinaryPrimitives.WriteUInt16LittleEndian(element, (ushort)row);
                 list.Add(new JsonObject { ["@unknown"] = Unknown(element, (0, 2)) });
-                set["cell_mask"] = WithBit(WorldFiles.Text(set["cell_mask"]) ?? "", row);
+                set["cell_mask"] = masks[bubble] = WithBit(WorldFiles.Text(set["cell_mask"]) ?? "", row);
             }
         });
+        // Every installed bubble parent repeats its slice set's cell mask at +28, so it takes the new mask too.
+        foreach (var parent in world.Files.Where(file => file.ClassId == SBubbleParent.Class).ToList())
+        {
+            if (!masks.TryGetValue(WorldBubbles.ParentBubble(world, parent.Name), out string? mask)) continue;
+            world.Edit(parent.Name, (_, fields) =>
+            {
+                var metadata = (JsonObject)WorldFiles.Field(fields, "metadata");
+                var raw = Raw(metadata, ParentMetadataSize);
+                Convert.FromHexString(mask).CopyTo(raw, ParentMaskAt);
+                metadata["@unknown"] = Unknown(raw, (0, ParentMaskAt - sizeof(uint)), (ParentMaskAt, ParentGapSize));
+            });
+        }
         // At a switch the client keeps an object only when the new state's region mask carries the
         // object's row. A player in a crossing band is on the connector row, so both states list it.
         world.Edit(world.Single(SScenario.Class).Name, (_, fields) =>

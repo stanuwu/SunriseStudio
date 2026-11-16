@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Text.Json.Nodes;
 using SunriseStudio.Authoring;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
@@ -124,6 +125,8 @@ static class CrossingChecks
         WorldBuild.Check(WorldCrossings.Connectors(world, walk).Any(c => c.Row == row.Row), "Widow's Walk does not list the connector.");
         WorldBuild.Check(WorldBubbles.SpawnSets(world, town).Contains(WalkConnectorName) && WorldBubbles.SpawnSets(world, walk).Contains(WalkConnectorName),
             "The connector's name is not a spawn set of both bubbles.");
+        WorldBuild.Check(new[] { 51, 54, 52 }.Select(Renamed).All(bubble => ParentMaskFollows(world, bubble)),
+            "An installed bubble parent's mask differs from its slice set's mask.");
         foreach (var (map, to) in new[] { (TownMap, walk), (WalkMap, town) })
         {
             var table = ZoneTable.Read(catalog.Read(VisibilityIdMap.Read(catalog.Read(map)).ZoneCrossing));
@@ -168,6 +171,8 @@ static class CrossingChecks
             "The new connector is not listed by both slice sets.");
         WorldBuild.Check(WorldBubbles.SpawnSets(world, west.NameHash).Contains(connector.NameHash) && WorldBubbles.SpawnSets(world, east.NameHash).Contains(connector.NameHash),
             "Both bubbles must declare the connector's spawn set.");
+        WorldBuild.Check(ParentMaskFollows(world, west.NameHash) && ParentMaskFollows(world, east.NameHash),
+            "A bubble parent's mask does not repeat its slice set's mask after the connector.");
 
         // Each side's statics and collision load in the other through one container both definitions list.
         foreach (var (bubble, other) in new[] { (west.NameHash, east.NameHash), (east.NameHash, west.NameHash) })
@@ -240,6 +245,22 @@ static class CrossingChecks
         }
         Console.WriteLine($"world_crossing_transitions maps={scene.Visibility.Count} cells={scene.Visibility.Sum(placed => placed.Cells.Count)} zones={zones}");
     }
+    /** The bubble parent's mask at +28 (metadata +12) equals the bubble's slice-set cell mask. */
+    private static bool ParentMaskFollows(WorldFiles world, uint bubble)
+    {
+        var parent = world.Files.Single(file => file.ClassId == SBubbleParent.Class && WorldFiles.Hash(WorldFiles.Field(
+            (JsonObject)WorldFiles.Field(world.Fields(file.Name), "metadata"), "bubble_name_hash")) == bubble);
+        var metadata = (JsonObject)WorldFiles.Field(world.Fields(parent.Name), "metadata");
+        // The 64-byte metadata's unnamed bytes, by offset.
+        byte[] raw = new byte[64];
+        foreach (var (key, value) in metadata["@unknown"] as JsonObject ?? [])
+            Convert.FromHexString((string)value!).CopyTo(raw, int.Parse(key, System.Globalization.CultureInfo.InvariantCulture));
+        byte[] stored = raw[12..44];
+        var sets = (JsonArray)WorldFiles.Field(world.Fields(world.Single(SMapLocationNames.Class).Name), "slice_sets");
+        byte[] mask = Convert.FromHexString(WorldFiles.Text(sets[WorldBubbles.ScenarioRow(world, bubble)]!["cell_mask"]) ?? "");
+        return mask.Length == 32 && stored.AsSpan().SequenceEqual(mask);
+    }
+
     private static uint Renamed(int row) => SunriseStudio.Packages.StringBankWriter.Hash(WorldIdentity.BubbleName(Destination, row));
 }
 

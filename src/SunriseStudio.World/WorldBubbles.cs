@@ -434,7 +434,8 @@ public static class WorldBubbles
         return rows is { Count: > 0 } && rows.All(item => WorldFiles.Text(item?["payload"]?["@class"]) == VisibilityPayload);
     }
 
-    private static uint ParentBubble(WorldFiles world, string parent) =>
+    /** The bubble name hash a bubble parent file names. */
+    internal static uint ParentBubble(WorldFiles world, string parent) =>
         WorldFiles.Hash(WorldFiles.Field((JsonObject)WorldFiles.Field(world.Fields(parent), "metadata"), "bubble_name_hash"));
 
     /** world/DEST/TYPE/STEM.TYPE becomes world/DEST/TYPE/STEM_NAME.TYPE. */
