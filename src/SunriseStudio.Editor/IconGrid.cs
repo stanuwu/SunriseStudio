@@ -109,9 +109,7 @@ internal sealed class IconGrid
     }
 
     /**
-     * Draws count square cells laid out like a game screen of columns by rows. Each cell is as large as one full screen in the
-     * child allows, up to a grid cell's width, and cells past one screen scroll. Cells draw no names; the caller's tooltips
-     * carry them.
+     * Draws count square cells as a game screen of columns by rows; cells past one screen scroll. Cells draw no names.
      * @return The cell clicked or activated, else -1.
      */
     public static int DrawScreen(string id, int count, int columns, int rows, Func<int, IconCell> cell, float scale,
@@ -249,8 +247,7 @@ internal static class IconList
     public static float RowHeight(float scale) => ImGui.GetTextLineHeightWithSpacing() * 2 + 7 * scale;
 
     /**
-     * One two-line row of a list: the item's icon, the name, a muted detail line, then a badge and the modified dot on the
-     * right. The row's Selectable stays the last item, so callers can add its tooltip and menu.
+     * One two-line list row: icon, name, detail line, badge and modified dot. Its Selectable is the last item drawn.
      * @param iconColumn True for item rows, which keep the icon's room whether or not the icon loaded or exists.
      * @return True when the row was clicked.
      */
@@ -287,9 +284,8 @@ internal static class IconList
     }
 
     /**
-     * One text line of a list: a Selectable, the item's icon at the text's height and the label fitted after it. Every line keeps
-     * the icon's room, whether or not the icon loaded or the line names an item, so labels line up. The Selectable stays the
-     * last item, so callers can add its tooltip.
+     * One text line of a list: icon then label. Every line keeps the icon's room so labels line up. Its Selectable is the
+     * last item drawn.
      * @return True when the line was clicked.
      */
     public static bool Line(string id, InvestmentIconCache icons, InvestmentCatalog catalog, int item,

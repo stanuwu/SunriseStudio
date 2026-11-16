@@ -10,11 +10,9 @@ namespace SunriseStudio.Editor;
 internal readonly record struct ProgressRefusal(string Text, bool Never = false);
 
 /**
- * Whether Set progress and Complete objectives can run on a held pursuit, checked in Sunrise's refusal order
- * (state/runtime/pursuit_edit.cpp set_pursuit_objective, complete_pursuit_objectives). The game revalidates everything, so
- * this refuses only requests certain to be refused, plus a Set progress that has no current value to send: the request
- * carries the value the game reported for the objective, which the game compares with the saved row.
- * One refusal per action decides both whether its control is drawn and why it is disabled.
+ * Whether Set progress and Complete objectives can run on a held pursuit, in the game's refusal order. Refuses only what
+ * the game would refuse, plus a Set progress with no reported value to compare. One refusal decides both whether a
+ * control is drawn and why it is disabled.
  */
 internal static class PursuitProgress
 {
@@ -33,7 +31,7 @@ internal static class PursuitProgress
     /** The game reports a skipped objective's value as 0 without reading its row, so there is no current value to compare. */
     public const string Skipped = "The game skips this optional objective; its saved value is not read.";
     public static readonly string AllComplete = LiveInvestmentProtocol.Describe("objectives_complete");
-    /** The held copy's value that holds a bounty's deadline (Sunrise state/account/inventory/item_state.h kItemExpiryLane). */
+    /** The held copy's value that holds a bounty's deadline. */
     private const int BountyDeadlineLane = 0;
 
     /** A held pursuit in a few words: "2 of 3 objectives" when the game knows its objectives, otherwise "progress unknown". */
@@ -72,9 +70,8 @@ internal static class PursuitProgress
 
     /**
      * Why the held pursuit's objectives cannot be completed now, or empty when they can. The game evaluates each objective
-     * after its writes to the ones before it, so once an earlier objective is written, a later incomplete one may complete
-     * before the game reaches it; Studio then leaves that one to the game. Studio does not predict the objective_target
-     * refusal, which the game gives when its writes still leave an objective incomplete.
+     * after writing the ones before it, so incomplete ones after the first are left to it, as is the objective_target
+     * refusal.
      */
     public static ProgressRefusal CompleteRefusal(InvestmentTables tables, InvestmentPursuit pursuit,
         LiveHeldPursuit? held, string link)
@@ -101,10 +98,8 @@ internal static class PursuitProgress
     }
 
     /**
-     * The refusals both operations share, in the order read_held_pursuit gives them: the link, the held copy, then its
-     * contract. Without a readable contract the game reports no objectives and does not know them
-     * (studio_investment_payloads.cpp held_pursuit); a contract with no objectives reads as known. Studio does not read a
-     * bounty's deadline, so the game's expired refusal is left to the game.
+     * The refusals both operations share, in the game's order: the link, the held copy, then its contract. A pursuit with
+     * no objectives and no ObjectivesKnown flag has no readable contract. The expired refusal is left to the game.
      */
     private static ProgressRefusal HeldRefusal(LiveHeldPursuit? held, string link) =>
         link.Length != 0 ? new(link) : held is null ? new(NotHeld, Never: true)
@@ -112,9 +107,8 @@ internal static class PursuitProgress
             : new("");
 
     /**
-     * Why the game can never write this objective's progress, or null when it can (pursuit_edit.cpp progress_row): progress
-     * kept in one of the held copy's own values other than a bounty's deadline, or one saved flag or value row. A positive
-     * lifetime makes the pursuit a bounty, as in Sunrise's contract.
+     * Why the game can never write this objective's progress, or null when it can. It writes a held copy's own value other
+     * than a bounty's deadline, or one saved flag or value row. A positive lifetime makes the pursuit a bounty.
      */
     private static ProgressRefusal? SourceRefusal(InvestmentTables tables, InvestmentPursuit pursuit,
         InvestmentObjective objective)

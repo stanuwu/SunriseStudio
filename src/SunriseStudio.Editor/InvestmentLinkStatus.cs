@@ -13,9 +13,8 @@ internal static class InvestmentLinkStatus
         + "item's live progress is first shown, so World alone reads no account.";
 
     /**
-     * Draws a status dot, then the selected character's class or why there is none, then any notes. The tooltips carry the
-     * ids and the catalogs the game is still reading, and notes that do not fit in width move into the first part's tooltip.
-     * With opensLive set, the indicator shows a hand cursor and its tooltip says a click opens Live.
+     * Draws a status dot, the selected character's class or why there is none, then notes that fit the width.
+     * @param opensLive True when a click on the indicator opens Live.
      * @return True when any part was clicked.
      */
     public static bool Draw(LiveInvestmentSession live, float width, bool opensLive)

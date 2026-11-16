@@ -16,8 +16,7 @@ internal static class InvestmentObjectiveText
 
     /**
      * Rows join objectives by index and must repeat the objective's hash. A missing or mismatched row gives no text.
-     * @param tag The display table to read, or 0 to find the one installed entry of its class, as InvestmentRoot.Locate finds
-     * the root.
+     * @param tag The display table to read, or 0 to find the one installed entry of its class.
      * @param text Resolves a (bank, string hash) pair, or returns "" when the bank or string is absent.
      * @return One description per objective, "" when there is none.
      */

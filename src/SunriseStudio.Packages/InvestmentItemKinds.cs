@@ -12,11 +12,11 @@ public static class InvestmentItemKinds
         Emotes = "Emotes", Finishers = "Finishers", Artifacts = "Artifacts", Currencies = "Currencies",
         Engrams = "Engrams", Bounties = "Bounties", Quests = "Quests", Mods = "Mods and plugs",
         Consumables = "Consumables", Other = "Other items";
-    /** Held pursuits sit in inventory bucket 40 (State items kPursuitBucketId). */
+    /** Held pursuits sit in inventory bucket 40. */
     public const byte PursuitBucket = 40;
-    /** Sunrise keeps at most this many objectives of a pursuit (State pursuits kObjectiveCapacity). Some installed items list 8. */
+    /** Sunrise keeps at most this many objectives of a pursuit. Some installed items list 8. */
     public const int PursuitObjectiveCapacity = 7;
-    /** Bucket id 255 names no bucket (State buckets kUnavailableBucketId). */
+    /** Bucket id 255 names no bucket. */
     public const byte NoBucket = byte.MaxValue;
 
     /** Every category Classify returns, in browser order. */

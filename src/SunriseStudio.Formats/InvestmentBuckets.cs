@@ -12,10 +12,10 @@ public sealed record InvestmentBucket(int Index, byte Id, int FirstSlot, int Slo
     public int LastSlot => FirstSlot + SlotCount - 1;
 }
 
-/** Inventory bucket descriptors (root slot 17), read as package_root_tables.cpp build_buckets reads them. */
+/** Inventory bucket descriptors (root slot 17), read as Sunrise reads them. */
 public static class InvestmentBuckets
 {
-    /** The table and descriptor layout, as definition_index_table.h reads it from the same generated views. */
+    /** The table and descriptor layout. */
     private static readonly int CountOffset = TagView.FieldOffset<C80807c62>(nameof(C80807c62.BucketCount)),
         FirstDescriptor = TagView.FieldOffset<C80807c62>(nameof(C80807c62.BucketDescriptors)),
             DescriptorSize = Unsafe.SizeOf<G80807c6290>(),
@@ -23,17 +23,16 @@ public static class InvestmentBuckets
         SlotCount = TagView.FieldOffset<G80807c6290>(nameof(G80807c6290.SlotCount)),
         ArraySelector = TagView.FieldOffset<G80807c6290>(nameof(G80807c6290.ArraySelector));
     /**
-     * FIFO and no-transfer-on-eviction bytes, the two after the array selector (definition_index_table.h kBucketFifoOffset,
-     * kBucketNoTransferOnEvictionOffset). A value above 1 in either refuses the whole table (package_root_tables.cpp build_buckets).
+     * FIFO and no-transfer-on-eviction bytes, the two after the array selector. A value above 1 in either refuses the whole
+     * table.
      */
     private static readonly int FifoByte = ArraySelector + 1, NoTransferByte = ArraySelector + 2;
-    /** Sunrise accepts 1 to 255 descriptors (buckets/definition.h kDescriptorCapacity). */
+    /** Sunrise accepts 1 to 255 descriptors. */
     public const int Capacity = byte.MaxValue;
     /** Sunrise's buckets::valid refuses the no-bucket id. */
     private const byte NoBucket = InvestmentItemKinds.NoBucket;
     /**
-     * The highest array selector Sunrise knows: character, profile, small profile (buckets/definition.h ArraySelector). Any other
-     * refuses the whole table (inventory_bucket_catalog.cpp range_fits).
+     * The highest array selector Sunrise knows: character, profile, small profile. Any other refuses the whole table.
      */
     public const byte LastArraySelector = 2;
     private const string Refused = "Sunrise refuses the whole bucket table: ";

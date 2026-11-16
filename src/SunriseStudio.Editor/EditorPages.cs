@@ -9,11 +9,9 @@ using SunriseStudio.Viewport;
 namespace SunriseStudio.Editor;
 
 /**
- * ExportFullAsset asks for a folder, then exports the open asset to Blender; null where no export applies.
- * ShowPage(page, row) focuses a page of the open document on the next draw, so a page that opens another asset can land on
- * one of its pages. The row is chosen when that page draws, and a null row keeps the page's own choice.
- * Live opens the Live tab's investment section from an asset page. It is null where Live cannot be shown.
- * Icons is the window's item icon cache, or null where none is prepared.
+ * ExportFullAsset asks for a folder, then exports the open asset to Blender. ShowPage(page, row) focuses a page of the
+ * open document on the next draw; a null row keeps the page's own choice. Live opens the Live tab's investment section.
+ * ExportFullAsset, Live and Icons are null where they do not apply.
  */
 public sealed record StudioPageContext(StudioWorkspace Workspace, AssetViewport Viewport,
     Action<AssetProperty> SelectProperty, Action<MeshInstance>? SelectMesh = null,

@@ -33,9 +33,8 @@ public sealed partial class StudioWorkspace
     }
 
     /**
-     * Records what the editor shows of the current place. The first view fills the place in; another page or selection
-     * is a new place, so Back returns to the previous one. Another row is a new place when a link chose it, and replaces
-     * the current place's row when the user chose it in the page.
+     * Records what the editor shows. Another page or selection is a new place for Back. Another row is a new place when a
+     * link chose it, and replaces the current row when the user chose it in the page.
      * @param linked True when a link or history chose the view's row.
      */
     public void NoteView(StudioView view, bool linked = false)

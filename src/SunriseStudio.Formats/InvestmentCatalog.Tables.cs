@@ -55,7 +55,7 @@ internal readonly record struct InvestmentItemLinks(ushort WrapperPool, byte Wra
 
     /**
      * Sunrise reads a pursuit's lifetime as the operand of its one literal expression row, and reports a held pursuit with a
-     * positive lifetime as a bounty (item_definition_reader.cpp read_lifetime, studio_investment_payloads.cpp held_pursuit).
+     * positive lifetime as a bounty.
      */
     private static bool Expiring(ReadOnlySpan<byte> item) => InvestmentUnlocks.ReadExpression(item,
         InvestmentPursuits.LifetimeField)
@@ -160,7 +160,7 @@ public sealed partial class InvestmentTables
     /** The item's wrapper pool, or -1 when the item has no readable wrapper. */
     public int WrapperPool(int item) => item >= 0 && item < links.Length
         && links[item].WrapperPool != ushort.MaxValue ? links[item].WrapperPool : -1;
-    /** The wrapper flag of a wrapper that opens as soon as it is acquired (Sunrise rewards/definition.h kOpenOnAcquisition). */
+    /** The wrapper flag of a wrapper that opens as soon as it is acquired. */
     private const byte OpenOnAcquisition = 1;
     /** True when the item's wrapper opens as soon as it is acquired; false without a wrapper. */
     public bool OpensOnAcquisition(int item) => WrapperPool(item) >= 0 && (links[item].WrapperFlags & OpenOnAcquisition) != 0;
@@ -178,10 +178,8 @@ public sealed partial class InvestmentTables
     }
 
     /**
-     * What an objective's progress reads once shared rows are inlined, as package_objective_build.cpp read_objective and
-     * package_reward_build.cpp RewardConditions::append_expression bind it. A program Sunrise refuses
-     * (InvestmentUnlocks.InlinedCount) is Unreadable. The pursuit's instance values are not consulted, since Sunrise's
-     * item-progress rule does not read them either. The installed objectives' sources are read once when the tables load.
+     * What an objective's progress reads once shared rows are inlined, as Sunrise binds it. A program Sunrise refuses is
+     * Unreadable. Instance values are not read, as Sunrise does not read them. Installed objectives are read at load.
      */
     public InvestmentProgressSource ProgressSource(InvestmentObjective objective) =>
         objective.Index >= 0 && objective.Index < progressSources.Length && ReferenceEquals(Objectives[objective.Index], objective)
@@ -192,7 +190,7 @@ public sealed partial class InvestmentTables
         int count = Unlocks.InlinedCount(objective.Source, out var only);
         if (count == 0) return new(InvestmentProgressKind.Unreadable, default);
         if (count > 1) return new(InvestmentProgressKind.Several, default);
-        // A flag or value read that no saved bank holds is an external input, which pursuit_edit.cpp saved_row never writes.
+        // A flag or value read that no saved bank holds is an external input, which the game never writes.
         var kind = only.Opcode switch
         {
             InvestmentUnlocks.FlagOpcode => Unlocks.ClassOf(only) >= 0 ? InvestmentProgressKind.ClassFlag
@@ -205,7 +203,7 @@ public sealed partial class InvestmentTables
 
     /**
      * True when a value read stays external as Sunrise binds it: a slot that neither the account nor the character value
-     * mapping table names, so no saved bank holds it (package_reward_build.cpp RewardConditions::bind).
+     * mapping table names, so no saved bank holds it.
      */
     private bool ExternalRead(InvestmentUnlockInstruction read) => read.Opcode == InvestmentUnlocks.ValueOpcode
         && read.Operand < Unlocks.ValueSlots.Count && !Unlocks.BoundValue(read.Operand);

@@ -5,14 +5,12 @@ using SunriseStudio.Live;
 namespace SunriseStudio.Editor;
 
 /**
- * Binds an installed flag or value read to the saved row the game reads. The game reads saved rows by bank and row, so
- * Studio sends a row only when its proven label names the row Sunrise binds the slot to. Sunrise binds a slot to the
- * first mapping row naming it and tries the account, profile and character tables in that order
- * (package_node_build.cpp read_slot_map, package_reward_build.cpp RewardConditions::bind).
+ * Binds an installed flag or value read to the saved row the game reads, by bank and row. Sunrise binds a slot to the
+ * first mapping row naming it, trying the account, profile and character tables in that order.
  */
 internal static class LiveUnlockSources
 {
-    /** Sunrise's unmapped-slot marker (items/packages/internal.h kUnmappedSlot). Mapping rows from it on are never bound. */
+    /** Sunrise's unmapped-slot marker. Mapping rows from it on are never bound. */
     private const int UnmappedRow = ushort.MaxValue;
     /** The saved banks and the slot kind that names each, in the order Sunrise tries their mapping tables. */
     private static readonly (LiveUnlockBank Bank, int Kind)[] FlagBanks =

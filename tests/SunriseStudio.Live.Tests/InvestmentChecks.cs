@@ -34,7 +34,7 @@ internal static class InvestmentChecks
             + "investment_pursuit_edits=checked investment_connection=checked");
     }
 
-    /** The mapping name, each request and answer size and the enum values the game declares (studio_investment_wire.h). */
+    /** The mapping name, each request and answer size and the enum values the game declares. */
     private static void Sizes()
     {
         Check(P.MappingName(42) == @"Local\SunriseStudio.Investment.42", "The investment mapping name differs.");

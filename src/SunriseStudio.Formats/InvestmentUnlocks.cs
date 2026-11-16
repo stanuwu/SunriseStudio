@@ -31,8 +31,7 @@ public sealed class InvestmentUnlocks
     /** The opcodes Studio reads by name: a flag read, or, a value read, a constant, and a shared row to inline. */
     public const uint FlagOpcode = 1, OrOpcode = 3, ValueOpcode = 10, ConstantOpcode = 11, SharedOpcode = 12;
     /**
-     * Sunrise refuses an expression whose shared rows nest this deep, counting the expression itself as depth 0
-     * (rewards/definition.h kTraversalDepth, package_reward_build.cpp RewardConditions::append_expression).
+     * Sunrise refuses an expression whose shared rows nest this deep, counting the expression itself as depth 0.
      */
     public const int ServerNestingLimit = 32;
     // Slot rows hold a hash, the kind (a u16 for flags, or a kind byte and an aggregation byte for values), then the bank row.
@@ -55,8 +54,8 @@ public sealed class InvestmentUnlocks
     private static readonly int[] ValueMapArrays = [.. new[] { nameof(C80807c80.H826fd8c8), nameof(C80807c80.H1c76a86c),
         nameof(C80807c80.H201ada27), nameof(C80807c80.HD4a626c1) }.Select(TagView.FieldOffset<C80807c80>)];
     /**
-     * The opcodes Sunrise evaluates (unlocks_expression.h Opcode, unlocks_expression.cpp step) and opcode 12, which its
-     * extraction inlines, each with its name, infix symbol, pops and pushes. Opcodes 6 and 9 are the same test.
+     * The opcodes Sunrise evaluates and opcode 12, which it inlines, each with its name, infix symbol, pops and pushes.
+     * Opcodes 6 and 9 are the same test.
      */
     private static readonly Dictionary<uint, (string Name, string Symbol, int Pops, int Pushes)> Opcodes = new()
     {
@@ -227,12 +226,9 @@ public sealed class InvestmentUnlocks
     public static string OpcodeName(uint opcode) => Opcodes.TryGetValue(opcode, out var row) ? row.Name : $"op {opcode}";
 
     /**
-     * Counts an expression's instructions once its shared rows are inlined, as package_reward_build.cpp
-     * RewardConditions::append_expression builds the program Sunrise evaluates.
+     * Counts an expression's instructions once its shared rows are inlined, as Sunrise builds the program it evaluates.
      * @param first The program's first instruction.
-     * @return 1 for one instruction and 2 for more, or 0 when Sunrise refuses the expression: it is unreadable or empty,
-     * a shared row is missing, unreadable, empty or on a cycle, the rows nest to ServerNestingLimit, or an instruction
-     * does not bind.
+     * @return 1 for one instruction, 2 for more, or 0 when Sunrise refuses the expression.
      */
     internal int InlinedCount(InvestmentExpression expression, out InvestmentUnlockInstruction first)
     {
@@ -262,7 +258,7 @@ public sealed class InvestmentUnlocks
 
     /**
      * Sunrise binds a flag or value read only to a slot its table holds, and any other instruction only when it evaluates
-     * its opcode (package_reward_build.cpp RewardConditions::bind, unlocks_expression.cpp decode_opcode).
+     * its opcode.
      */
     private bool Binds(InvestmentUnlockInstruction instruction) => instruction.Opcode switch
     {
@@ -286,8 +282,7 @@ public sealed class InvestmentUnlocks
 
     /**
      * True when Sunrise binds a flag read of this slot to a saved bank: the account, profile or character flag mapping table
-     * names it (package_reward_build.cpp RewardConditions::bind). Any other flag read that is not a class flag is an
-     * external input, which no saved row holds.
+     * names it. Any other flag read that is not a class flag is an external input.
      */
     public bool BoundFlag(uint slot)
     {
@@ -299,7 +294,7 @@ public sealed class InvestmentUnlocks
 
     /**
      * True when Sunrise binds a value read of this slot to a saved bank: the account or the character value mapping table names
-     * it (package_reward_build.cpp RewardConditions::bind). Any other value read is an external input.
+     * it. Any other value read is an external input.
      */
     public bool BoundValue(uint slot)
     {
@@ -463,7 +458,7 @@ public sealed class InvestmentUnlocks
         return result;
     }
 
-    /** A class's flag is the one flag instruction gating use of its default finisher (package_reward_build.cpp read_class_flag). */
+    /** A class's flag is the one flag instruction gating use of its default finisher. */
     private static Dictionary<uint,
         (int Class, string Label)> ClassFlags(ReadOnlyMemory<byte>? classes, PackageCatalog catalog,
             IReadOnlyList<InvestmentItem> items)

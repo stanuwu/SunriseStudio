@@ -14,7 +14,7 @@ namespace SunriseStudio.Editor;
 public sealed class BucketsPage : IStudioPage, IStudioRowPage
 {
     public const string PageId = "sunrise.buckets";
-    /** What the FIFO and no-transfer bytes make Sunrise do (bucket_admission.cpp, buckets/definition.h kFifo, kNoTransferOnEviction). */
+    /** What the FIFO and no-transfer bytes make Sunrise do. */
     internal const string FifoTip = "When the bucket is full, Sunrise evicts its oldest row to admit a new one.";
     private const string NoTransferTip =
         "When this FIFO bucket evicts a row, Sunrise discards it instead of moving it to the item's recovery bucket.";

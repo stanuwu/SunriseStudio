@@ -26,10 +26,8 @@ internal interface ILiveSection : IDisposable
 }
 
 /**
- * What a section may use of the window: the workspace, the scene view, the shared grid choice and item icon cache, plus two
- * navigations. OpenAsset(tag, page, row) opens an asset with that row chosen, as a link does, on the named page or on the
- * shown page when page is null. ShowPage(page, row) shows Assets on a page of the open asset, as an asset page's links do
- * after opening one.
+ * What a section may use of the window. OpenAsset(tag, page, row) opens an asset with that row chosen, on the shown page
+ * when page is null. ShowPage(page, row) shows Assets on a page of the open asset.
  */
 internal sealed record LiveSectionContext(StudioWorkspace Workspace, AssetViewport Viewport, Action? DrawScene, float Scale,
     bool Grid, Action<bool> SetGrid, Action<uint, string?, string?> OpenAsset, Action<string, string?> ShowPage,

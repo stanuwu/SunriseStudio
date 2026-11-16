@@ -163,8 +163,7 @@ internal sealed class QuestChainView : IDisposable
         chain?.Steps.FirstOrDefault(step => step.ItemIndex == item) is { } found ? StepKey + found.Member.ToString(CultureInfo.InvariantCulture) : "";
 
     /**
-     * One node per step in authored order, with its objectives, the rewards it shows as chips and, for a step that completes
-     * automatically, a note saying so. A link joins each step to the next.
+     * One node per step in authored order, with its objectives and reward chips, linked to the next step.
      * @param details Step reads in chain order, or null while they are read.
      * @param fitRow Joins a row's text and its suffix, shortening the text to the node's width.
      * @param held Items of the chain the character holds, tinted and marked, or null offline.

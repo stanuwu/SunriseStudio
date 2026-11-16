@@ -166,13 +166,10 @@ internal static class InvestmentTableViews
             $"Objective {objective.Index}\n0x{objective.Hash:X8}");
     }
 
-    /** With no plug item, this socket override selection keeps the initial plug (Sunrise apply_reward_sockets). */
+    /** With no plug item, this socket override selection keeps the initial plug in Sunrise. */
     private const uint KeepInitialPlug = 0;
 
-    /**
-     * One socket override's line and tooltip, checked in the order Sunrise applies or refuses it
-     * (state_account_reward_grant_runtime.cpp apply_reward_sockets).
-     */
+    /** One socket override's line and tooltip, checked in the order Sunrise applies or refuses it. */
     public static (string Text, string Tip) SocketOverride(InvestmentCatalog catalog, InvestmentSocketOverride socket)
     {
         const ushort absent = ushort.MaxValue;
@@ -208,7 +205,7 @@ internal static class InvestmentTableViews
     public static float InputWidth(string widest) => ImGui.CalcTextSize(widest).X + 2 * ImGui.GetStyle().FramePadding.X
         + 2 * (ImGui.GetFrameHeight() + ImGui.GetStyle().ItemInnerSpacing.X);
 
-    /** Names a bucket's inventory array by its selector byte (Sunrise inventory/buckets/definition.h ArraySelector). */
+    /** Names a bucket's inventory array by its selector byte. */
     public static string Scope(byte selector) => selector switch
     {
         0 => "Character", 1 => "Account", 2 => "Small account", _ => $"Array {selector}"

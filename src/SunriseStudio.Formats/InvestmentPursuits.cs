@@ -20,7 +20,7 @@ public sealed record InvestmentQuestStep(int Member, int Value, ushort ItemIndex
 public sealed record InvestmentQuestSet(ushort OwnerItem, int Block, ushort ValueSlot, byte Mode,
     IReadOnlyList<InvestmentQuestStep> Steps, string Error = "")
 {
-    /** Only mode 1 is decoded, as in quest_initialization_reader.cpp kSupportedQuestSetMode. */
+    /** Only mode 1 is decoded, as Sunrise decodes it. */
     public bool ModeDecoded => Mode == 1;
 }
 /**
@@ -38,11 +38,11 @@ public static class InvestmentPursuits
     public const byte PursuitBucket = InvestmentItemKinds.PursuitBucket;
     /** The item's lifetime expression. */
     internal static readonly int LifetimeField = TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.H34f70b23");
-    /** Bytes between the objective array and the require-all byte (item_definition_reader.cpp kRequireAllObjectivesOffset). */
+    /** Bytes between the objective array and the require-all byte. */
     private const int RequireAllGap = 7;
     /**
      * The objective block's require-all byte and the require-non-optional byte after it. A value above 1 in either leaves
-     * the contract unreadable (item_definition_reader.cpp read_pursuit_metadata).
+     * the contract unreadable.
      */
     private static readonly int RequireAllControl = TagView.FieldOffset<ItemObjectiveBlock>(nameof(ItemObjectiveBlock.Objectives))
         + Unsafe.SizeOf<TagArray<ObjectiveReferenceArray>>() + RequireAllGap, RequireNonOptionalControl = RequireAllControl + 1;
@@ -50,13 +50,12 @@ public static class InvestmentPursuits
     private const int AllowNegativeByte = 2, AllowChangeByte = 3;
     /**
      * Objective row control bytes: the optional word and the counts-down word, ending just before the completion value.
-     * Sunrise reads only the optional and counts-down bytes, and a value above 1 in either refuses the whole objective table
-     * (package_objective_build.cpp read_completion_controls).
+     * Sunrise reads only the optional and counts-down bytes, and a value above 1 in either refuses the whole objective table.
      */
     private static readonly int CountsDownControl = TagView.FieldOffset<ObjectiveRow>(nameof(ObjectiveRow.CompletionValue)) - sizeof(uint),
         OptionalControl = CountsDownControl - sizeof(uint), AllowNegativeControl = OptionalControl + AllowNegativeByte,
             AllowChangeControl = OptionalControl + AllowChangeByte;
-    /** Minimum quest owner and quest-set block sizes, as quest_initialization_reader.cpp derives them from the same layouts. */
+    /** Minimum quest owner and quest-set block sizes, as Sunrise derives them from the same layouts. */
     internal static readonly int MinimumQuestOwner = Unsafe.SizeOf<ItemDefinition>(),
         MinimumQuestSet = Math.Min(Math.Min(Unsafe.SizeOf<ItemObjectiveBlock>(), Unsafe.SizeOf<QuestSetBlock>()),
             Unsafe.SizeOf<ItemUnlockBlock>());
@@ -219,7 +218,7 @@ public static class InvestmentPursuits
         return previews;
     }
 
-    /** The owner's quest-set block, read with the quest_initialization_reader.cpp layout. Steps keep their authored order. */
+    /** The owner's quest-set block, read with Sunrise's layout. Steps keep their authored order. */
     internal static InvestmentQuestSet ReadQuestSet(ushort owner, ReadOnlyMemory<byte>? data, int itemCount)
     {
         InvestmentQuestSet Unreadable(string error) => new(owner, -1, Absent, 0, [], error);

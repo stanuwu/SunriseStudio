@@ -12,7 +12,7 @@ public sealed record InvestmentSlotRead(int Slot, uint Tag, InvestmentSlotState 
     public bool Loaded => State == InvestmentSlotState.Loaded;
 }
 
-/** The root slots Studio reads, named by the root layout's field for each slot, as Sunrise's root_slot reads them. */
+/** The root slots Studio reads, named by the root layout's field for each slot. */
 public static class InvestmentRootSlots
 {
     /** Character classes. Each row names its class's default finisher. */

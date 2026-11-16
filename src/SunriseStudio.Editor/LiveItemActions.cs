@@ -129,10 +129,8 @@ internal sealed class LiveItemActions
     internal readonly record struct HeldControls(bool Quantity, bool Remove, string Blocked);
 
     /**
-     * The chosen row's Set quantity and Remove, decided once for the buttons and for OpenHeld. Only a stack has a quantity to
-     * set, because an instance is always one item. Sunrise removes a character's instance through the dismantle path
-     * (queuez_investment_push.cpp publish_item_removal) but refuses to remove an account row's instance
-     * (state_account_quantity_runtime.cpp set_quantity, unsupported_removal), so that row draws no Remove.
+     * The chosen row's Set quantity and Remove, for the buttons and for OpenHeld. Only a stack has a quantity to set. The
+     * game refuses to remove an account row's instance, so that row draws no Remove.
      * @param row The chosen row, or null while none is chosen; both buttons then draw disabled.
      * @param missing The inventory's missing line, which is the reason while no row is chosen.
      */

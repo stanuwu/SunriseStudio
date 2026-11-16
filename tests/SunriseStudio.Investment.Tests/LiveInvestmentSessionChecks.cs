@@ -567,7 +567,7 @@ internal static class LiveInvestmentSessionChecks
     }
 
     /**
-     * Reasons come in check_submission's order. A catalog the game is still reading defers the operation there, so it is not
+     * Reasons come in the game's submission order. A catalog the game is still reading defers the operation, so it is not
      * a reason here.
      */
     private static void Gating(LiveInvestmentSession session, FakeInvestmentLink fake, ref long now)

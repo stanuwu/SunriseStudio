@@ -305,7 +305,7 @@ internal sealed partial class LiveInvestmentSection
 
     /**
      * Why the game would refuse a claim of this row, or empty when it would not. The order is the game's: rank, then the claim
-     * flag, then the condition (state_account_reward_draw_runtime.cpp prepare_season_pass_reward).
+     * flag, then the condition.
      */
     private string ClaimRefusal(LiveSeasonPassRow row) =>
         !row.Flags.HasFlag(LiveSeasonPassRowFlags.RankMet) ? $"Rank {row.RequiredRank} needed."

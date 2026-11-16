@@ -8,7 +8,7 @@ namespace SunriseStudio.Formats;
 public sealed record InvestmentSocketOverride(int Offset, ushort SocketType, ushort PlugItem, ushort PlugSet,
     ushort RollSet, uint Selection)
 {
-    /** The selection of an override that names its plug directly (Sunrise rewards/definition.h kFixedPlugSelection). */
+    /** The selection of an override that names its plug directly. */
     private const uint FixedPlugSelection = 0xFFFFFFFF;
     /** True when the override names its plug rather than selecting one from a set. */
     public bool FixedPlug => Selection == FixedPlugSelection;
@@ -19,7 +19,7 @@ public static class InvestmentRewards
 {
     private const ushort Absent = InvestmentCatalog.Absent;
 
-    /** Socket overrides need a socket type, and a fixed plug must be an installed item (rewards/definition.h valid_socket). */
+    /** Socket overrides need a socket type, and a fixed plug must be an installed item. */
     internal static IReadOnlyList<InvestmentSocketOverride> ReadSockets(ReadOnlySpan<byte> blob, int field,
         int itemCount, List<string> problems)
     {

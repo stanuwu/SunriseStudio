@@ -95,7 +95,7 @@ public sealed record LivePursuitObjective(uint ObjectiveHash, int Value, int Tar
 public sealed record LiveHeldPursuit(ulong Instance, uint ItemHash, int MutationSerial, uint ItemFlags, LivePursuitFlags Flags,
     IReadOnlyList<LivePursuitObjective> Objectives)
 {
-    /** The saved item flag of a tracked item (Sunrise state/account/inventory/item_state.h kTrackedItemFlag). */
+    /** The saved item flag of a tracked item. */
     private const uint TrackedItemFlag = 0x2;
 
     /** True when the player tracks this pursuit. */
@@ -139,7 +139,7 @@ public sealed record LiveInvestmentOperation(ulong Id, LiveInvestmentContext Exp
 }
 
 /**
- * Mirrors the investment mapping in Sunrise's middleware/studio/studio_investment_wire.h. Offsets are absolute in the
+ * Mirrors Sunrise's investment mapping. Offsets are absolute in the
  * mapping, except payload field offsets, which count from the start of their payload or record.
  */
 public static class LiveInvestmentProtocol
@@ -154,7 +154,7 @@ public static class LiveInvestmentProtocol
     public const int RequestBlockOffset = 48, ResponseBlockOffset = 128, ResponsePayloadOffset = 240;
     /** The whole mapping's size. */
     public const int MappingBytes = ResponsePayloadOffset + ResponsePayloadBytes;
-    // Mirror investment_wire::kConnectIntervalMs and kHeartbeatTimeoutMs.
+    // The game's connect interval and heartbeat timeout.
     public const int ConnectIntervalMilliseconds = 1000, HeartbeatTimeoutMilliseconds = 3000;
 
     /** Control block fields Studio writes: magic, version, mapping size, its process id and its heartbeat. */

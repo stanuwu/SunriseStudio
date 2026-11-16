@@ -223,9 +223,8 @@ internal sealed partial class LiveInvestmentSection
     }
 
     /**
-     * Draws the shown quest's chain with the steps the character holds tinted. A click shows a step in the inspector, held
-     * or not, and Open shows it on the Quest page. Without an inventory the chain still draws under the reason, with nothing
-     * held.
+     * Draws the shown quest's chain with held steps tinted. A click shows a step in the inspector, and Open shows it on the
+     * Quest page. Without an inventory the chain draws under the reason, with nothing held.
      * @param held The held pursuits, or null while the game does not say.
      */
     private void DrawPursuitChain(LiveSectionContext context, LiveInvestmentSession live,
@@ -299,9 +298,8 @@ internal sealed partial class LiveInvestmentSection
     }
 
     /**
-     * What Complete all's confirmation does: asks the game to complete each open bounty's objectives, one request per copy,
-     * as Complete objectives does for one. A copy that got a request since the confirmation opened is left out. The game
-     * judges each copy and Activity shows its result.
+     * Sends Complete objectives for each open bounty, one request per copy. A copy that got a request since the
+     * confirmation opened is left out.
      * @return The requests sent.
      */
     internal IReadOnlyList<LiveOperation> CompleteAll(LiveInvestmentSession live, InvestmentCatalog? catalog,
