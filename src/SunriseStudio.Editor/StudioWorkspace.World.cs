@@ -1,3 +1,4 @@
+using SunriseStudio.Authoring;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
 using SunriseStudio.Tags.Generated;
@@ -164,7 +165,6 @@ public sealed partial class StudioWorkspace
         var names = Names;
         long began = System.Diagnostics.Stopwatch.GetTimestamp();
         var priorDocument = keepDocument ? Document : null;
-        var connections = Project?.BubbleConnections ?? [];
         // The asset tab keeps a document that no change reached.
         var keptDocument = priorDocument is not null && !DependsOn(priorDocument, worldChanges) ? priorDocument : null;
         BeginWork(missionTag is null ? $"Loading {DisplayName(mapTag)}" : $"Loading {DisplayName(missionTag.Value)}", () =>
@@ -176,7 +176,7 @@ public sealed partial class StudioWorkspace
             var world = missionTag is uint mission
                 ? loader.LoadMission(mapTag, mission, options, OperationToken)
                 : loader.LoadMap(mapTag, options, OperationToken);
-            var exits = AddCrossingExits(world, connections);
+            TransitionCells.Read(catalog, world.Scene);
             uint documentTag = priorDocument?.AddedAssetId is null && priorDocument is not null
                 ? priorDocument.Entry.TagHash : missionTag ?? mapTag;
             StudioDocument? document = keptDocument;
@@ -191,7 +191,6 @@ public sealed partial class StudioWorkspace
             return () =>
             {
                 World = world;
-                crossingExits = exits;
                 // This world holds every change so far; a failed load keeps them pending.
                 worldChanges = [];
                 placementUpdates.Clear();
@@ -214,7 +213,6 @@ public sealed partial class StudioWorkspace
         RequireIdle();
         BeforeAssetMutation?.Invoke();
         World = null;
-        crossingExits = [];
         worldChanges = [];
         placementUpdates.Clear();
         worldTextures.Clear();

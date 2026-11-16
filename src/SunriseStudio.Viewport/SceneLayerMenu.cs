@@ -66,11 +66,9 @@ public static class SceneLayerMenu
     private static void DrawTransitionOptions(AssetViewport viewport)
     {
         ImGui.Separator();
-        bool rest = viewport.ShowRestCells, alternate = viewport.ShowAlternateCells;
-        if (ImGui.Checkbox("Rest cells", ref rest)) viewport.ShowRestCells = rest;
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Draw state 5 cells too: red triggers, amber middle, green landing, blue rest");
-        if (ImGui.Checkbox("Alternate cells", ref alternate)) viewport.ShowAlternateCells = alternate;
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Draw the alternate visibility layer where a bubble has one");
+        bool far = viewport.ShowFarCells;
+        if (ImGui.Checkbox("Far cells", ref far)) viewport.ShowFarCells = far;
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Draw kind 5 cells too: red switch, amber near, green kind 4, blue far");
     }
 
     /** Edge and solid switches, and what the collision layer holds or why it is empty. */

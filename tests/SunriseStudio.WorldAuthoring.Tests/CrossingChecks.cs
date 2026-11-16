@@ -29,6 +29,7 @@ static class CrossingChecks
         var schema = StudioRegistry.Index;
         RoundTrips(catalog, schema);
         uint scenario = WorldBuild.Named(catalog, "edz_freeroam:scenario_client");
+        Transitions(catalog, WorldTemplate.MapRootOf(catalog, schema, scenario));
         string scratch = Path.Combine(Path.GetTempPath(), "sunrise-crossings-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -220,6 +221,25 @@ static class CrossingChecks
         return cluster < 0 ? (sbyte)-1 : side.Table.Records[cluster].Kind;
     }
 
+    /** The Transitions layer reads every placed EDZ map: one cell per cluster, and Trostland's switch cells. */
+    private static void Transitions(PackageCatalog catalog, uint mapRoot)
+    {
+        var scene = new SunriseStudio.Scene.WorldLoader(catalog).LoadMap(mapRoot).Scene;
+        int errors = scene.DecodeErrorCount;
+        TransitionCells.Read(catalog, scene);
+        var town = scene.Visibility.SingleOrDefault(placed => placed.MapTag == TownMap);
+        int zones = scene.Markers.Count(marker => marker.Category == "Crossing");
+        WorldBuild.Check(scene.DecodeErrorCount == errors && scene.Visibility.Count > 0 && scene.Visibility.All(placed => placed.Cells.Count > 0 || !HasTables(placed.MapTag))
+            && town is not null && town.Cells.Any(cell => cell.Kind == ZoneRecord.Switch) && zones > 0,
+            "The Transitions layer did not read every installed EDZ visibility map, or Trostland has no switch cells.");
+        // A map whose fine tome or zone-crossing table is not installed draws no cells.
+        bool HasTables(uint tag)
+        {
+            var map = VisibilityIdMap.Read(catalog.Read(tag));
+            return catalog.ContainsTag(map.FineTome) && catalog.ContainsTag(map.ZoneCrossing);
+        }
+        Console.WriteLine($"world_crossing_transitions maps={scene.Visibility.Count} cells={scene.Visibility.Sum(placed => placed.Cells.Count)} zones={zones}");
+    }
     private static uint Renamed(int row) => SunriseStudio.Packages.StringBankWriter.Hash(WorldIdentity.BubbleName(Destination, row));
 }
 

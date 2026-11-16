@@ -7,26 +7,24 @@ namespace SunriseStudio.Viewport;
 
 public sealed partial class AssetViewport
 {
-    // Cell boxes per owner, built once per scene and option; visible owners are joined each frame.
+    // Cell boxes per map, built once per scene and option; visible maps are joined each frame.
     private readonly Dictionary<PlacedVisibility, LineVertex[]> transitionLines = [];
     private readonly List<LineVertex> transitionFrame = [];
     private SceneDocument? transitionScene;
-    private (bool RestCells, bool Alternate) transitionOptions;
+    private bool transitionFarCells;
 
-    /** Draws rest cells (state 5) too; they are most of a crossing bubble's cells. */
-    public bool ShowRestCells { get; set; }
-    /** Draws the alternate layer of owners that have one, in place of the primary layer. */
-    public bool ShowAlternateCells { get; set; }
+    /** Draws far-band cells (kind 5) too; they are most of a crossing bubble's cells. */
+    public bool ShowFarCells { get; set; }
 
-    /** Each visible owner's cells as wire boxes coloured by state; inert cells (state 0) are not drawn. */
+    /** Each visible map's cells as wire boxes coloured by kind; cells of kind 0 are not drawn. */
     private void DrawTransitions(Matrix4x4 view)
     {
         if (Scene is not { Visibility.Count: > 0 } scene) return;
-        if (!ReferenceEquals(transitionScene, scene) || transitionOptions != (ShowRestCells, ShowAlternateCells))
+        if (!ReferenceEquals(transitionScene, scene) || transitionFarCells != ShowFarCells)
         {
             transitionLines.Clear();
             transitionScene = scene;
-            transitionOptions = (ShowRestCells, ShowAlternateCells);
+            transitionFarCells = ShowFarCells;
         }
         transitionFrame.Clear();
         foreach (var placed in scene.Visibility)
@@ -40,16 +38,12 @@ public sealed partial class AssetViewport
 
     private LineVertex[] TransitionLines(PlacedVisibility placed)
     {
-        var layer = ShowAlternateCells && placed.Layers.Count > 1 ? placed.Layers[1] : placed.Layers.FirstOrDefault();
-        if (layer is null) return [];
         var lines = new List<LineVertex>();
-        for (int cell = 0; cell < layer.Cells.Cells.Count; cell++)
+        foreach (var cell in placed.Cells)
         {
-            var row = layer.Cells.Cells[cell];
-            if (row.State == 0 || row.State == 5 && !ShowRestCells) continue;
-            var color = AssetSceneLoader.TransitionStateColor(row.State);
-            var (low, high) = layer.Boxes.Count > cell ? (layer.Boxes[cell].Minimum, layer.Boxes[cell].Maximum)
-                : (row.Point - new Vector3(.25f), row.Point + new Vector3(.25f));
+            if (cell.Kind == 0 || cell.Kind == 5 && !ShowFarCells) continue;
+            var color = AssetSceneLoader.TransitionStateColor(cell.Kind);
+            var (low, high) = (cell.Minimum, cell.Maximum);
             for (int corner = 0; corner < 8; corner++)
                 for (int bit = 1; bit <= 4; bit <<= 1)
                     if ((corner & bit) == 0)

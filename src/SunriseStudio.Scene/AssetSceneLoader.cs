@@ -524,7 +524,8 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                 && TagView.FitsThrough<SLightsPayload>(data, resource, nameof(SLightsPayload.LightCollection));
             var cubemap = resourceClass == UnknownCubemapPayload.Class;
             var atmosphere = resourceClass == UnknownAtmospherePayload.Class && TagView.Fits<UnknownAtmospherePayload>(data, resource);
-            var visibility = resourceClass == SPlacementVisibilityConstructor.Class && data.Has(resource, 0x14);
+            var visibility = resourceClass == SPlacementVisibilityConstructor.Class
+                && TagView.FitsThrough<SPlacementVisibilityConstructor>(data, resource, nameof(SPlacementVisibilityConstructor.VisibilityMap));
             if (atmosphere)
                 scene.Atmospheres.Add(new PlacedAtmosphere(bubble, tag, row,
                     data.AsSpan(resource, Unsafe.SizeOf<UnknownAtmospherePayload>()).ToArray()));
@@ -594,15 +595,8 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                 if (cubemap)
                     ReadPlacedCubemap(tag, resource, transform, marker);
                 if (visibility)
-                {
-                    try { ReadPlacedVisibility(data.U32(resource + 0x10), tag, row, bubble); }
-                    catch (Exception error) when (error is InvalidDataException or ArgumentException or OverflowException
-                        or IndexOutOfRangeException or KeyNotFoundException)
-                    {
-                        scene.DecodeErrorCount++;
-                        scene.Diagnostics.Add($"Cannot decode visibility of {Name(tag)}: {error.Message}");
-                    }
-                }
+                    ReadPlacedVisibility(TagView.Member<SPlacementVisibilityConstructor, uint>(data, resource,
+                        nameof(SPlacementVisibilityConstructor.VisibilityMap)), tag, row, bubble);
                 QueuePlacedClassModels(marker, transform);
                 ReadClassVolumes(classTag, bubble, label);
             }
