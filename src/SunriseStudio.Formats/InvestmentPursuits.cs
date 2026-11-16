@@ -60,7 +60,9 @@ public static class InvestmentPursuits
         MinimumQuestSet = Math.Min(Math.Min(Unsafe.SizeOf<ItemObjectiveBlock>(), Unsafe.SizeOf<QuestSetBlock>()),
             Unsafe.SizeOf<ItemUnlockBlock>());
     /** Previews hold a count, then six slots of {u32 item, i32 quantity, u32 shared condition row}. */
-    internal const int PreviewSlots = 6, PreviewHeader = 4, PreviewStride = 12, PreviewQuantity = 4, PreviewCondition = 8;
+    private const int PreviewSlots = 6, PreviewHeader = sizeof(uint), PreviewQuantity = sizeof(uint),
+        PreviewCondition = PreviewQuantity + sizeof(int);
+    private static readonly int PreviewStride = (Unsafe.SizeOf<C80807875>() - PreviewHeader) / PreviewSlots;
     private const ushort Absent = InvestmentCatalog.Absent;
 
     /**

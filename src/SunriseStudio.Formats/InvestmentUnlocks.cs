@@ -36,7 +36,10 @@ public sealed class InvestmentUnlocks
     public const int ServerNestingLimit = 32;
     // Slot rows hold a hash, the kind (a u16 for flags, or a kind byte and an aggregation byte for values), then the bank row.
     // The row layouts name only the hash and the flag bank row.
-    private const int SlotKind = 4, SlotAggregation = 5, SlotBankRow = 6;
+    private static readonly int SlotKind =
+        TagView.FieldOffset<UnlockFlagBinding>(nameof(UnlockFlagBinding.UnlockHash)) + sizeof(uint),
+        SlotAggregation = SlotKind + sizeof(byte),
+        SlotBankRow = TagView.FieldOffset<UnlockFlagBinding>(nameof(UnlockFlagBinding.BankIndex));
     /**
      * The flag slot kinds whose saved bank is known: the account, profile and character banks. FourthFlagKind picks the last
      * mapping array, whose bank is unconfirmed. Any other kind is computed and has no mapping array.
