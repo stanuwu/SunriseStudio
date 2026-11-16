@@ -29,7 +29,7 @@ public sealed partial class StudioProject
     private IReadOnlyList<AddedProjectAsset> CommitTransaction(IReadOnlyList<ProjectAssetAddition> additions,
         Func<IReadOnlyList<AddedProjectAsset>, ProjectAssetEdits>? editFactory,
         IReadOnlyDictionary<string, AddedAssetSnapshot?>? states, PackageCatalog? catalog,
-        IReadOnlyDictionary<string, ObjectEdit?>? objectStates = null, IReadOnlyList<ProjectBubbleConnection>? connections = null)
+        IReadOnlyDictionary<string, ObjectEdit?>? objectStates = null)
     {
         RequireMutationAllowed();
         catalog?.InvalidateReadCache();
@@ -100,8 +100,7 @@ public sealed partial class StudioProject
         RequireConfigBindingEdits(edits, states, catalog);
         RequireObjectEditsCompile(objects, edits.Assets, catalog, restoring: objectStates is not null, assets.ToArray());
         PublishTransaction(baseline with { Changes = changes.Values.OrderBy(value => value.TagHash).ToArray(),
-            AddedAssets = assets.ToArray(), ObjectEdits = objectStates is null ? baseline.ObjectEdits : objects,
-            BubbleConnections = connections is null ? baseline.BubbleConnections : connections.Count == 0 ? null : connections },
+            AddedAssets = assets.ToArray(), ObjectEdits = objectStates is null ? baseline.ObjectEdits : objects },
             writes, obsolete);
         return created.AsReadOnly();
     }

@@ -4,7 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="SunriseStudio.Collision.Tests" />
-    <InternalsVisibleTo Include="SunriseStudio.Crossing.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../SunriseStudio.Projects/SunriseStudio.Projects.csproj" />
