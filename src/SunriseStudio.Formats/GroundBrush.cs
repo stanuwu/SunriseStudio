@@ -5,9 +5,9 @@ public enum GroundBrushMode { Raise, Lower, Smooth, Flatten }
 public enum GroundFalloff { Smooth, Linear, Sphere, Sharp, Constant }
 
 /**
- * One brush stroke as World Studio's ground_ops.brush applies it. Raise and lower take Strength units
- * at the centre per dab; smooth and flatten take a blend from 0 to 1 per dab. Flatten moves toward
- * Target, a world Z. Radius and centres are world units.
+ * One brush stroke. Raise and lower take Strength units at the centre per dab; smooth and flatten
+ * take a blend from 0 to 1 per dab. Flatten moves toward Target, a world Z. Radius and centres are
+ * world units.
  */
 public sealed record GroundStroke(GroundBrushMode Mode, IReadOnlyList<(double X, double Y)> Dabs, double Radius,
     double Strength, GroundFalloff Falloff = GroundFalloff.Smooth, double Hardness = 0, double? Target = null);
@@ -50,14 +50,14 @@ public static class GroundBrush
                 : throw new InvalidDataException("A flatten brush needs a target height.")) - grid.Position[2];
         int columns = grid.Columns, rows = grid.Rows;
         var flat = grid.Heights.ToArray();
-        var spots = Local(grid);
-        foreach (var (dx, dy) in stroke.Dabs)
+        // Dabs measure to the snapped points the ground draws.
+        var spots = grid.Points();
+        foreach (var (cx, cy) in stroke.Dabs)
         {
-            double cx = dx - grid.Position[0], cy = dy - grid.Position[1];
             var before = stroke.Mode == GroundBrushMode.Smooth ? flat.ToArray() : flat;
             for (int index = 0; index < spots.Length; index++)
             {
-                var (x, y) = spots[index];
+                var (x, y, _) = spots[index];
                 double distance = Hypot(x - cx, y - cy);
                 if (distance > stroke.Radius) continue;
                 double weight = Weight(stroke.Falloff, distance / stroke.Radius, stroke.Hardness);
@@ -122,17 +122,6 @@ public static class GroundBrush
         (double, double, double) At(double t) => (origin.X + direction.X * t, origin.Y + direction.Y * t, origin.Z + direction.Z * t);
     }
 
-    /** Footprint-local (x, y) of every point, row-major. */
-    public static (double X, double Y)[] Local(GroundGrid grid)
-    {
-        double width = grid.Width, depth = grid.Depth;
-        var spots = new (double, double)[grid.PointCount];
-        for (int r = 0; r < grid.Rows; r++)
-            for (int c = 0; c < grid.Columns; c++)
-                spots[r * grid.Columns + c] = (-width / 2 + c * width / (grid.Columns - 1), -depth / 2 + r * depth / (grid.Rows - 1));
-        return spots;
-    }
-
     public static double Bilinear(double[] flat, int columns, int rows, double fx, double fy)
     {
         fx = Math.Min(Math.Max(fx, 0), columns - 1.0);
@@ -162,6 +151,6 @@ public static class GroundBrush
         return count != 0 ? total / count : flat[index];
     }
 
-    /** sqrt(x * x + y * y); Python's math.hypot can differ in the last bit, so brush parity is checked to 1e-9. */
+    /** sqrt(x * x + y * y). */
     private static double Hypot(double x, double y) => Math.Sqrt(x * x + y * y);
 }

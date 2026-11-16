@@ -1,57 +1,80 @@
 using System.Buffers.Binary;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using SunriseStudio.Packages;
+using SunriseStudio.Tags.Document;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Formats;
 
-/** A retail terrain material: the part technique (class 0x808071E8) and the group blend map at pixel t14. */
+/** A terrain material: the part technique (class 0x808071E8) and the group blend map at pixel t14. */
 public sealed record GroundMaterial(uint Technique, uint Dyemap)
 {
-    /** A group dyemap of 0xFFFFFFFF binds nothing at t14, as retail groups without one do. */
+    /** A group dyemap of 0xFFFFFFFF binds nothing at t14. */
     public const uint NoDyemap = uint.MaxValue;
-    public string Id => $"retail-{Technique:X8}";
 }
 
 /** One 128-unit patch of a ground: its cell and the quads of each occupied 32-unit tile. */
 public sealed record GroundPatch(int CellX, int CellY, IReadOnlyDictionary<(int X, int Y), List<(int X, int Y)>> Tiles);
 
-/**
- * One STerrain (class 0x8080714F) with its bounds (class 0x80809671) and buffer payloads. Reference
- * slots hold zero; the offsets name what the compiler writes there.
- */
+/** The tags one patch's STerrain names: its four buffers and its material. */
+public sealed record GroundPatchTags(uint Positions, uint Attributes, uint Indices, uint AlternateIndices, GroundMaterial Material);
+
+/** One encoded patch: its STerrain and bounds table, its buffer payloads and its AO block. */
 public sealed record TerrainPatchData(byte[] Terrain, byte[] Bounds, byte[] Positions, byte[] Attributes,
-    byte[] Indices, byte[] AlternateIndices, byte[] Occlusion, int[] TechniqueOffsets, int[] DyemapOffsets,
-    int VertexCount, int IndexCount, int AlternateIndexCount, (double[] Min, double[] Max) Box, ushort Index);
+    byte[] Indices, byte[] AlternateIndices, byte[] Occlusion, (double[] Min, double[] Max) Box, int Index);
 
 /**
- * Generated grounds as retail terrain, as generated_native_terrain.py compiles them (in game on
- * 2026-09-26, studio_a7d0f7c5ccc6). One STerrain per 128-unit patch, one group per occupied 32-unit
- * tile, levels 0..3 with the same topology. Layout rules were measured on all 1,534 installed STerrain.
+ * Grounds as native terrain: one STerrain per 128-unit patch, one group per occupied 32-unit tile,
+ * levels 0 to 3 with the same topology. Headers and group rows copy an installed STerrain's.
  */
 public static class GroundTerrain
 {
-    public const uint TerrainClass = 0x8080714F, BoundsClass = 0x80809671, BoundsRowClass = 0x80809673;
-    public const uint GroupClass = 0x80807154, PartClass = 0x80807152, TableClass = 0x808099D6, RowClass = 0x808099D8;
-    public const uint ResourceClass = 0x8080714B, RegistryRowClass = 0x8080726A;
-    // 'kbrt': high word of a terrain's render-registry key; 'aprt': high word of a group bounds key.
+    // High word of a terrain's AO key ('kbrt') and of a group bounds visibility id ('aprt').
     public const uint KeyTag = 0x7472626B, BoundsTag = 0x74727061;
-    // Installed tags referenced in place: terrain archetype (1,636 of 1,636 rows), depth prepass and shadow techniques (1,534 of 1,534).
-    public const uint Archetype = 0x80C705F2, DepthTechnique = 0x815B67A5, ShadowTechnique = 0x815B67A8;
-    /** Slot of the terrain table in a 23-slot geometry container (1,636 of 1,636). */
-    public const int ContainerSlot = 7;
     private const double Patch = 128, Tile = 32, TexcoordScale = 63.0 / 16;
+    // A strip restart, and the most a 16-bit index or part count holds.
     private const int MaxIndex = 0xFFFF;
+    // Levels a group carries; the first three share the primary index buffer.
+    private const int Levels = 4, PrimaryLevels = 3;
+    /** The row sizes of the position and attribute buffers. */
+    public static int PositionStride => Unsafe.SizeOf<PositionRow>();
+    public static int AttributeStride => Unsafe.SizeOf<AttributeRow>();
     private static readonly (int, int)[] UOrder = [(0, 0), (1, 0), (1, 1), (0, 1)];
 
-    /** The registry key of a terrain index: 'kbrt' high word, index low word. */
+    /** A position row: x and y in 1/64 units, z in 1/8192 units split over z and w. */
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PositionRow { public short X, Y, Z, W; }
+
+    /** An attribute row: the SNORM16 normal with w at full, and the patch texcoord. */
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AttributeRow { public short NormalX, NormalY, NormalZ, NormalW; public Half U, V; }
+
+    /** One level's index range in a group row; the four follow the group's UV transform. */
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LevelRange { public uint Start, Count; }
+
+    /** The patch cell and its quadrant mask; they follow the STerrain position offset. */
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TerrainCell { public short X, Y; public uint Quadrants; }
+
+    /** The alternate index count and the vertex count rounded to four; they end where UnkA8 starts. */
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TerrainCounts { public uint AlternateIndices, PaddedVertices; }
+
+    /** The AO key of a terrain index: 'kbrt' high word, index low word. */
     public static ulong RegistryKey(int index) => (ulong)KeyTag << 32 | (uint)index;
 
-    /** Quad (x, y) as two upward triangles with generated_terrain.mesh's diagonal. */
+    /** Quad (x, y) as two upward triangles split on the same diagonal as the strip. */
     public static ((int, int, int), (int, int, int)) QuadTriangles(int columns, int x, int y)
     {
         int a = y * columns + x;
         return ((a, a + 1, a + columns), (a + 1, a + columns + 1, a + columns));
     }
 
-    /** Patches in retail order: row-major over cells; each tile's quads in grid order. */
+    /** Patches row-major over cells; each tile's quads in grid order. */
     public static IReadOnlyList<GroundPatch> Patches(GroundGrid grid, (double X, double Y, double Z)[] points)
     {
         var patches = new Dictionary<(int, int), Dictionary<(int, int), List<(int, int)>>>();
@@ -73,7 +96,7 @@ public static class GroundTerrain
             .Select(p => new GroundPatch(p.Key.Item1, p.Key.Item2, p.Value.ToDictionary(t => t.Key, t => t.Value))).ToArray();
     }
 
-    /** Tiles of a patch in retail group order: quadrants, then tiles, each (0,0), (1,0), (1,1), (0,1). */
+    /** Tiles of a patch in group order: quadrants, then tiles, each (0,0), (1,0), (1,1), (0,1). */
     public static (int X, int Y)[] TileOrder(GroundPatch patch) =>
         patch.Tiles.Keys.OrderBy(Rank).ToArray();
 
@@ -116,8 +139,8 @@ public static class GroundTerrain
     }
 
     /**
-     * Our per-vertex occlusion bake (255 = open sky): the mean over eight azimuths of cos^2 of the
-     * horizon elevation within 16 units, over this ground's own heights. Retail bakes the whole map.
+     * Per-vertex AO, 255 for open sky: the mean over eight azimuths of cos^2 of the horizon elevation
+     * within 16 units, over this ground's own heights only.
      */
     public static byte[] Occlusion(GroundGrid grid, (double X, double Y, double Z)[] points, double reach = 16, int directions = 8)
     {
@@ -155,7 +178,7 @@ public static class GroundTerrain
         return result;
     }
 
-    /** Signed 16-bit strips, one per run of quads in a grid column, joined by restarts. */
+    /** 16-bit strips, one per run of quads in a grid column, joined by restarts. */
     private static List<int> Strip(int columns, List<(int X, int Y)> quads, Dictionary<int, int> local)
     {
         var output = new List<int>();
@@ -188,11 +211,15 @@ public static class GroundTerrain
     private static int[] Corners(int columns, (int X, int Y) quad) =>
         [quad.Y * columns + quad.X, quad.Y * columns + quad.X + 1, (quad.Y + 1) * columns + quad.X, (quad.Y + 1) * columns + quad.X + 1];
 
-    /** One patch as encode_patch writes it; index is the patch's terrain index, unique in its bubbles' registries. */
+    /**
+     * Encodes one patch. The STerrain copies `template`'s header and first group row and changes only
+     * what the patch sets; the bounds table copies `boundsTemplate`'s header.
+     * @param index The patch's terrain index, unique among its AO map's keys.
+     */
     public static TerrainPatchData EncodePatch(GroundGrid grid, (double X, double Y, double Z)[] points, short[] normals,
-        byte[] occlusion, GroundPatch patch, GroundMaterial material, int index)
+        byte[] occlusion, GroundPatch patch, GroundPatchTags tags, int index, ReadOnlySpan<byte> template, ReadOnlySpan<byte> boundsTemplate)
     {
-        if (index is < 0 or > 0xFFFF) throw new InvalidDataException("A terrain index is 16 bits.");
+        if (index is < 0 or > MaxIndex) throw new InvalidDataException("A terrain index is 16 bits.");
         int columns = grid.Columns;
         var order = TileOrder(patch);
         if (order.Length is < 1 or > 16) throw new InvalidDataException("A terrain patch holds 1 to 16 tile groups.");
@@ -211,149 +238,112 @@ public static class GroundTerrain
         double[] offset = [low[0] * 64 + 32768, low[1] * 64 + 32768, zOffset, Math.Floor((totalZ - zOffset) / 65536.0)];
         var positions = EncodePositions(vertices.Select(v => points[v]), offset);
         double originX = patch.CellX * Patch, originY = patch.CellY * Patch;
-        var attributes = new byte[vertices.Count * 12];
-        for (int i = 0; i < vertices.Count; i++)
+        var attributes = vertices.Select(v => new AttributeRow
         {
-            int v = vertices[i], at = i * 12;
-            for (int axis = 0; axis < 3; axis++) BinaryPrimitives.WriteInt16LittleEndian(attributes.AsSpan(at + 2 * axis), normals[v * 3 + axis]);
-            BinaryPrimitives.WriteInt16LittleEndian(attributes.AsSpan(at + 6), 32767);
-            BinaryPrimitives.WriteHalfLittleEndian(attributes.AsSpan(at + 8), (Half)((points[v].X - originX) / Patch));
-            BinaryPrimitives.WriteHalfLittleEndian(attributes.AsSpan(at + 10), (Half)((points[v].Y - originY) / Patch));
-        }
+            NormalX = normals[v * 3], NormalY = normals[v * 3 + 1], NormalZ = normals[v * 3 + 2], NormalW = short.MaxValue,
+            U = (Half)((points[v].X - originX) / Patch), V = (Half)((points[v].Y - originY) / Patch)
+        }).ToArray();
+
+        ref readonly var source = ref TagView.Checked<STerrain>(template, 0);
+        var templateGroups = TagView.Rows(template, in source.Groups, UnknownTerrainGroup.Class);
+        if (templateGroups.IsEmpty) throw new InvalidDataException("The template terrain has no group row to copy.");
+        var groupTemplate = templateGroups[0];
         var primary = new List<int>();
         var alternate = new List<int>();
-        var groups = new List<byte[]>();
-        var parts = new List<byte[]>();
-        var boundRows = new List<byte[]>();
+        var groups = new UnknownTerrainGroup[order.Length];
+        var groupLevels = new LevelRange[order.Length][];
+        var parts = new List<UnknownTerrainPart>();
+        var boxes = new SInstanceBoundsRow[order.Length];
         for (int g = 0; g < order.Length; g++)
         {
             var tile = order[g];
             var strip = Strip(columns, patch.Tiles[tile], local);
-            if (strip.Count > MaxIndex) throw new InvalidDataException("A terrain group exceeds the native part index count.");
-            var levels = new List<(int Start, int Count)>();
-            for (int level = 0; level < 3; level++) { levels.Add((primary.Count, strip.Count)); primary.AddRange(strip); }
-            levels.Add((alternate.Count, strip.Count));
+            if (strip.Count > MaxIndex) throw new InvalidDataException("A terrain group exceeds the part index count.");
+            var levels = new LevelRange[Levels];
+            for (int level = 0; level < PrimaryLevels; level++)
+            {
+                levels[level] = new() { Start = (uint)primary.Count, Count = (uint)strip.Count };
+                primary.AddRange(strip);
+            }
+            levels[PrimaryLevels] = new() { Start = (uint)alternate.Count, Count = (uint)strip.Count };
             alternate.AddRange(strip);
+            groupLevels[g] = levels;
             double[] glow = [double.PositiveInfinity, double.PositiveInfinity, double.PositiveInfinity];
             double[] ghigh = [double.NegativeInfinity, double.NegativeInfinity, double.NegativeInfinity];
             foreach (var quad in patch.Tiles[tile]) foreach (int v in Corners(columns, quad)) Extend(glow, ghigh, points[v]);
-            double[] center = [(glow[0] + ghigh[0]) / 2, (glow[1] + ghigh[1]) / 2, (glow[2] + ghigh[2]) / 2];
             double[] extent = [(ghigh[0] - glow[0]) / 2, (ghigh[1] - glow[1]) / 2, (ghigh[2] - glow[2]) / 2];
-            float radius = SingleUp(Math.Sqrt(extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]));
-            var group = new byte[0x60];
-            Floats(group, 0, center[0], center[1], center[2]);
-            BinaryPrimitives.WriteSingleLittleEndian(group.AsSpan(12), radius);
-            Floats(group, 0x10, extent[0], extent[1], extent[2]);
-            Floats(group, 0x20, TexcoordScale, TexcoordScale, 1.0 / 128 - tile.X * 63.0 / 64, 1.0 / 128 - tile.Y * 63.0 / 64);
-            for (int level = 0; level < 4; level++)
+            var group = groupTemplate;
+            group.Unk0 = (float)((glow[0] + ghigh[0]) / 2);
+            group.Unk4 = (float)((glow[1] + ghigh[1]) / 2);
+            group.Unk8 = (float)((glow[2] + ghigh[2]) / 2);
+            group.UnkC = SingleUp(Math.Sqrt(extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]));
+            group.Unk10 = (float)extent[0]; group.Unk14 = (float)extent[1]; group.Unk18 = (float)extent[2];
+            group.UvTransform = new((float)TexcoordScale, (float)TexcoordScale,
+                (float)(1.0 / 128 - tile.X * 63.0 / 64), (float)(1.0 / 128 - tile.Y * 63.0 / 64));
+            group.DyeTexture = tags.Material.Dyemap;
+            groups[g] = group;
+            for (int level = 0; level < Levels; level++)
+                parts.Add(new UnknownTerrainPart
+                {
+                    Material = tags.Material.Technique, IndexStart = levels[level].Start, IndexCount = (ushort)levels[level].Count,
+                    GroupIndex = (byte)g, LodLevel = (byte)level
+                });
+            boxes[g] = new SInstanceBoundsRow
             {
-                BinaryPrimitives.WriteUInt32LittleEndian(group.AsSpan(0x30 + 8 * level), (uint)levels[level].Start);
-                BinaryPrimitives.WriteUInt32LittleEndian(group.AsSpan(0x34 + 8 * level), (uint)levels[level].Count);
-            }
-            groups.Add(group);
-            for (int level = 0; level < 4; level++)
-            {
-                var part = new byte[12];
-                BinaryPrimitives.WriteUInt32LittleEndian(part.AsSpan(4), (uint)levels[level].Start);
-                BinaryPrimitives.WriteUInt16LittleEndian(part.AsSpan(8), (ushort)levels[level].Count);
-                part[10] = (byte)g; part[11] = (byte)level;
-                parts.Add(part);
-            }
-            var bound = new byte[48];
-            Floats(bound, 0, glow[0], glow[1], glow[2], 1);
-            Floats(bound, 16, ghigh[0], ghigh[1], ghigh[2], 1);
-            BinaryPrimitives.WriteUInt32LittleEndian(bound.AsSpan(32), (uint)(index * 16 + g));
-            BinaryPrimitives.WriteUInt32LittleEndian(bound.AsSpan(36), BoundsTag);
-            boundRows.Add(bound);
+                MinimumW1 = new((float)glow[0], (float)glow[1], (float)glow[2], 1),
+                MaximumW1 = new((float)ghigh[0], (float)ghigh[1], (float)ghigh[2], 1),
+                VisibilityId = (ulong)BoundsTag << 32 | (uint)(index * 16 + g)
+            };
         }
+
+        byte[] terrain = template[..Unsafe.SizeOf<STerrain>()].ToArray();
+        ref var header = ref TagView.Edit<STerrain>(terrain);
+        header.Unk10 = (float)low[0]; header.Unk14 = (float)low[1]; header.Unk18 = (float)low[2]; header.Unk1c = 1;
+        header.Unk20 = (float)high[0]; header.Unk24 = (float)high[1]; header.Unk28 = (float)high[2]; header.Unk2c = 1;
+        header.PositionOffset = new((float)offset[0], (float)offset[1], (float)offset[2], (float)offset[3]);
+        header.PositionBuffer[0].Unk0 = tags.Positions;
+        header.PositionBuffer[1].Unk0 = tags.Attributes;
+        header.IndexBuffer = tags.Indices;
+        header.Unk90[0].Unk0 = tags.Positions;
+        header.Unk90[1].Unk0 = tags.Attributes;
+        header.Unk98 = tags.AlternateIndices;
         uint quadrants = 0;
         foreach (var (tx, ty) in order) quadrants |= 1u << (tx / 2 + 2 * (ty / 2));
-        var raw = new byte[0xB0];
-        Floats(raw, 0x10, low[0], low[1], low[2], 1);
-        Floats(raw, 0x20, high[0], high[1], high[2], 1);
-        Floats(raw, 0x30, offset);
-        BinaryPrimitives.WriteInt16LittleEndian(raw.AsSpan(0x40), checked((short)(2 * patch.CellX)));
-        BinaryPrimitives.WriteInt16LittleEndian(raw.AsSpan(0x42), checked((short)(2 * patch.CellY)));
-        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0x44), quadrants);
-        for (int i = 0; i < 3; i++) BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0x48 + 4 * i), uint.MaxValue);
-        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0xA0), (uint)alternate.Count);
-        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0xA4), (uint)((vertices.Count + 3) & ~3));
-        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0xA8), uint.MaxValue);
-        raw = NativeArrays.AppendNative(raw, 0x58, GroupClass, groups, out int groupStart);
-        raw = NativeArrays.AppendNative(raw, 0x80, PartClass, parts, out int partStart);
-        if (groupStart != 0xD0) throw new InvalidDataException("Terrain groups must start at 0xD0.");
-        int[] dyemaps = Enumerable.Range(0, groups.Count).Select(i => groupStart + 0x60 * i + 0x50).ToArray();
-        if (material.Dyemap == GroundMaterial.NoDyemap)
-            foreach (int at in dyemaps) BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(at), uint.MaxValue);
-        var bounds = NativeArrays.AppendNative(new byte[0x18], 8, BoundsRowClass, boundRows, out _);
+        var cell = new TerrainCell { X = checked((short)(2 * patch.CellX)), Y = checked((short)(2 * patch.CellY)), Quadrants = quadrants };
+        MemoryMarshal.Write(terrain.AsSpan(TagView.FieldOffset<STerrain>(nameof(STerrain.PositionOffset)) + Unsafe.SizeOf<Vector4>()), in cell);
+        var counts = new TerrainCounts { AlternateIndices = (uint)alternate.Count, PaddedVertices = (uint)((vertices.Count + 3) & ~3) };
+        MemoryMarshal.Write(terrain.AsSpan(TagView.FieldOffset<STerrain>(nameof(STerrain.UnkA8)) - Unsafe.SizeOf<TerrainCounts>()), in counts);
+        int groupRows = Rows(ref terrain, TagView.FieldOffset<STerrain>(nameof(STerrain.Groups)), UnknownTerrainGroup.Class, groups);
+        int levelsAt = TagView.FieldOffset<UnknownTerrainGroup>(nameof(UnknownTerrainGroup.UvTransform)) + Unsafe.SizeOf<Vector4>();
+        for (int g = 0; g < groups.Length; g++)
+            MemoryMarshal.AsBytes(groupLevels[g].AsSpan()).CopyTo(terrain.AsSpan(groupRows + g * Unsafe.SizeOf<UnknownTerrainGroup>() + levelsAt));
+        Rows(ref terrain, TagView.FieldOffset<STerrain>(nameof(STerrain.Parts)), UnknownTerrainPart.Class, parts.ToArray());
+        TagView.CarrySizeWord(template, terrain);
+
+        byte[] bounds = boundsTemplate[..Unsafe.SizeOf<SInstanceBoundsTable>()].ToArray();
+        Rows(ref bounds, TagView.FieldOffset<SInstanceBoundsTable>(nameof(SInstanceBoundsTable.Boxes)), SInstanceBoundsRow.Class, boxes);
+        TagView.CarrySizeWord(boundsTemplate, bounds);
+
         var block = vertices.Select(v => occlusion[v]).ToArray();
         var padded = new byte[(block.Length + 3) & ~3];
         block.CopyTo(padded, 0);
-        return new(raw, bounds, positions, attributes, U16(primary), U16(alternate), [.. padded, .. padded],
-            Enumerable.Range(0, parts.Count).Select(i => partStart + 12 * i).ToArray(),
-            material.Dyemap == GroundMaterial.NoDyemap ? [] : dyemaps,
-            vertices.Count, primary.Count, alternate.Count, (low, high), (ushort)index);
+        return new(terrain, bounds, positions, MemoryMarshal.AsBytes(attributes.AsSpan()).ToArray(), U16(primary), U16(alternate),
+            [.. padded, .. padded], (low, high), index);
     }
 
-    /**
-     * A terrain map table of count rows in the installed layout (371 of 371): 48-byte head, 144-byte
-     * rows, then a 40-byte slot per row holding {4 zero bytes, class 0x8080714B, 32-byte resource}.
-     * @return The table and, per row, the row offset and its resource offset.
-     */
-    public static (byte[] Bytes, (int Row, int Resource)[] Rows) Table(int count)
+    /** Appends `rows` as the array at `field`. @return The first row's offset. */
+    private static int Rows<T>(ref byte[] tag, int field, uint elementClass, T[] rows) where T : unmanaged
     {
-        if (count is < 1 or > 4096) throw new InvalidDataException("A terrain table holds 1 to 4096 rows.");
-        var raw = new byte[48 + 144 * count + 40 * count];
-        BinaryPrimitives.WriteUInt64LittleEndian(raw, (ulong)raw.Length);
-        BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(8), (ulong)count);
-        BinaryPrimitives.WriteInt64LittleEndian(raw.AsSpan(16), 16);
-        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(28), NativeArrays.Marker);
-        BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(32), (ulong)count);
-        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(40), RowClass);
-        var rows = new (int, int)[count];
-        for (int i = 0; i < count; i++)
-        {
-            int row = 48 + 144 * i, at = 48 + 144 * count + 40 * i + 8;
-            Floats(raw, row + 0x10, 0, 0, 0, 1, 0, 0, 0, 1);
-            BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(row + 0x30), ulong.MaxValue);
-            for (int k = 0; k < 4; k++) BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(row + 0x40 + 4 * k), uint.MaxValue);
-            BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(row + 0x54), uint.MaxValue);
-            BinaryPrimitives.WriteSingleLittleEndian(raw.AsSpan(row + 0x5C), 1);
-            BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(row + 0x60), uint.MaxValue);
-            BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(row + 0x64), 0x811C9DC5);
-            BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(row + 0x68), 0x304);
-            BinaryPrimitives.WriteUInt64LittleEndian(raw.AsSpan(row + 0x70), ulong.MaxValue);
-            BinaryPrimitives.WriteInt64LittleEndian(raw.AsSpan(row + 0x78), at - (row + 0x78));
-            BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(at - 4), ResourceClass);
-            rows[i] = (row, at);
-        }
-        return (raw, rows);
+        int bytes = rows.Length * Unsafe.SizeOf<T>();
+        int first = TagRelocator.AppendArray(ref tag, field, elementClass, rows.Length, bytes);
+        MemoryMarshal.AsBytes(rows.AsSpan()).CopyTo(tag.AsSpan(first, bytes));
+        return first;
     }
 
-    /** Resource +0x10: u16 terrain index, u16 0, 'kbrt'; +0x18 STerrain tag, +0x1C bounds tag. */
-    public static void WriteResource(byte[] table, int resource, int index, uint terrain, uint bounds)
-    {
-        BinaryPrimitives.WriteUInt16LittleEndian(table.AsSpan(resource + 0x10), checked((ushort)index));
-        BinaryPrimitives.WriteUInt16LittleEndian(table.AsSpan(resource + 0x12), 0);
-        BinaryPrimitives.WriteUInt32LittleEndian(table.AsSpan(resource + 0x14), KeyTag);
-        BinaryPrimitives.WriteUInt32LittleEndian(table.AsSpan(resource + 0x18), terrain);
-        BinaryPrimitives.WriteUInt32LittleEndian(table.AsSpan(resource + 0x1C), bounds);
-    }
-
-    /** A bank-0 render-registry row (class 0x8080726A): key, first element of its occlusion block, 0. */
-    public static byte[] RegistryRow(ulong key, uint first)
-    {
-        var row = new byte[16];
-        BinaryPrimitives.WriteUInt64LittleEndian(row, key);
-        BinaryPrimitives.WriteUInt32LittleEndian(row.AsSpan(8), first);
-        return row;
-    }
-
-    /** Positions as landscape/codec.encode_positions: (x, y) * 64 and z * 8192 less the offset, z split over two words. */
+    /** Positions as (x, y) * 64 and z * 8192 less the offset, z split over two signed words. */
     public static byte[] EncodePositions(IEnumerable<(double X, double Y, double Z)> points, double[] offset)
     {
-        var output = new List<byte>();
-        Span<byte> row = stackalloc byte[8];
+        var output = new List<PositionRow>();
         foreach (var (x, y, z) in points)
         {
             double[] native = [x * 64 - offset[0], y * 64 - offset[1], z * 8192 - offset[2] - offset[3] * 65536];
@@ -363,51 +353,37 @@ public static class GroundTerrain
             long pw = FloorDiv(combined + 32768, 65536), pz = combined - pw * 65536;
             if (new[] { px, py, pz, pw }.Any(v => v is < short.MinValue or > short.MaxValue))
                 throw new InvalidDataException("A terrain position exceeds its packed signed lanes.");
-            BinaryPrimitives.WriteInt16LittleEndian(row, (short)px);
-            BinaryPrimitives.WriteInt16LittleEndian(row[2..], (short)py);
-            BinaryPrimitives.WriteInt16LittleEndian(row[4..], (short)pz);
-            BinaryPrimitives.WriteInt16LittleEndian(row[6..], (short)pw);
-            output.AddRange(row.ToArray());
+            output.Add(new PositionRow { X = (short)px, Y = (short)py, Z = (short)pz, W = (short)pw });
         }
-        return output.ToArray();
+        return MemoryMarshal.AsBytes(output.ToArray().AsSpan()).ToArray();
     }
 
-    /** Index buffer header bytes 0 = 1 and 1 = 0 (16-bit); the size sits at +8. */
-    public static byte[] IndexHeader(int size)
-    {
-        var header = new byte[24];
-        header[0] = 1;
-        BinaryPrimitives.WriteUInt64LittleEndian(header.AsSpan(8), (ulong)size);
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(16), 0xDEADBEEF);
-        return header;
-    }
+    /** A 16-bit index buffer header for `size` payload bytes. */
+    public static byte[] IndexHeader(int size) =>
+        Bytes(new IndexBufferHeader { Unk0 = 1, Wide = 0, ByteCount = (ulong)size, End = VertexBufferHeader.EndValue });
 
-    /** Vertex buffer header: size, stride, 0, 0xDEADBEEF. */
-    public static byte[] VertexHeader(int size, int stride)
+    /** A vertex buffer header for `size` payload bytes of `stride`-byte rows. */
+    public static byte[] VertexHeader(int size, int stride) =>
+        Bytes(new VertexBufferHeader { ByteCount = (uint)size, Stride = (ushort)stride, End = VertexBufferHeader.EndValue });
+
+    private static byte[] Bytes<T>(T value) where T : unmanaged
     {
-        var header = new byte[12];
-        BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)size);
-        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(4), (ushort)stride);
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(8), 0xDEADBEEF);
-        return header;
+        var bytes = new byte[Unsafe.SizeOf<T>()];
+        MemoryMarshal.Write(bytes, in value);
+        return bytes;
     }
 
     /** float32 rounded up, so a stored radius never shrinks below its double. */
     internal static float SingleUp(double value)
     {
         float stored = (float)value;
-        return stored < value ? BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(stored) + 1) : stored;
+        return stored < value ? MathF.BitIncrement(stored) : stored;
     }
 
     private static void Extend(double[] low, double[] high, (double X, double Y, double Z) p)
     {
         low[0] = Math.Min(low[0], p.X); low[1] = Math.Min(low[1], p.Y); low[2] = Math.Min(low[2], p.Z);
         high[0] = Math.Max(high[0], p.X); high[1] = Math.Max(high[1], p.Y); high[2] = Math.Max(high[2], p.Z);
-    }
-
-    private static void Floats(byte[] bytes, int at, params double[] values)
-    {
-        for (int i = 0; i < values.Length; i++) BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(at + 4 * i), (float)values[i]);
     }
 
     private static byte[] U16(List<int> values)

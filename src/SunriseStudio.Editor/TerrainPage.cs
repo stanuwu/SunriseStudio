@@ -61,7 +61,7 @@ public sealed class TerrainPage : IStudioPage
             {
                 var definition = grounds[i].Definition;
                 if (ImGui.Selectable($"{definition.Name}  {definition.Columns} x {definition.Rows}##ground{i}", i == selected)) { selected = i; dabs.Clear(); }
-                StudioUi.Tip($"Bubble 0x{definition.Site.Bubble:X8}, container 0x{definition.Site.Container:X8}, terrain index {definition.FirstIndex}");
+                StudioUi.Tip($"Bubble 0x{definition.Site.BubbleNameHash:X8} of {definition.Site.Destination}, first terrain index {definition.Site.FirstIndex}");
             }
             ImGui.EndListBox();
         }
@@ -80,7 +80,7 @@ public sealed class TerrainPage : IStudioPage
             ImGui.BeginDisabled(!workspace.CanEdit);
             if (ImGui.Button("Remove ground")) { workspace.RemoveGround(ground); selected = 0; painting = false; }
             ImGui.EndDisabled();
-            StudioUi.Help("Removes the ground's assets and restores the slots and registry it changed.");
+            StudioUi.Help("Removes the ground's assets and lists and takes its rows out of the AO map.");
         }
     }
 
@@ -129,7 +129,7 @@ public sealed class TerrainPage : IStudioPage
             selected = workspace.Grounds().Count - 1; error = "";
         }
         ImGui.EndDisabled();
-        StudioUi.Help("Fills the first free terrain slot of the bubble and adds the ground's rows to its render registry.");
+        StudioUi.Help("Adds terrain and collision lists to a bubble of a project destination and the ground's rows to its AO map.");
     }
 
     private static GroundMaterialChoice? Choice(StudioWorkspace workspace, int index) =>
@@ -149,7 +149,7 @@ public sealed class TerrainPage : IStudioPage
         if (current is { } material && index == 0 && choices.Count > 0 && choices[0].Material != material)
             index = Math.Max(0, choices.ToList().FindIndex(c => c.Material == material));
         index = Math.Clamp(index, 0, Math.Max(0, choices.Count - 1));
-        string Label(GroundMaterialChoice c) => c.Preset ? $"{c.Name} (preset)" : $"{c.Name}  {c.Terrains} terrains";
+        string Label(GroundMaterialChoice c) => $"{c.Name}  {c.Terrains} terrains";
         if (ImGui.BeginCombo("Material", choices.Count > 0 ? Label(choices[index]) : "None installed"))
         {
             for (int i = 0; i < choices.Count; i++)

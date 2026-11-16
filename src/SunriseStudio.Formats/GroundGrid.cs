@@ -6,7 +6,7 @@ namespace SunriseStudio.Formats;
  */
 public sealed record GroundGrid(int Columns, int Rows, int SpacingTicks, double[] Position, double[] Heights)
 {
-    // terrain_grid.MAX_CELLS: 2..65 points a side, at most 256 units, heights within 128 units of the origin.
+    // 2 to 65 points a side, at most 256 units, heights within 128 units of the origin.
     public const int MinimumPoints = 2, MaximumPoints = 65, MaximumSize = 256, MaximumHeight = 128;
 
     public double Width => (Columns - 1) * SpacingTicks / 64.0;
@@ -14,7 +14,7 @@ public sealed record GroundGrid(int Columns, int Rows, int SpacingTicks, double[
     public int PointCount => Columns * Rows;
     public double Height(int column, int row) => Heights[row * Columns + column];
 
-    /** Refuses what terrain_grid.validate refuses; nothing is clipped. */
+    /** Refuses a grid outside the limits; nothing is clipped. */
     public void Validate()
     {
         if (Columns is < MinimumPoints or > MaximumPoints || Rows is < MinimumPoints or > MaximumPoints)
@@ -37,8 +37,7 @@ public sealed record GroundGrid(int Columns, int Rows, int SpacingTicks, double[
     public GroundGrid WithHeights(double[] heights) => this with { Heights = heights };
 
     /**
-     * The grid's points exactly as terrain_grid places them: the low corner on the 1/64 lane, heights on
-     * the 1/8192 lane. Row-major like Heights.
+     * The grid's points: the low corner on the 1/64 lane, heights on the 1/8192 lane. Row-major like Heights.
      */
     public (double X, double Y, double Z)[] Points()
     {

@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using SunriseStudio.Packages;
 
 namespace SunriseStudio.Formats;
 
@@ -9,8 +10,8 @@ namespace SunriseStudio.Formats;
 public sealed record GroundHeightmapImage(int Width, int Height, double[] Values, (double Low, double High)? SavedRange);
 
 /**
- * 16-bit heightmaps as World Studio's ground_ops writes and reads them: a grayscale PNG with its height
- * range in a tEXt chunk keyed sunrise.heights, or little-endian unsigned 16-bit RAW (.r16, .raw).
+ * 16-bit heightmaps: a grayscale PNG with its height range in a tEXt chunk keyed sunrise.heights,
+ * or little-endian unsigned 16-bit RAW (.r16, .raw).
  * One sample per ground point; 0..65535 spans the lowest to the highest point.
  */
 public static class GroundHeightmap
@@ -45,11 +46,12 @@ public static class GroundHeightmap
         var (values, low, high) = Export(grid);
         using var output = new MemoryStream();
         output.Write(Signature);
-        var header = new byte[13];
-        BinaryPrimitives.WriteUInt32BigEndian(header, (uint)grid.Columns);
-        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(4), (uint)grid.Rows);
-        header[8] = 16;
-        PngInterchange.Chunk(output, "IHDR", header);
+        using var header = new MemoryStream();
+        BigEndian(header, (uint)grid.Columns);
+        BigEndian(header, (uint)grid.Rows);
+        // 16-bit samples, grayscale, deflate, no filter method, no interlace.
+        header.Write([16, 0, 0, 0, 0]);
+        PngInterchange.Chunk(output, "IHDR", header.ToArray());
         string text = JsonSerializer.Serialize(new SortedDictionary<string, double>(StringComparer.Ordinal)
         {
             ["columns"] = grid.Columns,
@@ -63,11 +65,11 @@ public static class GroundHeightmap
         using var compressed = new MemoryStream();
         using (var zlib = new ZLibStream(compressed, CompressionLevel.SmallestSize, true))
         {
-            var line = new byte[1 + grid.Columns * 2];
             for (int y = 0; y < grid.Rows; y++)
             {
-                for (int x = 0; x < grid.Columns; x++) BinaryPrimitives.WriteUInt16BigEndian(line.AsSpan(1 + 2 * x), values[y * grid.Columns + x]);
-                zlib.Write(line);
+                // Each row opens with filter type 0, none.
+                zlib.WriteByte(0);
+                for (int x = 0; x < grid.Columns; x++) BigEndian(zlib, values[y * grid.Columns + x]);
             }
         }
         PngInterchange.Chunk(output, "IDAT", compressed.ToArray());
@@ -116,27 +118,31 @@ public static class GroundHeightmap
         int width = 0, height = 0, depth = 0, colour = -1;
         using var compressed = new MemoryStream();
         var text = new Dictionary<string, string>(StringComparer.Ordinal);
-        for (int at = 8; at + 12 <= data.Length;)
+        // A chunk is a u32 length, a u32 type, the body and a u32 CRC over type and body.
+        for (var rest = data[Signature.Length..]; rest.Length >= 3 * sizeof(uint);)
         {
-            int length = checked((int)BinaryPrimitives.ReadUInt32BigEndian(data[at..]));
-            if (length < 0 || at + 12 + length > data.Length) throw new InvalidDataException("The PNG file is cut short.");
-            string kind = Encoding.ASCII.GetString(data.Slice(at + 4, 4));
-            var body = data.Slice(at + 8, length);
-            if (PngInterchange.Crc(data.Slice(at + 4, length + 4)) != BinaryPrimitives.ReadUInt32BigEndian(data[(at + 8 + length)..]))
+            int length = checked((int)BinaryPrimitives.ReadUInt32BigEndian(rest));
+            var chunk = rest[sizeof(uint)..];
+            if (length < 0 || chunk.Length - 2 * sizeof(uint) < length) throw new InvalidDataException("The PNG file is cut short.");
+            var typed = chunk[..(sizeof(uint) + length)];
+            string kind = Encoding.ASCII.GetString(typed[..sizeof(uint)]);
+            var body = typed[sizeof(uint)..];
+            if (Crc32.Compute(typed) != BinaryPrimitives.ReadUInt32BigEndian(chunk[typed.Length..]))
                 throw new InvalidDataException("PNG checksum mismatch.");
             if (kind == "IHDR")
             {
-                if (length != 13) throw new InvalidDataException("Invalid PNG header.");
+                if (body.Length < 2 * sizeof(uint) || body[(2 * sizeof(uint))..] is not [var bits, var type, _, _, var interlace])
+                    throw new InvalidDataException("Invalid PNG header.");
                 width = checked((int)BinaryPrimitives.ReadUInt32BigEndian(body));
-                height = checked((int)BinaryPrimitives.ReadUInt32BigEndian(body[4..]));
-                depth = body[8]; colour = body[9];
-                if (body[12] != 0) throw new InvalidDataException("Interlaced PNG files are not read. Save it without interlacing.");
+                height = checked((int)BinaryPrimitives.ReadUInt32BigEndian(body[sizeof(uint)..]));
+                depth = bits; colour = type;
+                if (interlace != 0) throw new InvalidDataException("Interlaced PNG files are not read. Save it without interlacing.");
             }
             else if (kind == "IDAT") compressed.Write(body);
             else if (kind == "tEXt" && body.IndexOf((byte)0) is var zero and >= 0)
-                text[Encoding.Latin1.GetString(body[..zero])] = Encoding.Latin1.GetString(body[(zero + 1)..]);
+                text[Encoding.Latin1.GetString(body[..zero])] = Encoding.Latin1.GetString(body[(zero + sizeof(byte))..]);
             else if (kind == "IEND") break;
-            at += 12 + length;
+            rest = chunk[(typed.Length + sizeof(uint))..];
         }
         int channels = colour switch { 0 => 1, 2 => 3, 4 => 2, 6 => 4, _ => 0 };
         if (channels == 0 || depth is not (8 or 16))
@@ -157,8 +163,9 @@ public static class GroundHeightmap
         double top = depth == 16 ? 65535.0 : 255.0;
         for (int y = 0; y < height; y++)
         {
-            int kind = raw[y * (stride + 1)];
-            var line = raw.AsSpan(y * (stride + 1) + 1, stride);
+            // Each row is one filter byte, then the row.
+            int row = y * (stride + sizeof(byte)), kind = raw[row];
+            var line = raw.AsSpan(row + sizeof(byte), stride);
             for (int i = 0; i < stride; i++)
             {
                 int left = i >= bpp ? line[i - bpp] : 0, up = previous[i], corner = i >= bpp ? previous[i - bpp] : 0;
@@ -207,6 +214,20 @@ public static class GroundHeightmap
         }
         GroundBrush.CheckHeights(output, "This heightmap range");
         return output;
+    }
+
+    private static void BigEndian(Stream stream, uint value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32BigEndian(bytes, value);
+        stream.Write(bytes);
+    }
+
+    private static void BigEndian(Stream stream, ushort value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(ushort)];
+        BinaryPrimitives.WriteUInt16BigEndian(bytes, value);
+        stream.Write(bytes);
     }
 
     private static int Paeth(int a, int b, int c)

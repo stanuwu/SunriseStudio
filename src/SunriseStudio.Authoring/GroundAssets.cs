@@ -1,15 +1,20 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Packages.Registry;
 using SunriseStudio.Projects;
+using SunriseStudio.Scene.Collision;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Views;
+using SunriseStudio.World;
 
 namespace SunriseStudio.Authoring;
 
-/** The saved form of a ground: grid, material and where it is placed. Heights live in their own file. */
+/** The saved form of a ground: grid, material, package and site. Heights live in their own file. */
 public sealed record GroundDefinition(int Version, string Name, int Columns, int Rows, int SpacingTicks, double[] Position,
-    uint Technique, uint Dyemap, ushort PackageId, int FirstEntry, GroundSite Site, int FirstIndex)
+    uint Technique, uint Dyemap, ushort PackageId, int FirstEntry, GroundSite Site)
 {
     public const int CurrentVersion = 1;
     public const string DefinitionSuffix = ".ground.json", HeightsSuffix = ".heights";
@@ -17,156 +22,184 @@ public sealed record GroundDefinition(int Version, string Name, int Columns, int
     public GroundGrid Grid(double[] heights) => new(Columns, Rows, SpacingTicks, Position, heights);
 }
 
-/** One ground of a project: its id, definition, heights and native assets in entry order. */
-public sealed record ProjectGround(string Id, GroundDefinition Definition, double[] Heights,
+/** One ground of a project: its definition, heights and package entries in entry order. */
+public sealed record ProjectGround(GroundDefinition Definition, double[] Heights,
     AddedProjectAsset DefinitionAsset, AddedProjectAsset HeightsAsset, IReadOnlyList<AddedProjectAsset> Native);
 
-/** A ground ready to publish: its additions, the installed edits that place it, and its build. */
-public sealed record PreparedGround(string Id, IReadOnlyList<ProjectAssetAddition> Additions,
-    IReadOnlyDictionary<uint, byte[]> Placement, GroundBuild Build, GroundDefinition Definition);
+/**
+ * A compiled ground: its package entries in entry order, and what its placement writes.
+ * @param Rows The AO rows: key and byte offset in Buffer's payload.
+ */
+public sealed record GroundBuild(IReadOnlyList<ProjectAssetAddition> Entries, IReadOnlyList<(int Index, uint Terrain, uint Bounds)> Terrains,
+    uint CollisionOwner, IReadOnlyList<(ulong Key, uint Offset)> Rows, uint Buffer);
 
 /**
- * A generated ground as one project asset group: a definition and a heights file (source assets), then
- * its native entries (added assets, one package). Creation and every later edit rewrite the same entries;
- * placement re-points two installed container slots and grows the bubble's registry bank 0.
+ * Grounds as project assets: NAME.ground.json and NAME.heights, then the package entries named NAME.*.
+ * Entries: the collision owner, compound and mesh, the AO buffer, then ten per patch.
  */
 public static class GroundAssets
 {
-    private static readonly JsonSerializerOptions Json = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.Never
-    };
+    private const int CollisionEntries = 3, OcclusionEntries = 2, PatchEntries = 10, FirstPatch = CollisionEntries + OcclusionEntries;
+    // A ground name is part of every asset and list name it owns.
+    private const int MaximumName = 48;
 
-    /** Entries one ground of this size takes. */
-    public static int EntryCount(GroundGrid grid) => Compile(grid, new(0, GroundMaterial.NoDyemap), 0).Entries.Count;
+    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    /** A new ground placed in a bubble of the installation. */
-    public static PreparedGround PrepareNew(PackageCatalog catalog, IReadOnlyList<AddedProjectAsset> assets,
-        IReadOnlyList<ProjectGround> grounds, string name, GroundGrid grid, GroundMaterial material, ushort packageId, uint bubble)
+    /**
+     * A new ground in a bubble of a project destination. `world` gets the bubble's own AO map; the
+     * caller places the build with GroundPlacement.Place and saves the world.
+     * @return The definition, every asset to add, and the build.
+     */
+    public static (GroundDefinition Definition, IReadOnlyList<ProjectAssetAddition> Additions, GroundBuild Build) PrepareNew(
+        StudioProject project, PackageCatalog catalog, RegistryIndex schema, WorldFiles world, string destination, uint bubbleNameHash,
+        IReadOnlyList<ProjectGround> grounds, string name, GroundGrid grid, GroundMaterial material, ushort packageId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
         name = name.Trim();
+        if (name.Length is < 1 or > MaximumName || !name.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))
+            throw new InvalidDataException($"A ground name is 1 to {MaximumName} letters, digits, '_' or '-'.");
+        if (project.AddedAssets.Any(asset => asset.Name.StartsWith(name + ".", StringComparison.Ordinal)))
+            throw new InvalidDataException($"The project already holds assets named {name}.");
         if (!PackageWriter.IsNewPackageId(packageId) || catalog.ContainsInstalledPackage(packageId))
             throw new InvalidDataException($"Choose an unused package id from {PackageWriter.NewPackageIdRange}.");
         RequireMaterial(catalog, material);
-        if (grounds.Any(g => g.Definition.Site.Bubble == bubble))
-            throw new InvalidDataException("This bubble already holds a ground of this project.");
-        var used = grounds.Where(g => g.Definition.Site.Registry != 0).SelectMany(g => Indices(g)).ToArray();
-        var site = GroundPlacement.Find(catalog, bubble, used);
-        if (grounds.Any(g => g.Definition.Site.Container == site.Container || g.Definition.Site.Companion == site.Companion))
-            throw new InvalidDataException("This container already holds a ground of this project.");
-        int first = assets.Where(x => x.Native?.PackageId == packageId).Select(x => x.Native!.EntryIndex ?? -1).DefaultIfEmpty(-1).Max() + 1;
-        string id = Guid.NewGuid().ToString("N");
+        var used = grounds.Where(g => g.Definition.Site.Destination == destination).SelectMany(Indices).ToArray();
+        var site = GroundPlacement.Prepare(world, catalog, schema, destination, bubbleNameHash, used);
         var definition = new GroundDefinition(GroundDefinition.CurrentVersion, name, grid.Columns, grid.Rows, grid.SpacingTicks,
-            grid.Position.ToArray(), material.Technique, material.Dyemap, packageId, first, site, site.NextIndex);
-        var build = Compile(grid, material, site.NextIndex);
-        if (first + build.Entries.Count > 8192) throw new InvalidDataException("The package has no room for this ground.");
-        var tags = Tags(build, packageId, first);
-        var additions = new List<ProjectAssetAddition>
-        {
-            new(name + GroundDefinition.DefinitionSuffix, Serialize(definition)) { Ground = id },
-            new(name + GroundDefinition.HeightsSuffix, HeightBytes(grid.Heights)) { Ground = id }
-        };
-        for (int i = 0; i < build.Entries.Count; i++)
-        {
-            var entry = build.Entries[i];
-            additions.Add(new($"{name}.{entry.Key}", GroundCompiler.Resolve(entry, key => tags[key]),
-                new(packageId, entry.PairKey is { } pair ? tags[pair] : entry.Reference, entry.TypeInfo,
-                    i == build.Entries.Count - 2 ? name : null, first + i))
-            { Ground = id });
-        }
-        var others = grounds.Where(g => g.Definition.Site.Registry == site.Registry).ToList();
-        var placement = PlacementEdits(catalog, definition, build, others);
-        return new(id, additions, placement, build, definition);
+            grid.Position.ToArray(), material.Technique, material.Dyemap, packageId, project.NextEntry(packageId), site);
+        var build = Compile(catalog, world, definition, grid.Heights);
+        if (definition.FirstEntry + build.Entries.Count > TagHashes.EntriesPerPackage)
+            throw new InvalidDataException("The package has no room for this ground.");
+        return (definition, [Source(definition), new(name + GroundDefinition.HeightsSuffix, HeightBytes(grid.Heights)), .. build.Entries], build);
     }
 
+    /** The definition file. */
+    public static ProjectAssetAddition Source(GroundDefinition definition) =>
+        new(definition.Name + GroundDefinition.DefinitionSuffix, JsonSerializer.SerializeToUtf8Bytes(definition, Json));
+
     /**
-     * Edits that give a ground new heights or a new material: every native entry rewritten in place,
-     * the heights and definition files, and the registry recomputed from the original.
+     * New heights or a new material: every package entry and both source files, by asset id. The
+     * entries keep their tags, so the world needs no change.
      */
-    public static Dictionary<uint, byte[]> Rebuild(PackageCatalog catalog, IReadOnlyList<ProjectGround> grounds, ProjectGround ground,
-        double[] heights, GroundMaterial material, out Dictionary<string, byte[]> sources)
+    public static Dictionary<string, byte[]> Rebuild(PackageCatalog catalog, WorldFiles world, ProjectGround ground, double[] heights,
+        GroundMaterial material)
     {
         RequireMaterial(catalog, material);
         var definition = ground.Definition with { Technique = material.Technique, Dyemap = material.Dyemap };
-        var grid = definition.Grid(heights);
-        var build = Compile(grid, material, definition.FirstIndex);
+        var build = Compile(catalog, world, definition, heights);
         if (build.Entries.Count != ground.Native.Count) throw new InvalidDataException("The ground's entries no longer match its size.");
-        var tags = Tags(build, definition.PackageId, definition.FirstEntry);
-        var edits = new Dictionary<uint, byte[]>();
-        foreach (var entry in build.Entries) edits[tags[entry.Key]] = GroundCompiler.Resolve(entry, key => tags[key]);
-        var others = grounds.Where(g => g.Id != ground.Id && g.Definition.Site.Registry == definition.Site.Registry).ToList();
-        foreach (var (tag, bytes) in PlacementEdits(catalog, definition, build, others)) edits[tag] = bytes;
-        sources = new() { [ground.HeightsAsset.Id] = HeightBytes(heights), [ground.DefinitionAsset.Id] = Serialize(definition) };
+        var edits = build.Entries.Zip(ground.Native).ToDictionary(pair => pair.Second.Id, pair => pair.First.Data, StringComparer.Ordinal);
+        edits[ground.HeightsAsset.Id] = HeightBytes(heights);
+        edits[ground.DefinitionAsset.Id] = Source(definition).Data;
         return edits;
     }
 
-    /** Installed edits after removing a ground: its slots back to the originals, the registry without it. */
-    public static Dictionary<uint, byte[]> RemovalEdits(PackageCatalog catalog, IReadOnlyList<ProjectGround> grounds, ProjectGround ground)
-    {
-        var site = ground.Definition.Site;
-        var others = grounds.Where(g => g.Id != ground.Id && g.Definition.Site.Registry == site.Registry).ToList();
-        var edits = new Dictionary<uint, byte[]>
-        {
-            [site.Container] = catalog.ReadOriginal(site.Container),
-            [site.Companion] = catalog.ReadOriginal(site.Companion)
-        };
-        var entries = others.SelectMany(g => RegistryEntries(g.Definition, g.Heights)).ToList();
-        foreach (var (tag, bytes) in GroundPlacement.RegistryEdits(catalog, site.Registry, entries)) edits[tag] = bytes;
-        return edits;
-    }
+    /** The AO keys a ground adds, which its removal takes out of the map. */
+    public static IReadOnlyList<ulong> Keys(ProjectGround ground) => Indices(ground).Select(GroundTerrain.RegistryKey).ToArray();
 
-    /** Every ground of the project, read from its saved files. */
-    /** @param read The saved bytes of a project asset. */
+    /** Every ground of the project, read from its saved files. @param read The saved bytes of a project asset. */
     public static IReadOnlyList<ProjectGround> Grounds(IReadOnlyList<AddedProjectAsset> assets, Func<AddedProjectAsset, byte[]> read)
     {
         var result = new List<ProjectGround>();
-        foreach (var group in assets.Where(a => a.Ground is not null).GroupBy(a => a.Ground!, StringComparer.Ordinal))
+        foreach (var source in assets.Where(a => a.Native is null && a.Name.EndsWith(GroundDefinition.DefinitionSuffix, StringComparison.Ordinal)))
         {
-            var definitionAsset = group.SingleOrDefault(a => a.Native is null && a.Name.EndsWith(GroundDefinition.DefinitionSuffix, StringComparison.Ordinal))
-                ?? throw new InvalidDataException("A ground has no definition file.");
-            var heightsAsset = group.SingleOrDefault(a => a.Native is null && a.Name.EndsWith(GroundDefinition.HeightsSuffix, StringComparison.Ordinal))
-                ?? throw new InvalidDataException("A ground has no heights file.");
-            var native = group.Where(a => a.Native is not null).OrderBy(a => a.Native!.EntryIndex).ToArray();
-            var definition = Deserialize(read(definitionAsset));
-            var heights = Heights(read(heightsAsset), definition.Columns * definition.Rows);
-            result.Add(new(group.Key, definition, heights, definitionAsset, heightsAsset, native));
+            string name = source.Name[..^GroundDefinition.DefinitionSuffix.Length];
+            var definition = JsonSerializer.Deserialize<GroundDefinition>(read(source), Json)
+                ?? throw new InvalidDataException($"The ground definition {source.Name} is empty.");
+            if (definition.Version != GroundDefinition.CurrentVersion || definition.Name != name || definition.Site is null)
+                throw new InvalidDataException($"{source.Name} needs another Sunrise Studio.");
+            var heights = assets.Single(a => a.Native is null && a.Name == name + GroundDefinition.HeightsSuffix);
+            var native = assets.Where(a => a.Native is { } meta && meta.PackageId == definition.PackageId
+                && a.Name.StartsWith(name + ".", StringComparison.Ordinal)).OrderBy(a => a.Native!.EntryIndex).ToArray();
+            result.Add(new(definition, Heights(read(heights), definition.Columns * definition.Rows), source, heights, native));
         }
         return result;
     }
 
-    /** A ground's entries in package order: patches, collision, then its terrain and collision tables. */
-    public static GroundBuild Compile(GroundGrid grid, GroundMaterial material, int firstIndex)
+    /** Compiles a ground: its collision through CollisionBake, its AO buffer and its patches. */
+    public static GroundBuild Compile(PackageCatalog catalog, WorldFiles world, GroundDefinition definition, double[] heights)
     {
-        var build = GroundCompiler.Compile(grid, material, firstIndex);
-        var entries = build.Entries.ToList();
-        entries.Add(GroundCompiler.TerrainTable("ground_terrain", build.Terrains));
-        entries.Add(GroundCompiler.CollisionTable("ground_collision", build.Wrapper));
-        return build with { Entries = entries };
+        var grid = definition.Grid(heights);
+        var site = definition.Site;
+        string name = definition.Name;
+        ushort package = definition.PackageId;
+        int first = definition.FirstEntry;
+        uint Tag(int entry) => TagHashes.Make(package, first + entry);
+        var points = grid.Points();
+        var patches = GroundTerrain.Patches(grid, points);
+        var normals = GroundTerrain.Normals(grid, points);
+        var occlusion = GroundTerrain.Occlusion(grid, points);
+        var entries = new List<ProjectAssetAddition>();
+
+        // One mesh in the ground's own frame; the instance places it at the low corner.
+        var origin = points[0];
+        var vertices = points.Select(p => new Vector3((float)(p.X - origin.X), (float)(p.Y - origin.Y), (float)(p.Z - origin.Z))).ToArray();
+        var indices = new List<int>();
+        for (int y = 0; y < grid.Rows - 1; y++)
+            for (int x = 0; x < grid.Columns - 1; x++)
+            {
+                var (a, b) = GroundTerrain.QuadTriangles(grid.Columns, x, y);
+                indices.AddRange([a.Item1, a.Item2, a.Item3, b.Item1, b.Item2, b.Item3]);
+            }
+        var (baseline, template) = WorldBundleImport.CollisionTemplate(world, catalog, site.BubbleNameHash);
+        var placed = new QsTransform(new((float)origin.X, (float)origin.Y, (float)origin.Z), Quaternion.Identity, Vector3.One);
+        var collision = CollisionBake.CreateCompound(catalog, baseline, template, [new($"{name}.collision", vertices, indices, placed)],
+            $"{name}.collision", package, first);
+        if (collision.Assets.Count != CollisionEntries) throw new InvalidDataException("The ground's collision does not fit one mesh.");
+        entries.AddRange(collision.Assets);
+
+        if (!catalog.TryGetEntry(site.OriginalBuffer, out var headerEntry) || !catalog.TryGetEntry(headerEntry.Reference, out var dataEntry))
+            throw new InvalidDataException($"The AO buffer {site.OriginalBuffer:X8} is not installed.");
+        using var buffer = new MemoryStream();
+        buffer.Write(catalog.ReadOriginal(dataEntry.TagHash));
+        var rows = new List<(ulong Key, uint Offset)>();
+        var terrains = new List<(int Index, uint Terrain, uint Bounds)>();
+        var patchEntries = new List<ProjectAssetAddition>();
+        byte[] terrainTemplate = catalog.Read(site.TerrainTemplate), boundsTemplate = catalog.Read(site.BoundsTemplate);
+        catalog.TryGetEntry(site.TerrainTemplate, out var terrainEntry);
+        catalog.TryGetEntry(site.BoundsTemplate, out var boundsEntry);
+        ref readonly var shape = ref TagView.Checked<STerrain>(terrainTemplate, 0);
+        var buffers = new[] { shape.PositionBuffer[0].Unk0, shape.PositionBuffer[1].Unk0, shape.IndexBuffer, shape.Unk98 }
+            .Select(tag => BufferEntries(catalog, tag)).ToArray();
+        for (int m = 0; m < patches.Count; m++)
+        {
+            int at = FirstPatch + PatchEntries * m;
+            var tags = new GroundPatchTags(Tag(at + 2), Tag(at + 4), Tag(at + 6), Tag(at + 8), definition.Material);
+            var patch = GroundTerrain.EncodePatch(grid, points, normals, occlusion, patches[m], tags, site.FirstIndex + m,
+                terrainTemplate, boundsTemplate);
+            string key = $"{name}.t{m}";
+            patchEntries.Add(new(key, patch.Terrain, new(package, terrainEntry.Reference, terrainEntry.TypeInfo, null, first + at)));
+            patchEntries.Add(new(key + ".bounds", patch.Bounds, new(package, boundsEntry.Reference, boundsEntry.TypeInfo, null, first + at + 1)));
+            var payloads = new[]
+            {
+                (".positions", GroundTerrain.VertexHeader(patch.Positions.Length, GroundTerrain.PositionStride), patch.Positions),
+                (".attributes", GroundTerrain.VertexHeader(patch.Attributes.Length, GroundTerrain.AttributeStride), patch.Attributes),
+                (".indices", GroundTerrain.IndexHeader(patch.Indices.Length), patch.Indices),
+                (".alternate", GroundTerrain.IndexHeader(patch.AlternateIndices.Length), patch.AlternateIndices),
+            };
+            for (int b = 0; b < payloads.Length; b++)
+            {
+                var (suffix, header, data) = payloads[b];
+                int entry = at + 2 + 2 * b;
+                patchEntries.Add(new(key + suffix, header, new(package, Tag(entry + 1), buffers[b].Header.TypeInfo, null, first + entry)));
+                patchEntries.Add(new(key + suffix + ".data", data, new(package, Tag(entry), buffers[b].Data.TypeInfo, null, first + entry + 1)));
+            }
+            rows.Add((GroundTerrain.RegistryKey(patch.Index), checked((uint)buffer.Length)));
+            buffer.Write(patch.Occlusion);
+            terrains.Add((patch.Index, Tag(at), Tag(at + 1)));
+        }
+        byte[] aoHeader = catalog.ReadOriginal(site.OriginalBuffer);
+        ref var aoView = ref TagView.Edit<VertexBufferHeader>(aoHeader);
+        aoView.ByteCount = checked((uint)buffer.Length);
+        entries.Add(new($"{name}.ao", aoHeader, new(package, Tag(CollisionEntries + 1), headerEntry.TypeInfo, null, first + CollisionEntries)));
+        entries.Add(new($"{name}.ao.data", buffer.ToArray(), new(package, Tag(CollisionEntries), dataEntry.TypeInfo, null, first + CollisionEntries + 1)));
+        entries.AddRange(patchEntries);
+        return new(entries, terrains, collision.Owner, rows, Tag(CollisionEntries));
     }
 
-    /** The registry rows of a ground: one per patch, its key and occlusion block. */
-    public static IReadOnlyList<(ulong Key, byte[] Block)> RegistryEntries(GroundDefinition definition, double[] heights) =>
-        GroundCompiler.Compile(definition.Grid(heights), definition.Material, definition.FirstIndex).Terrains
-            .Select(t => (GroundTerrain.RegistryKey(t.Index), t.Occlusion)).ToArray();
-
-    public static uint TagOf(ushort packageId, int entry) => checked(0x80800000U + ((uint)packageId << 13) + (uint)entry);
-
-    /** Tags of the generated terrain and collision tables. */
-    public static (uint Terrain, uint Collision) Tables(GroundDefinition definition, int entryCount) =>
-        (TagOf(definition.PackageId, definition.FirstEntry + entryCount - 2), TagOf(definition.PackageId, definition.FirstEntry + entryCount - 1));
-
-    public static byte[] Serialize(GroundDefinition definition) => JsonSerializer.SerializeToUtf8Bytes(definition, Json);
-
-    public static GroundDefinition Deserialize(byte[] bytes)
-    {
-        var definition = JsonSerializer.Deserialize<GroundDefinition>(bytes, Json) ?? throw new InvalidDataException("The ground definition is empty.");
-        if (definition.Version != GroundDefinition.CurrentVersion) throw new InvalidDataException("This ground needs a newer Sunrise Studio.");
-        if (definition.Site is null || definition.Position is not { Length: 3 }) throw new InvalidDataException("Invalid ground definition.");
-        return definition;
-    }
+    /** A buffer header entry and the payload entry it names. */
+    private static (PackageEntry Header, PackageEntry Data) BufferEntries(PackageCatalog catalog, uint header) =>
+        catalog.TryGetEntry(header, out var entry) && catalog.TryGetEntry(entry.Reference, out var data)
+            ? (entry, data) : throw new InvalidDataException($"The template terrain's buffer {header:X8} is not installed.");
 
     /** Heights as little-endian float64, row-major. */
     public static byte[] HeightBytes(double[] heights)
@@ -182,7 +215,7 @@ public static class GroundAssets
         return Enumerable.Range(0, count).Select(i => BinaryPrimitives.ReadDoubleLittleEndian(bytes.AsSpan(8 * i))).ToArray();
     }
 
-    /** The material's technique must be an installed terrain technique; a dyemap an installed texture. */
+    /** The technique must be an installed tag, and a blend map too when there is one. */
     private static void RequireMaterial(PackageCatalog catalog, GroundMaterial material)
     {
         if (!catalog.TryGetEntry(material.Technique, out _)) throw new InvalidDataException("The material's technique is not installed.");
@@ -190,18 +223,7 @@ public static class GroundAssets
             throw new InvalidDataException("The material's blend map is not installed.");
     }
 
-    private static Dictionary<uint, byte[]> PlacementEdits(PackageCatalog catalog, GroundDefinition definition, GroundBuild build,
-        IReadOnlyList<ProjectGround> others)
-    {
-        var (terrain, collision) = Tables(definition, build.Entries.Count);
-        var entries = others.SelectMany(o => RegistryEntries(o.Definition, o.Heights))
-            .Concat(build.Terrains.Select(t => (GroundTerrain.RegistryKey(t.Index), t.Occlusion))).ToList();
-        return GroundPlacement.Edits(catalog, definition.Site, terrain, collision, entries);
-    }
-
-    private static Dictionary<string, uint> Tags(GroundBuild build, ushort packageId, int first) =>
-        build.Entries.Select((entry, i) => (entry.Key, Tag: TagOf(packageId, first + i))).ToDictionary(x => x.Key, x => x.Tag, StringComparer.Ordinal);
-
+    /** A ground's terrain indices: one per patch from its first. */
     private static IEnumerable<int> Indices(ProjectGround ground) =>
-        RegistryEntries(ground.Definition, ground.Heights).Select(e => (int)(e.Key & 0xFFFF));
+        Enumerable.Range(ground.Definition.Site.FirstIndex, (ground.Native.Count - FirstPatch) / PatchEntries);
 }

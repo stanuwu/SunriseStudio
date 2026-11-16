@@ -1,195 +1,220 @@
-using System.Buffers.Binary;
+using System.Globalization;
+using System.Text.Json.Nodes;
 using SunriseStudio.Formats;
 using SunriseStudio.Packages;
+using SunriseStudio.Packages.Registry;
+using SunriseStudio.Tags.Generated;
+using SunriseStudio.Tags.Graph;
+using SunriseStudio.Tags.Tft;
+using SunriseStudio.World;
 
 namespace SunriseStudio.Authoring;
 
 /**
- * Where a ground is placed in an installed bubble: a 23-slot geometry container whose terrain slot holds an
- * empty table, the companion container after it whose collision slot holds an empty table, and the bubble's
- * render registry. Census of the installation (2026-10-20): every 23-slot container is followed in its branch
- * by a 1- or 2-member container with the same mask; one registry per branch, in a 1-member container.
+ * Where a ground sits in a project destination: the bubble, the container its lists join, the AO map
+ * file that takes its rows, and the installed terrain it copies its layout from.
+ * @param OriginalBuffer The AO buffer header the map named before the ground.
  */
-public sealed record GroundSite(uint Bubble, uint Branch, uint Container, uint Companion, uint Registry,
-    uint RegistryHeader, uint RegistryData, int NextIndex);
+public sealed record GroundSite(string Destination, uint BubbleNameHash, string Container, string OcclusionMap,
+    uint OriginalBuffer, int FirstIndex, uint TerrainTemplate, uint BoundsTemplate);
 
-/** The installed edits that place grounds: the two container slots and the registry's bank 0. */
-public sealed record GroundPlacementEdits(IReadOnlyDictionary<uint, byte[]> Assets);
-
+/**
+ * Places grounds in a bubble of a project destination through its world files. The ground adds its
+ * own terrain and collision lists, and its rows go in the bubble's own AO map copy. No installed tag
+ * changes; an installed bubble is refused, since its containers and AO map are shared.
+ */
 public static class GroundPlacement
 {
-    public const uint BubbleClass = 0x80807DAE, BranchClass = 0x808091E0, BranchRowClass = 0x808084C1;
-    public const uint ContainerClass = 0x80808A54, MemberClass = 0x80808BB0, RegistryClass = 0x80807268;
-    public const uint RegistryResourceClass = 0x80806F38;
-    // A geometry container lists 23 members; its companion's slot 0 holds the collision table (366 of 366).
-    public const int GeometryMembers = 23, CollisionSlot = 0;
-    private const int MaskOffset = 8, MaskSize = 32, MembersField = 0x28, BranchRowsField = 8;
+    // Fields of the terrain, AO and collision placement rows and of the AO map.
+    private const string Placements = "placements", Payload = "payload", PayloadClass = "@class";
+    private const string TerrainField = "terrain", KeyField = "ambient_occlusion_key", BoundsField = "unk_1c";
+    private const string MapField = "occlusion_map", BufferField = "scalar_buffer_header", RowsField = "offsets";
+    private const string RowKey = "instance_key", RowOffset = "base_byte_offset", Contents = "contents", Member = "member_tag";
 
-    /** The containers of a bubble's branch in branch order. */
-    public static IReadOnlyList<uint> Containers(PackageCatalog catalog, uint bubble)
+    /** The terrain list a ground adds. */
+    public static string TerrainList(string destination, string ground) => ListFile(destination, $"{destination}_{ground}_terrain");
+
+    /** The collision list a ground adds. */
+    public static string CollisionList(string destination, string ground) => ListFile(destination, CollisionName(destination, ground));
+
+    private static string CollisionName(string destination, string ground) => $"{destination}_{ground}_collision";
+
+    private static string ListFile(string destination, string name) =>
+        $"{WorldTemplate.Folder}/{destination}/map_placements/{name}.map_placements";
+
+    /**
+     * Finds the site for a new ground in a bubble and gives the bubble its own AO map file when it
+     * names an installed one. Only `world` changes; the caller saves it.
+     * @param usedIndices Terrain indices other grounds of the project already take in that map.
+     */
+    public static GroundSite Prepare(WorldFiles world, PackageCatalog catalog, RegistryIndex schema, string destination,
+        uint bubbleNameHash, IReadOnlyCollection<int> usedIndices)
     {
-        uint branch = Branch(catalog, bubble);
-        var data = catalog.ReadOriginal(branch);
-        var result = new List<uint>();
-        foreach (int row in Rows(data, BranchRowsField, 16))
-        {
-            uint child = U32(data, row) == uint.MaxValue ? catalog.Resolve64(BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(row + 8))) ?? 0 : U32(data, row);
-            if (child != 0 && Class(catalog, child) == ContainerClass) result.Add(child);
-        }
-        return result;
+        var containers = WorldBubbles.OwnFirst(world, bubbleNameHash);
+        if (containers.Count == 0) throw new InvalidDataException($"Bubble 0x{bubbleNameHash:X8} has no container in this destination.");
+        var (terrain, bounds) = TerrainTemplate(world, catalog);
+        var maps = containers.SelectMany(container => Members(world, container)).Distinct()
+            .Where(list => world.Contains(list) && world[list].ClassId == SMapPlacements.Class)
+            .SelectMany(list => Rows(world, list)).Where(row => Is(row, SAmbientOcclusionPayload.Class))
+            .Select(row => WorldFiles.Text(row[Payload]![MapField])).OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
+        if (maps.Length != 1) throw new InvalidDataException($"Bubble 0x{bubbleNameHash:X8} names {maps.Length} AO maps; a ground needs exactly one.");
+        string map = maps[0].StartsWith('#') ? OwnMap(world, catalog, schema, destination, maps[0]) : maps[0];
+        var fields = world.Fields(map);
+        uint buffer = (uint)Integer(WorldFiles.Field(fields, BufferField));
+        if (!catalog.TryGetEntry(buffer, out _) || !catalog.ContainsInstalledPackage(TagHashes.Split(buffer).PackageId))
+            throw new InvalidDataException($"The AO map {map} already takes another ground's rows; one ground per AO map.");
+        int next = ((JsonArray)WorldFiles.Field(fields, RowsField)).OfType<JsonObject>().Select(row => Integer(row[RowKey]))
+            .Where(key => key >> 32 == GroundTerrain.KeyTag).Select(key => (int)(key & 0xFFFF)).Concat(usedIndices).DefaultIfEmpty(-1).Max() + 1;
+        return new(destination, bubbleNameHash, containers[0], map, buffer, next, terrain, bounds);
     }
 
     /**
-     * The first geometry container of the bubble with an empty terrain slot and a companion with an empty
-     * collision slot, preferring the mask of a container that already lists terrain.
-     * @param usedIndices Terrain indices other grounds of the project already take in this registry.
+     * Writes a new ground's lists and AO rows into the world.
+     * @param terrains Each patch's index, STerrain and bounds tags.
+     * @param rows The AO rows: key and byte offset in the ground's AO buffer.
      */
-    public static GroundSite Find(PackageCatalog catalog, uint bubble, IReadOnlyCollection<int> usedIndices)
+    public static void Place(WorldFiles world, GroundSite site, string ground, IReadOnlyList<(int Index, uint Terrain, uint Bounds)> terrains,
+        uint collisionOwner, IReadOnlyList<(ulong Key, uint Offset)> rows, uint buffer)
     {
-        uint branch = Branch(catalog, bubble);
-        var containers = Containers(catalog, bubble);
-        var candidates = new List<(uint Container, uint Companion, byte[] Mask)>();
-        var terrainMasks = new List<byte[]>();
-        uint registry = 0;
-        for (int i = 0; i < containers.Count; i++)
+        string terrainList = TerrainList(site.Destination, ground);
+        if (world.Contains(terrainList) || world.Contains(CollisionList(site.Destination, ground)))
+            throw new InvalidOperationException($"The destination already holds lists for {ground}.");
+        var template = world.Files.Where(file => file.ClassId == SMapPlacements.Class)
+            .First(file => Rows(world, file.Name).Any(row => Is(row, STerrainPayload.Class) && TemplateOf(world, row) == site.TerrainTemplate));
+        var json = TftText.ToJson(template, out string? fallback);
+        if (fallback is not null) throw new InvalidDataException($"{template.Name} has no field view ({fallback}).");
+        json["name"] = terrainList;
+        json["info"] = null;
+        var list = (JsonArray)WorldFiles.Field((JsonObject)json["fields"]!, Placements);
+        var model = (JsonObject)list.OfType<JsonObject>().First(row => Is(row, STerrainPayload.Class)).DeepClone();
+        list.Clear();
+        foreach (var (index, terrain, bounds) in terrains)
         {
-            var data = catalog.ReadOriginal(containers[i]);
-            var members = Members(data);
-            if (members.Count == 1 && RegistryOf(catalog, members[0]) is uint found) registry = registry == 0 ? found
-                : throw new InvalidDataException("This bubble lists two render registries.");
-            if (members.Count != GeometryMembers) continue;
-            var mask = data.AsSpan(MaskOffset, MaskSize).ToArray();
-            if (!IsEmptyTable(catalog, members[GroundTerrain.ContainerSlot])) { terrainMasks.Add(mask); continue; }
-            if (i + 1 >= containers.Count) continue;
-            var companion = catalog.ReadOriginal(containers[i + 1]);
-            var companionMembers = Members(companion);
-            if (companionMembers.Count is < 1 or > 2 || !companion.AsSpan(MaskOffset, MaskSize).SequenceEqual(mask)) continue;
-            if (IsEmptyTable(catalog, companionMembers[CollisionSlot])) candidates.Add((containers[i], containers[i + 1], mask));
+            var row = (JsonObject)model.DeepClone();
+            var payload = (JsonObject)row[Payload]!;
+            Set(payload, TerrainField, terrain, 4);
+            Set(payload, BoundsField, bounds, 4);
+            Set(payload, KeyField, GroundTerrain.RegistryKey(index), 8);
+            list.Add(row);
         }
-        if (registry == 0) throw new InvalidDataException("This bubble has no render registry.");
-        if (candidates.Count == 0) throw new InvalidDataException("This bubble has no geometry container with free terrain and collision slots.");
-        var chosen = candidates.FirstOrDefault(c => terrainMasks.Any(m => m.AsSpan().SequenceEqual(c.Mask)));
-        if (chosen.Container == 0) chosen = candidates[0];
-        var (header, dataTag, rows) = RegistryBank(catalog, registry);
-        // Terrain rows carry 'kbrt' in the key's high word; other bank-0 rows are not terrain.
-        int next = rows.Where(row => row.Key >> 32 == GroundTerrain.KeyTag).Select(row => (int)(row.Key & 0xFFFF))
-            .Concat(usedIndices).DefaultIfEmpty(-1).Max() + 1;
-        if (next > 0xFFFF) throw new InvalidDataException("This bubble has no free terrain index.");
-        return new(bubble, branch, chosen.Container, chosen.Companion, registry, header, dataTag, next);
+        world.Add(TftText.FromJson(json));
+        WorldContent.Join(world, site.Container, terrainList);
+        WorldContent.AddPayloadList(world, site.Destination, CollisionName(site.Destination, ground), SStaticCollisionPayload.Class,
+            "collision_owner", collisionOwner, site.Container);
+        world.Edit(site.OcclusionMap, (_, fields) =>
+        {
+            Set(fields, BufferField, buffer, 4);
+            var offsets = (JsonArray)WorldFiles.Field(fields, RowsField);
+            var model = offsets.OfType<JsonObject>().FirstOrDefault() ?? new JsonObject { [RowKey] = 0UL, [RowOffset] = 0U };
+            foreach (var (key, offset) in rows)
+            {
+                var row = (JsonObject)model.DeepClone();
+                Set(row, RowKey, key, 8);
+                Set(row, RowOffset, offset, 4);
+                offsets.Add(row);
+            }
+        });
     }
 
     /**
-     * Installed edits for every ground placed in one site's containers and registry, from the originals.
-     * @param terrainTable Generated terrain table of the ground in this container.
-     * @param collisionTable Generated collision table of that ground.
-     * @param entries Registry rows of every ground placed in the registry: key and occlusion block.
+     * Takes a ground out of the world: its lists leave the container and the world, and the AO map
+     * drops its rows and names its original buffer again.
+     * @return The list files removed; the caller deletes them on disk.
      */
-    public static Dictionary<uint, byte[]> Edits(PackageCatalog catalog, GroundSite site, uint terrainTable, uint collisionTable,
-        IReadOnlyList<(ulong Key, byte[] Block)> entries)
+    public static IReadOnlyList<string> Remove(WorldFiles world, GroundSite site, string ground, IReadOnlyCollection<ulong> keys)
     {
-        var edits = new Dictionary<uint, byte[]>
+        string[] lists = [TerrainList(site.Destination, ground), CollisionList(site.Destination, ground)];
+        world.Edit(site.Container, (_, fields) =>
         {
-            [site.Container] = Repoint(catalog.ReadOriginal(site.Container), GroundTerrain.ContainerSlot, terrainTable),
-            [site.Companion] = Repoint(catalog.ReadOriginal(site.Companion), CollisionSlot, collisionTable)
-        };
-        foreach (var (tag, bytes) in RegistryEdits(catalog, site.Registry, entries)) edits[tag] = bytes;
-        return edits;
+            var members = (JsonArray)WorldFiles.Field(fields, Contents);
+            foreach (var member in members.OfType<JsonObject>().Where(row => lists.Contains(WorldFiles.Text(row[Member]))).ToList())
+                members.Remove(member);
+        });
+        foreach (string list in lists.Where(world.Contains)) world.Remove(list);
+        world.Edit(site.OcclusionMap, (_, fields) =>
+        {
+            Set(fields, BufferField, site.OriginalBuffer, 4);
+            var offsets = (JsonArray)WorldFiles.Field(fields, RowsField);
+            foreach (var row in offsets.OfType<JsonObject>().Where(row => keys.Contains(Integer(row[RowKey]))).ToList()) offsets.Remove(row);
+        });
+        return lists;
     }
 
-    /** The registry with bank-0 rows for entries after the installed ones, its data with their blocks, and the header size. */
-    public static Dictionary<uint, byte[]> RegistryEdits(PackageCatalog catalog, uint registry, IReadOnlyList<(ulong Key, byte[] Block)> entries)
+    /** The STerrain and bounds table of the first terrain row the world places from installed tags. */
+    private static (uint Terrain, uint Bounds) TerrainTemplate(WorldFiles world, PackageCatalog catalog)
     {
-        var original = catalog.ReadOriginal(registry);
-        var (header, dataTag, rows) = RegistryBank(catalog, registry);
-        var headerBytes = catalog.ReadOriginal(header).ToArray();
-        var data = catalog.ReadOriginal(dataTag);
-        if (entries.Count == 0) return new() { [registry] = original, [header] = headerBytes, [dataTag] = data };
-        if (entries.Select(e => e.Key).Concat(rows.Select(r => r.Key)).Distinct().Count() != entries.Count + rows.Count)
-            throw new InvalidDataException("A terrain registry key is already in this bubble.");
-        var newRows = rows.Select(row => GroundTerrain.RegistryRow(row.Key, row.First)).ToList();
-        using var appended = new MemoryStream();
-        appended.Write(data);
-        foreach (var (key, block) in entries)
+        foreach (var file in world.Files.Where(file => file.ClassId == SMapPlacements.Class))
+            foreach (var row in Rows(world, file.Name).Where(row => Is(row, STerrainPayload.Class)))
+            {
+                uint terrain = TemplateOf(world, row);
+                if (Installed(world, row[Payload]![BoundsField]) is not uint bounds) continue;
+                if (catalog.TryGetEntry(terrain, out var entry) && entry.Reference == STerrain.Class
+                    && catalog.ContainsInstalledPackage(entry.PackageId)
+                    && catalog.TryGetEntry(bounds, out var box) && box.Reference == SInstanceBoundsTable.Class)
+                    return (terrain, bounds);
+            }
+        throw new InvalidDataException("The destination places no installed terrain to copy a layout from.");
+    }
+
+    /** The installed tag a reference names: itself, or the source of the world file it names. */
+    private static uint? Installed(WorldFiles world, JsonNode? node) =>
+        WorldFiles.Text(node) is { } text && !text.StartsWith('#') ? world.Contains(text) ? world[text].SourceTag ?? world[text].CopyOf : null
+            : (uint)Integer(node);
+
+    private static uint TemplateOf(WorldFiles world, JsonObject row) => Installed(world, row[Payload]![TerrainField]) ?? 0;
+
+    /** Copies an installed AO map into the world and points every list that names it at the copy. */
+    private static string OwnMap(WorldFiles world, PackageCatalog catalog, RegistryIndex schema, string destination, string installed)
+    {
+        uint tag = (uint)Integer(JsonValue.Create(installed));
+        string type = WorldTemplate.TypeName(schema, SOcclusionMap.Class);
+        string file = $"{WorldTemplate.Folder}/{destination}/{type}/{tag:x8}_ground.{type}";
+        if (!world.Contains(file)) world.Add(TftClone.Clone([tag], new CatalogTagSource(catalog), schema, _ => file).Single());
+        foreach (string list in world.Files.Where(x => x.ClassId == SMapPlacements.Class).Select(x => x.Name).ToList())
         {
-            if (block.Length == 0 || block.Length % 4 != 0) throw new InvalidDataException("A terrain occlusion block is a nonempty multiple of four bytes.");
-            newRows.Add(GroundTerrain.RegistryRow(key, checked((uint)appended.Length)));
-            appended.Write(block);
+            if (!Rows(world, list).Any(row => Names(row, installed))) continue;
+            world.Edit(list, (_, fields) =>
+            {
+                foreach (var row in ((JsonArray)WorldFiles.Field(fields, Placements)).OfType<JsonObject>())
+                    if (Names(row, installed)) row[Payload]![MapField] = file;
+            });
         }
-        // Bank 0 rows (class 0x8080726A) at registry +16; the old rows stay behind as unreferenced bytes.
-        var edited = NativeArrays.AppendNative(original, 16, GroundTerrain.RegistryRowClass, newRows, out _);
-        BinaryPrimitives.WriteUInt32LittleEndian(headerBytes, checked((uint)appended.Length));
-        return new() { [registry] = edited, [header] = headerBytes, [dataTag] = appended.ToArray() };
+        return file;
     }
 
-    /** Bank 0 of a registry: its stride-1 buffer header at +8, the header's data, and the installed rows. */
-    public static (uint Header, uint Data, IReadOnlyList<(ulong Key, uint First)> Rows) RegistryBank(PackageCatalog catalog, uint registry)
+    private static bool Names(JsonObject row, string map) =>
+        Is(row, SAmbientOcclusionPayload.Class) && WorldFiles.Text(row[Payload]![MapField]) == map;
+
+    private static IEnumerable<string> Members(WorldFiles world, string container) =>
+        (world.Fields(container)[Contents] as JsonArray ?? []).OfType<JsonObject>().Select(row => WorldFiles.Text(row[Member])).OfType<string>();
+
+    /** The rows of a list; a list with no field view has none here. */
+    private static IEnumerable<JsonObject> Rows(WorldFiles world, string list)
     {
-        if (Class(catalog, registry) != RegistryClass) throw new InvalidDataException("Not a render registry.");
-        var data = catalog.ReadOriginal(registry);
-        uint header = U32(data, 8);
-        if (header == uint.MaxValue || !catalog.TryGetEntry(header, out var entry))
-            throw new InvalidDataException("This bubble's render registry has no occlusion buffer.");
-        var headerBytes = catalog.ReadOriginal(header);
-        uint dataTag = entry.Reference;
-        if (!catalog.TryGetEntry(dataTag, out _) || headerBytes.Length < 8 || BinaryPrimitives.ReadUInt16LittleEndian(headerBytes.AsSpan(4)) != 1
-            || U32(headerBytes, 0) != catalog.ReadOriginal(dataTag).Length)
-            throw new InvalidDataException("This bubble's occlusion buffer is not a stride-1 buffer of its data's size.");
-        var rows = Rows(data, 16, 16).Select(row => (BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(row)), U32(data, row + 8))).ToArray();
-        return (header, dataTag, rows);
+        JsonArray? rows;
+        try { rows = world.Fields(list)[Placements] as JsonArray; }
+        catch (InvalidDataException) { rows = null; }
+        return (rows ?? []).OfType<JsonObject>();
     }
 
-    /** True for a terrain or collision table with no rows (installed slots share such tables). */
-    public static bool IsEmptyTable(PackageCatalog catalog, uint tag) =>
-        Class(catalog, tag) == GroundTerrain.TableClass && BinaryPrimitives.ReadInt64LittleEndian(catalog.ReadOriginal(tag).AsSpan(8)) == 0;
+    private static bool Is(JsonObject row, uint payloadClass) =>
+        row[Payload] is JsonObject payload && WorldFiles.Text(payload[PayloadClass]) == WorldFiles.HashText(payloadClass);
 
-    /** The container with member slot pointing at tag. */
-    public static byte[] Repoint(byte[] container, int slot, uint tag)
+    /** A text-form integer: a number, hex with `0x`, or an installed reference `#0x`. */
+    private static ulong Integer(JsonNode? node)
     {
-        var members = MemberOffsets(container);
-        if (slot >= members.Count) throw new InvalidDataException("The container has no such slot.");
-        var edited = container.ToArray();
-        BinaryPrimitives.WriteUInt32LittleEndian(edited.AsSpan(members[slot]), tag);
-        return edited;
+        if (node is JsonValue value && value.GetValueKind() == System.Text.Json.JsonValueKind.Number) return value.GetValue<ulong>();
+        string text = (WorldFiles.Text(node) ?? throw new InvalidDataException("An integer field is missing.")).TrimStart('#');
+        return text.StartsWith("0x", StringComparison.Ordinal)
+            ? ulong.Parse(text.AsSpan(2), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture)
+            : throw new InvalidDataException($"\"{text}\" is not an integer.");
     }
 
-    public static IReadOnlyList<uint> Members(byte[] container) => MemberOffsets(container).Select(at => U32(container, at)).ToArray();
-
-    private static List<int> MemberOffsets(byte[] container) => Rows(container, MembersField, 4).ToList();
-
-    private static uint? RegistryOf(PackageCatalog catalog, uint table)
+    /** Writes an integer in the form the field holds: a number, hex of `bytes`, or else an installed reference. */
+    private static void Set(JsonObject target, string field, ulong value, int bytes)
     {
-        if (Class(catalog, table) != GroundTerrain.TableClass) return null;
-        var data = catalog.ReadOriginal(table);
-        foreach (int row in Rows(data, 8, 144))
-        {
-            long field = row + 0x78, relative = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan((int)field));
-            if (relative == 0) continue;
-            long resource = field + relative;
-            if (resource < 4 || resource + 0x14 > data.Length || U32(data, (int)resource - 4) != RegistryResourceClass) continue;
-            uint registry = U32(data, (int)resource + 0x10);
-            if (Class(catalog, registry) == RegistryClass) return registry;
-        }
-        return null;
+        string? text = WorldFiles.Text(WorldFiles.Field(target, field));
+        string digits = value.ToString("X" + bytes * 2, CultureInfo.InvariantCulture);
+        target[field] = text is null ? JsonValue.Create(value) : text.StartsWith("0x", StringComparison.Ordinal) ? "0x" + digits : (JsonNode)("#0x" + digits);
     }
-
-    private static uint Branch(PackageCatalog catalog, uint bubble)
-    {
-        if (Class(catalog, bubble) != BubbleClass) throw new InvalidDataException("Choose a bubble (class 80807DAE).");
-        uint branch = U32(catalog.ReadOriginal(bubble), 8);
-        if (Class(catalog, branch) != BranchClass) throw new InvalidDataException("The bubble names no branch.");
-        return branch;
-    }
-
-    /** Row offsets of the typed array whose descriptor (u64 count, i64 offset to the count) sits at field. */
-    private static IEnumerable<int> Rows(byte[] data, int field, int stride)
-    {
-        long count = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(field)), relative = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(field + 8));
-        if (count == 0) yield break;
-        long start = field + 8 + relative + 16;
-        if (count < 0 || start < 0 || start + count * stride > data.Length) throw new InvalidDataException("A native array is outside its tag.");
-        for (int i = 0; i < count; i++) yield return checked((int)(start + i * stride));
-    }
-
-    private static uint Class(PackageCatalog catalog, uint tag) => catalog.TryGetEntry(tag, out var entry) ? entry.Reference : 0;
-    private static uint U32(byte[] data, int at) => BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(at));
 }
