@@ -180,7 +180,6 @@ public sealed partial class StudioForm
                 string name = BubbleTitle(canonical, bubble.Name);
                 if (ImGui.Checkbox($"{name}##{canonical:X8}", ref visible))
                 { if (visible) hiddenBubbles.Remove(canonical); else hiddenBubbles.Add(canonical); }
-                DrawGenerateNavigation(bubble);
             }
             ImGui.EndCombo();
         }

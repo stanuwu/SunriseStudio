@@ -187,14 +187,8 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
             var data = ReadBytes(tag);
             switch (entry.Reference)
             {
-                case 0x80808CB6: // navigation root
-                    Navigation(tag, data, bubble, transform);
-                    break;
-                case 0x80808CB8: // standalone mesh inspection validates every array
-                    _ = NavigationDecoder.DecodeMesh(data.Bytes);
-                    break;
-                case 0x80808CBA: // agent and point graph
-                    _ = NavigationDecoder.DecodeGraph(data.Bytes);
+                case C80808cb6.Class:
+                    PlaceNavMesh(tag, data, bubble, transform);
                     break;
                 case SMapRoot.Class:
                 {
@@ -378,7 +372,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
     /** A row whose resource names decoded content visits it; any other row becomes a marker. */
     internal bool VisitsChild(byte[] data, int resource, uint resourceClass) => resourceClass switch
     {
-        0x80808C76 => data.Has(resource, 0x20), // navigation instance record
+        C80808c76.Class => TagView.FitsThrough<C80808c76>(data, resource, nameof(C80808c76.Unk18)),
         SStaticInstancesPayload.Class => TagView.FitsThrough<SStaticInstancesPayload>(data, resource,
             nameof(SStaticInstancesPayload.StaticOwner)),
         SSpawnPointsPayload.Class => TagView.FitsThrough<SSpawnPointsPayload>(data, resource, nameof(SSpawnPointsPayload.SpawnPoints)),
@@ -392,13 +386,14 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
         _ => false
     };
 
-    /** The child tag of a spawn, sky or placed-model payload that VisitsChild accepted. */
+    /** The child tag of a spawn, sky, placed-model or nav payload that VisitsChild accepted. */
     private static uint PayloadChild(byte[] data, int resource, uint resourceClass) => resourceClass switch
     {
         SSpawnPointsPayload.Class => TagView.Member<SSpawnPointsPayload, uint>(data, resource, nameof(SSpawnPointsPayload.SpawnPoints)),
         SSkyPayload.Class => TagView.Member<SSkyPayload, uint>(data, resource, nameof(SSkyPayload.SkyObjects)),
         UnknownPlacedModelPayload.Class => TagView.Member<UnknownPlacedModelPayload, uint>(data, resource,
             nameof(UnknownPlacedModelPayload.Model)),
+        C80808c76.Class => TagView.Member<C80808c76, uint>(data, resource, nameof(C80808c76.Unk18)),
         _ => throw new InvalidDataException($"Payload class 0x{resourceClass:X8} names no child.")
     };
 
@@ -547,11 +542,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
                     throw new InvalidDataException("Placed AO resource has the wrong map class.");
                 scene.OcclusionOwners.Add(new NativeOcclusionOwner(bubble, tag, row, map));
             }
-            if (VisitsChild(data, resource, resourceClass) && resourceClass == 0x80808C76)
-            {
-                Visit(data.U32(resource + 0x18), bubble, transform, depth + 1);
-            }
-            else if (VisitsChild(data, resource, resourceClass) && resourceClass == STerrainPayload.Class)
+            if (VisitsChild(data, resource, resourceClass) && resourceClass == STerrainPayload.Class)
             {
                 terrainResource = data.AsMemory(resource, Unsafe.SizeOf<STerrainPayload>());
                 try { Visit(TagView.At<STerrainPayload>(data, resource).Terrain, bubble, transform, depth + 1); }

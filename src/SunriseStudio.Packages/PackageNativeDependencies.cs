@@ -149,7 +149,7 @@ public static class PackageNativeDependencies
         // An entity's class record names the entity back; a copied entity needs its own copy loaded.
         if (type is 8 or 16 && reference == EntityClass && TagView.FitsThrough<SEntity>(data.Span, 0, nameof(SEntity.ClassRecordGameplayRoot)))
             Link(TagRead.U32(data.Span, TagView.FieldOffset<SEntity>(nameof(SEntity.ClassRecordGameplayRoot))), entry => entry.Reference == SNetworkClassRecord.Class, "class record");
-        // A nav holder's two tags, and a nav placement's entity and holder, load even in a manifest that had no nav.
+        // A nav holder's two tags load with it.
         if (type is 8 or 16 && reference == C80808cb6.Class)
         {
             Link(TagView.CheckedMember<C80808cb6, uint>(data.Span, 0, nameof(C80808cb6.Unk8)),
@@ -157,17 +157,6 @@ public static class PackageNativeDependencies
             Link(TagView.CheckedMember<C80808cb6, uint>(data.Span, 0, nameof(C80808cb6.UnkC)),
                 entry => entry.Reference == C80808cba.Class, "nav firing point");
         }
-        if (type is 8 or 16 && reference == SMapPlacements.Class)
-            foreach (int row in Rows(data, TagView.FieldOffset<SMapPlacements>(nameof(SMapPlacements.Placements)),
-                         AuthoredPlacementEntry.Class, Unsafe.SizeOf<AuthoredPlacementEntry>()))
-            {
-                ref readonly var placement = ref TagView.At<AuthoredPlacementEntry>(data.Span, row);
-                if (TagView.TargetOffset(data.Span, in placement.Payload) is not { } payload
-                    || TagView.ClassAt(data.Span, payload) != C80808c76.Class) continue;
-                Link(placement.ClassTag, entry => entry.Reference == EntityClass, "nav entity");
-                Link(TagView.CheckedMember<C80808c76, uint>(data.Span, payload, nameof(C80808c76.Unk18)),
-                    entry => entry.Reference == C80808cb6.Class, "nav holder");
-            }
         // A config's schema is resident wherever the config is.
         if (type is 8 or 16 && reference == ConfigClass)
         {
@@ -180,13 +169,19 @@ public static class PackageNativeDependencies
         // An animation asset resolves the tags it names (clips, query tables, events) by handle while
         // it plays; a missing one is a null handle.
         if (type is 8 or 16 && AnimationAssets.Contains(reference)) LinkNamed();
-        // A placement list's rows build their entities, so the entities load with it.
+        // A placement list's rows build their entities, so the entities load with it; a nav payload names its holder.
         if (type is 8 or 16 && reference == SMapPlacements.Class)
             foreach (int row in Rows(data, TagView.FieldOffset<SMapPlacements>(nameof(SMapPlacements.Placements)), AuthoredPlacementEntry.Class,
                          Unsafe.SizeOf<AuthoredPlacementEntry>()))
+            {
                 if (TagRead.U32(data.Span, row + TagView.FieldOffset<AuthoredPlacementEntry>(nameof(AuthoredPlacementEntry.ClassTag))) is var placed
                     && Entry(placed) is { Reference: EntityClass })
                     Link(placed, _ => true, "placed entity");
+                if (TagView.TargetOffset(data.Span, in TagView.At<AuthoredPlacementEntry>(data.Span, row).Payload) is { } payload
+                    && TagView.ClassAt(data.Span, payload) == C80808c76.Class)
+                    Link(TagView.CheckedMember<C80808c76, uint>(data.Span, payload, nameof(C80808c76.Unk18)),
+                        entry => entry.Reference == C80808cb6.Class, "nav holder");
+            }
         if (type is 8 or 16 && reference == ParticleSystemClass)
         {
             if (!TagView.FitsThrough<SParticleSystem>(data.Span, 0, nameof(SParticleSystem.Material4)))

@@ -36,14 +36,32 @@ public static class NavMeshWriter
     }
 
     /**
-     * Gives a new layer what the client derives nothing of itself: an island number per polygon and
-     * the box tree. The layer must hold no links.
+     * Gives a new layer what the client derives nothing of itself: an island number per polygon, the
+     * island after links join islands, and the box tree. Link lists and links are kept as given.
      */
     public static NavLayer Complete(NavLayer layer)
     {
-        if (layer.Links.Length > 0 || layer.LinkLists.Length > 0) throw new ArgumentException("A layer with links keeps its own islands.", nameof(layer));
-        // Polygons joined through neighbours share the lowest index among them.
-        int[] island = Enumerable.Repeat(-1, layer.Polygons.Length).ToArray();
+        var joined = layer.Polygons.Select(polygon => polygon.Neighbours.ToList()).ToArray();
+        foreach (var link in layer.Links)
+        {
+            int from = BinaryPrimitives.ReadInt32LittleEndian(link.AsSpan(LinkStartPolygonAt)), to = BinaryPrimitives.ReadInt32LittleEndian(link.AsSpan(LinkEndPolygonAt));
+            if ((uint)from >= joined.Length || (uint)to >= joined.Length) throw new ArgumentException("A nav link names a polygon outside its layer.", nameof(layer));
+            joined[from].Add(to);
+            joined[to].Add(from);
+        }
+        int[] island = Islands(layer.Polygons.Select(polygon => (IReadOnlyList<int>)polygon.Neighbours).ToArray());
+        int[] linked = Islands(joined);
+        var polygons = layer.Polygons.Select((polygon, index) =>
+            polygon with { Island = (uint)island[index], LinkedIsland = (uint)linked[index] }).ToArray();
+        var boxes = polygons.Select(polygon => (polygon.Vertices.Select(vertex => layer.Vertices[vertex]).Aggregate(Vector3.Min),
+            polygon.Vertices.Select(vertex => layer.Vertices[vertex]).Aggregate(Vector3.Max))).ToArray();
+        return layer with { Polygons = polygons, Tree = NavMopp.Build(boxes), TreeFill = DefaultFill };
+    }
+
+    /** Polygons joined through `next` share the lowest index among them. */
+    private static int[] Islands(IReadOnlyList<int>[] next)
+    {
+        int[] island = Enumerable.Repeat(-1, next.Length).ToArray();
         var queue = new Queue<int>();
         for (int start = 0; start < island.Length; start++)
         {
@@ -51,16 +69,11 @@ public static class NavMeshWriter
             island[start] = start;
             queue.Enqueue(start);
             while (queue.TryDequeue(out int at))
-                foreach (int other in layer.Polygons[at].Neighbours)
+                foreach (int other in next[at])
                     if (other >= 0 && island[other] < 0) { island[other] = start; queue.Enqueue(other); }
         }
-        var polygons = layer.Polygons.Select((polygon, index) =>
-            polygon with { LinkList = -1, Island = (uint)island[index], LinkedIsland = (uint)island[index] }).ToArray();
-        var boxes = polygons.Select(polygon => (polygon.Vertices.Select(vertex => layer.Vertices[vertex]).Aggregate(Vector3.Min),
-            polygon.Vertices.Select(vertex => layer.Vertices[vertex]).Aggregate(Vector3.Max))).ToArray();
-        return layer with { Polygons = polygons, Tree = NavMopp.Build(boxes), TreeFill = DefaultFill };
+        return island;
     }
-
     /** Fills one layer struct at `at` of the root and adds its arrays. */
     private static void Layer(TagBlueprint root, int at, NavLayer layer)
     {

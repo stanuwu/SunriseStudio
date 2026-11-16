@@ -50,6 +50,8 @@ public static class NavMeshReader
     internal const int PolygonSize = 60, VertexSize = 6, LinkListSize = 16, LinkSize = 76;
     // A polygon row: six vertex indices, six neighbours, the vertex count, the link list, two island numbers.
     internal const int MaximumCorners = 6, NeighboursAt = 24, CornerCountAt = 48, LinkListAt = 50, IslandAt = 52, LinkedIslandAt = 56;
+    // A link row: four corners, a flags byte at 48, a direction byte at 49, its own index, a type byte, then a key and a polygon at each end.
+    public const int LinkFlagsAt = 48, LinkDirectionAt = 49, LinkIndexAt = 52, LinkTypeAt = 56, LinkStartKeyAt = 60, LinkStartPolygonAt = 64, LinkEndKeyAt = 68, LinkEndPolygonAt = 72;
     internal const uint UnusedCorner = uint.MaxValue, NeighbourValid = 0x80000000;
     // A neighbour holds its layer above the polygon index.
     internal const int NeighbourLayerShift = 28, NeighbourLayerMask = 7, NeighbourIndexMask = (1 << NeighbourLayerShift) - 1;
