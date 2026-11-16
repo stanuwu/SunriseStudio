@@ -14,8 +14,6 @@ public sealed partial class StudioProject
     public const int ManifestVersion = 7;
     // A whole ported region lists about 76,000 assets, about 50 MB of manifest.
     private const int MaximumManifestBytes = 128 * 1024 * 1024;
-    public const int ManifestVersion = 8;
-    private const int MaximumManifestBytes = 16 * 1024 * 1024;
     private ProjectManifest manifest;
     public string DirectoryPath { get; }
     public string ManifestPath => Path.Combine(DirectoryPath, ProjectFileName);
@@ -60,15 +58,12 @@ public sealed partial class StudioProject
         string path = Path.Combine(folder, ProjectFileName);
         ProjectPaths.RejectLinks(path);
         if (new FileInfo(path).Length > MaximumManifestBytes) throw new InvalidDataException("Project manifest is too large.");
-        byte[] json = File.ReadAllBytes(path);
-        RequireKnownFeatures(json);
-        var data = JsonSerializer.Deserialize<ProjectManifest>(json, ProjectJson.Options)
+        var data = JsonSerializer.Deserialize<ProjectManifest>(File.ReadAllBytes(path), ProjectJson.Options)
             ?? throw new InvalidDataException("Project manifest is empty.");
         if (data.Version > ManifestVersion) throw new InvalidDataException("This project needs a newer Sunrise Studio.");
         if (data.Version < 1 || string.IsNullOrWhiteSpace(data.Name) || data.Changes is null || data.AddedAssets is null
             || data.Version == 1 && data.ObjectEdits is not null || data.Version == 2 && data.ObjectEdits is null)
             throw new InvalidDataException("Unsupported project manifest.");
-        RequireFeatures(data);
         foreach (var edit in data.ObjectEdits ?? []) edit.Validate();
         if ((data.ObjectEdits ?? []).Select(edit => edit.Key).Distinct().Count() != (data.ObjectEdits?.Count ?? 0))
             throw new InvalidDataException("Project contains two edits of one object.");
@@ -100,9 +95,6 @@ public sealed partial class StudioProject
         if (data.AddedAssets.Where(x => x.Native is not null)
             .GroupBy(x => (x.Native!.PackageId, x.Native.EntryIndex)).Any(x => x.Count() > 1))
             throw new InvalidDataException("Project contains duplicate native entry indices.");
-        foreach (var asset in data.AddedAssets) ValidateGroup(asset.Group);
-        if (!data.HasFeature(ProjectFeatures.AssetGroups) && data.AddedAssets.Any(asset => asset.Group is not null))
-            throw new InvalidDataException("Added-asset groups require project manifest version 8.");
         bool aliases = data.AddedAssets.Any(asset => asset.Native?.WideHashes is { Count: > 0 });
         if (aliases && data.Version < 3)
             throw new InvalidDataException("Authored wide hashes require project manifest version 3.");
@@ -323,38 +315,14 @@ public sealed partial class StudioProject
         bool names = value.ObjectNames is { Count: > 0 };
         bool groups = value.ObjectGroups is { Count: > 0 };
         bool parts = groups && value.ObjectGroups!.Any(group => group.CollisionParts is not null);
-        bool assetGroups = assets.Any(asset => asset.Group is not null);
-        var features = new List<string>();
-        if (assetGroups) features.Add(ProjectFeatures.AssetGroups);
-        features.Sort(StringComparer.Ordinal);
-        int version = features.Count > 0 ? 8 : parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
-        if (value.Version == version && ReferenceEquals(assets, value.AddedAssets) && (value.Features ?? []).SequenceEqual(features)
+        int version = parts ? 7 : groups ? 6 : names ? 5 : bindings ? 4 : aliases ? 3 : objects ? 2 : 1;
+        if (value.Version == version && ReferenceEquals(assets, value.AddedAssets)
             && (objects || value.ObjectEdits is null) && (bindings || value.ConfigBindings is null)
             && (names || value.ObjectNames is null) && (groups || value.ObjectGroups is null)) return value;
-        return value with { Version = version, Features = features.Count == 0 ? null : features.AsReadOnly(), AddedAssets = assets,
+        return value with { Version = version, AddedAssets = assets,
             ObjectEdits = objects ? value.ObjectEdits : null,
             ConfigBindings = bindings ? value.ConfigBindings : null, ObjectNames = names ? value.ObjectNames : null,
             ObjectGroups = groups ? value.ObjectGroups : null };
-    }
-
-    /** A manifest naming a feature this build does not know is refused before its fields are read. */
-    private static void RequireKnownFeatures(byte[] json)
-    {
-        using var document = JsonDocument.Parse(json);
-        if (document.RootElement.ValueKind == JsonValueKind.Object
-            && document.RootElement.TryGetProperty("features", out var features) && features.ValueKind == JsonValueKind.Array
-            && features.EnumerateArray().Any(name => name.ValueKind == JsonValueKind.String
-                && !ProjectFeatures.Known.Contains(name.GetString()!, StringComparer.Ordinal)))
-            throw new InvalidDataException("This project needs a newer Sunrise Studio.");
-    }
-
-    /** Features belong to version 8, each named once. */
-    private static void RequireFeatures(ProjectManifest data)
-    {
-        if (data.Features is null) return;
-        if (data.Version < 8) throw new InvalidDataException("Named features require project manifest version 8.");
-        if (data.Features.Any(name => name is null) || data.Features.Distinct(StringComparer.Ordinal).Count() != data.Features.Count)
-            throw new InvalidDataException("Unsupported project manifest.");
     }
 
     private static byte[] SerializeManifest(ProjectManifest value)
@@ -372,14 +340,6 @@ public sealed partial class StudioProject
     {
         if (hash is null || hash.Length != 64 || !hash.All(Uri.IsHexDigit))
             throw new InvalidDataException("Invalid project checksum.");
-    }
-
-    /** A group id is one trimmed line of up to 64 characters without path separators. */
-    internal static void ValidateGroup(string? group)
-    {
-        if (group is not null && (group.Length is 0 or > 64 || group != group.Trim() || group.Any(char.IsControl)
-            || group.IndexOfAny(['/', '\\']) >= 0))
-            throw new InvalidDataException("Added-asset group id is invalid.");
     }
 
     /** Saved entries may keep an id above the new-package limit so old projects open; the build refuses it. */
