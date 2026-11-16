@@ -65,6 +65,8 @@ cd SunriseStudio
 .\publish.ps1
 ```
 
+This writes `publish\Sunrise Studio.exe`.
+
 On first start, choose your Sunrise installation; Studio remembers it. `Sunrise Studio.exe --help`
 lists the command-line options.
 
