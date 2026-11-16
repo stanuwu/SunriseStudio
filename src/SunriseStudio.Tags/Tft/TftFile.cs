@@ -80,6 +80,24 @@ public sealed class TftFile
 
     /** The `info` of a clone of an installed tag. */
     public static string CloneInfo(uint sourceTag) => $"{{\"source_tag\":\"0x{sourceTag:X8}\"}}";
+
+    /** The installed tag a second copy was made from, read from `info`; such a copy does not stand in for the tag. */
+    public uint? CopyOf
+    {
+        get
+        {
+            if (Info is null) return null;
+            try
+            {
+                return JsonNode.Parse(Info)?["copy_of"] is JsonValue value && value.TryGetValue(out string? text) && text.StartsWith("0x", StringComparison.Ordinal)
+                    && uint.TryParse(text.AsSpan(2), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out uint tag) ? tag : null;
+            }
+            catch (JsonException) { return null; }
+        }
+    }
+
+    /** The `info` of a second copy of an installed tag. */
+    public static string CopyInfo(uint sourceTag) => $"{{\"copy_of\":\"0x{sourceTag:X8}\"}}";
     /** Editor state; the compiler ignores it. */
     public byte[]? Meta { get; init; }
 
@@ -284,7 +302,7 @@ public static class TftNames
         return name;
     }
 
-    /** The tag type a name ends with: `littleroot.scenario` has type `scenario`. */
+    /** The tag type a name ends with: `harbor.scenario` has type `scenario`. */
     public static string TagTypeOf(string name)
     {
         int dot = name.LastIndexOf('.');

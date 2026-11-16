@@ -9,5 +9,8 @@
     <ProjectReference Include="../SunriseStudio.Projects/SunriseStudio.Projects.csproj" />
     <ProjectReference Include="../SunriseStudio.Formats/SunriseStudio.Formats.csproj" />
     <ProjectReference Include="../SunriseStudio.Packages/SunriseStudio.Packages.csproj" />
+    <ProjectReference Include="../SunriseStudio.Audio/SunriseStudio.Audio.csproj" />
   </ItemGroup>
+  <ItemGroup><PackageReference Include="BCnEncoder.Net" Version="2.3.0" /></ItemGroup>
+  <ItemGroup><PackageReference Include="DotRecast.Recast" Version="2026.3.1" /></ItemGroup>
 </Project>

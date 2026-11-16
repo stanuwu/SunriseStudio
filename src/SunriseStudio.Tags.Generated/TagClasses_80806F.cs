@@ -775,6 +775,9 @@ public struct UnknownSkyEntry
     [FieldOffset(92)] public float Unk5c;
     [FieldOffset(96)] public uint ModelWrapper;
     [FieldOffset(100)] public float Unk64;
+    [FieldOffset(108)] public byte LightShaftPass;
+    [FieldOffset(109)] public byte LightShaftPassAlt;
+    [FieldOffset(110)] public byte HiddenInTransparents;
     [FieldOffset(112)] public float Unk70;
     [FieldOffset(116)] public float Unk74;
     [FieldOffset(120)] public uint Unk78;

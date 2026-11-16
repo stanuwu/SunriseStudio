@@ -19,8 +19,9 @@ Each license text is copied from the project's own license file.
 | Tsu | 2.2.2 | MIT | Copyright (c) 2016 GGG KILLER |
 | BCnEncoder.NET | 2.3.0 | MIT | Copyright 2020 Nomi Lakkala |
 | CommunityToolkit.HighPerformance | 8.4.0 | MIT | Copyright (c) .NET Foundation and Contributors |
+| DotRecast.Core, DotRecast.Recast | 2026.3.1 | zlib | Copyright (c) 2015 Mikko Mononen memon@inside.org, Piotr Piastucki, choi ikpil ikpil@naver.com |
 
-Each library above is licensed under these terms, with its own copyright line:
+Each MIT library above is licensed under these terms, with its own copyright line:
 
 ```text
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -40,6 +41,30 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+DotRecast bakes nav meshes. It is licensed under these terms. Source:
+<https://github.com/ikpil/DotRecast>, file `LICENSE.txt`.
+
+```text
+Copyright (c) 2015 Mikko Mononen memon@inside.org, Piotr Piastucki, choi ikpil ikpil@naver.com
+
+
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+claim that you wrote the original software. If you use this software
+in a product, an acknowledgment in the product documentation would be
+appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
 ```
 
 The .NET runtime and the Community Toolkit include code from other projects. Their own notice files

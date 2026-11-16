@@ -49,6 +49,7 @@ internal static class CompatibleSkinChecks
         Check(prepared.ConsumedBones == 63 && prepared.Additions.Count == 6 && prepared.RemovedSourceParts > 0,
             "The checked matrix profile lost its palette limit or replacement scope.");
         Check(prepared.MaterialTag == 0x80C4425D, "The replacement lost its native initial material selection.");
+        NewRig(catalog, geometry, options);
         var initialReads = new HashSet<uint>();
         new EntityInitialStateReader(catalog) { Reads = initialReads }.Read(entityTag, 0x80C443F8);
         Check(initialReads.All(prepared.SourceHashes.ContainsKey), "Initial material inputs were not captured for review.");
@@ -113,6 +114,22 @@ internal static class CompatibleSkinChecks
             if (resolved.StartsWith(Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath())) + Path.DirectorySeparatorChar,
                 StringComparison.OrdinalIgnoreCase) && Directory.Exists(resolved)) Directory.Delete(resolved, true);
         }
+    }
+
+    /** A model for a new five-bone skeleton is an added asset; the template model stays as installed. */
+    private static void NewRig(PackageCatalog catalog, InterchangeMesh geometry, CompatibleSkinReplacementOptions options)
+    {
+        VertexSkinWeights[] weights = [new(0, 0, 0, 0, new(1, 0, 0, 0)), new(4, 0, 0, 0, new(1, 0, 0, 0)),
+            new(1, 2, 0, 0, new(.5f, .5f, 0, 0)), new(3, 0, 0, 0, new(1, 0, 0, 0))];
+        var far = geometry with { Positions = geometry.Positions.Select(position => position * 3 + new Vector3(100)).ToArray() };
+        var prepared = CompatibleSkinnedMesh.PrepareNewRig(catalog, far, weights, 5, options);
+        Check(prepared.Replacements.Count == 0 && prepared.Additions.Count == 7 && prepared.ConsumedBones == 5
+            && prepared.ModelTag == TagHashes.Make(options.PackageId, options.FirstEntryIndex + 6),
+            "A new-rig model replaced its template or lost its own entry.");
+        byte[] model = prepared.Additions.Single(asset => asset.Name == options.Name + ".model").Data;
+        Check(System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(model.AsSpan(0x40)) == 5, "The new model lost its bone count.");
+        Reject(() => CompatibleSkinnedMesh.PrepareNewRig(catalog, far, weights, 4, options));
+        Console.WriteLine($"compatible_skin new_rig model={prepared.ModelTag:X8} bones=5 additions=7 out_of_range_joint=refused");
     }
 
     private static SceneDocument Overlay(StudioProject project, PackageCatalog catalog)

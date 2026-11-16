@@ -33,6 +33,8 @@ PhysicsChecks.Synthetic();
 SharedShapeChecks.Synthetic();
 ConnectivityChecks.Synthetic();
 ImportAdmissionChecks.Run();
+NavMeshChecks.Synthetic();
+if (Array.IndexOf(args, "--nav-bake-out") is int bakeIndex && bakeIndex >= 0) NavMeshChecks.WriteSynthetic(args[bakeIndex + 1]);
 int gameIndex = Array.IndexOf(args, "--game-root");
 if (gameIndex >= 0)
 {
@@ -40,6 +42,11 @@ if (gameIndex >= 0)
     if (args.Contains("--occlusion-only"))
     {
         OcclusionChecks.Run(catalog);
+        return;
+    }
+    if (args.Contains("--nav-only"))
+    {
+        NavMeshChecks.Run(catalog);
         return;
     }
     if (args.Contains("--parts-only"))

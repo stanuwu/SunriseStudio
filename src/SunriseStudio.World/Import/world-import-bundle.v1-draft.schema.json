@@ -1,0 +1,567 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:sunrise-studio:world-import-bundle:1-draft",
+  "title": "World Import Bundle, version 1 draft",
+  "description": "A bundle is a folder: bundle.json, one folder per bubble holding bubble.json and its files, and any other folders bundle.json names. $defs/bundle describes bundle.json and $defs/bubble describes bubble.json. Units are metres and degrees. Axes are the game's: right-handed, Z up. A glb stores glTF Y up; Studio reads glTF (x, y, z) as game (x, -z, y), which undoes Blender's default +Y Up export. Blender converts units and axes once; Studio never converts. Every position in bubble.json is in that bubble's bundle space, and its first spawn point lands on the destination bubble's first spawn point. Keywords starting x- are Studio checks: x-file names a file that must exist, relative to the folder of the JSON file. Sections marked x-provisional may change before v1.",
+  "anyOf": [{ "$ref": "#/$defs/bundle" }, { "$ref": "#/$defs/bubble" }],
+  "$defs": {
+    "bundle": {
+      "description": "bundle.json at the bundle root.",
+      "type": "object",
+      "required": ["bubbles"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "description": "Version the producer wrote. Studio does not read it.",
+          "type": "integer"
+        },
+        "name": {
+          "description": "Bundle name. Studio does not read it.",
+          "type": "string"
+        },
+        "bubbles": {
+          "description": "Bubble folder names in order: bubble i lands in the destination's i-th bubble with states. Each folder holds a bubble.json.",
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "space": {
+          "description": "Optional. `shared` gives every bubble one bundle space, anchored by the first bubble's first spawn point, so bubbles keep their places relative to each other. Without it each bubble anchors on its own first spawn point.",
+          "enum": ["shared"]
+        },
+        "anchor": {
+          "description": "Optional, with `space` `shared`. The bundle-space point that lands on the destination's first spawn point, in place of the first bubble's first spawn point. Use it to centre a large bundle inside the host map's extents: the game draws nothing for a player far outside them.",
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "far": {
+          "description": "Far tiles: geometry that stands in for some bubbles, drawn in every outdoor bubble that does not stream them. Placed in the first bubble's bundle space.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/far" }
+        },
+        "sky": {
+          "description": "A dome sky in the first bubble.",
+          "type": "object",
+          "required": ["panorama"],
+          "additionalProperties": false,
+          "properties": {
+            "panorama": {
+              "description": "A PNG, relative to the bundle folder, that wraps the dome by the stock dome's UVs.",
+              "type": "string",
+              "x-file": true
+            }
+          }
+        },
+        "sounds": {
+          "description": "New sounds an entity event can name. Each is a PCM wav played the way an installed sound event plays.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/sound" }
+        },
+        "music": { "$ref": "#/$defs/music" },
+        "map": {
+          "description": "The Director map in the shared bundle space. New > Director entry reads it. Needs space shared and at least one landing.",
+          "type": "object",
+          "required": ["min", "max"],
+          "additionalProperties": false,
+          "properties": {
+            "png": { "description": "The map image, north up, relative to the bundle folder. Default: a generated map.", "type": "string", "x-file": true },
+            "min": { "description": "The map's -X, -Y corner, x and y in metres.", "$ref": "#/$defs/vec2" },
+            "max": { "description": "The map's +X, +Y corner, x and y in metres. The image's top edge is this y.", "$ref": "#/$defs/vec2" }
+          }
+        },
+        "planet": {
+          "description": "The planet on the Director's top page. New > Director entry reads it.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "png": { "description": "An equirectangular PNG, relative to the bundle folder, like EDZ's 648 x 324. Default: a generated planet.", "type": "string", "x-file": true },
+            "size": { "description": "The planet's diameter in screen heights. Default 0.3, EDZ's size.", "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        "creatures": {
+          "description": "Creatures built from glb files over installed enemies. A squad names one as creature:name.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/creature" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["far"], "properties": { "far": { "minItems": 1 } } },
+          "then": { "properties": { "bubbles": { "minItems": 1 } } }
+        },
+        {
+          "if": { "required": ["sky"] },
+          "then": { "properties": { "bubbles": { "minItems": 1 } } }
+        }
+      ]
+    },
+    "bubble": {
+      "description": "bubble.json in a bubble folder.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "description": "Version the producer wrote. Studio does not read it.",
+          "type": "integer"
+        },
+        "name": {
+          "description": "Bubble name used in the names of the new assets. Needed when the bubble has statics, permissions or entities.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "outdoor makes the bubble load far tiles. Any other value, or none, does not.",
+          "type": "string"
+        },
+        "bounds": {
+          "description": "Axis-aligned box in metres. Needed when a far tile covers the bubble: the tile keeps triangles inside the covered boxes on X and Y.",
+          "$ref": "#/$defs/bounds"
+        },
+        "neighbours": {
+          "description": "Names of bundle bubbles that also draw this bubble's statics. Use it with a shared bundle space, where the two line up. A name outside the bundle is skipped.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "crossings": {
+          "description": "Borders the player walks across into another bundle bubble, with no teleport. Needs a shared bundle space and bounds on both bubbles. List each pair once, in either bubble.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/crossing" }
+        },
+        "spawn_points": {
+          "description": "Places the player arrives at. The first one anchors the bubble: needed when the bubble places anything, and in the first bubble when the bundle has far tiles.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/spawn_point" }
+        },
+        "statics": {
+          "description": "Static meshes. Needed, even empty, when permissions is given.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/static" }
+        },
+        "lights": {
+          "description": "Local lights, each a copy of a stock light at a new place.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/light" }
+        },
+        "permissions": { "$ref": "#/$defs/permissions" },
+        "nav": {
+          "description": "True bakes a nav mesh from the same triangles as the bubble's collision.",
+          "type": "boolean"
+        },
+        "entities": {
+          "description": "Animated entities, each built from a skinned glb.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/entity" }
+        },
+        "volumes": {
+          "description": "Trigger volumes of the source activity, moved into the bubble.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/volume" }
+        },
+        "squads": {
+          "description": "New squads in this bubble, placed by a mission script.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/squad" }
+        },
+        "doors": {
+          "description": "New box triggers in this bubble; a mission script arms each one and hears it as a player trigger.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/door" }
+        },
+        "landings": {
+          "description": "Director landing zones, each landing on one of this bubble's named spawn points.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "spawn"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "description": "The zone's title on the map, such as North Gate.", "type": "string", "minLength": 1, "maxLength": 64 },
+              "spawn": { "description": "The name of a spawn point of this bubble.", "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["permissions"] },
+          "then": { "required": ["statics", "name", "spawn_points"], "properties": { "spawn_points": { "minItems": 1 } } }
+        },
+        {
+          "if": { "required": ["statics"], "properties": { "statics": { "minItems": 1 } } },
+          "then": { "required": ["name", "spawn_points"], "properties": { "spawn_points": { "minItems": 1 } } }
+        },
+        {
+          "if": { "required": ["entities"], "properties": { "entities": { "minItems": 1 } } },
+          "then": {
+            "required": ["name", "spawn_points"],
+            "properties": {
+              "name": { "description": "Part of every entity name, so lowercase letters, digits and underscores.", "pattern": "^[a-z0-9_]*$" },
+              "spawn_points": { "minItems": 1 }
+            }
+          }
+        },
+        {
+          "if": { "required": ["lights"], "properties": { "lights": { "minItems": 1 } } },
+          "then": { "required": ["spawn_points"], "properties": { "spawn_points": { "minItems": 1 } } }
+        },
+        {
+          "if": { "required": ["volumes"], "properties": { "volumes": { "minItems": 1 } } },
+          "then": { "required": ["spawn_points"], "properties": { "spawn_points": { "minItems": 1 } } }
+        },
+        {
+          "if": { "required": ["doors"], "properties": { "doors": { "minItems": 1 } } },
+          "then": { "required": ["spawn_points"], "properties": { "spawn_points": { "minItems": 1 } } }
+        },
+        {
+          "if": { "required": ["crossings"], "properties": { "crossings": { "minItems": 1 } } },
+          "then": { "required": ["bounds"] }
+        }
+      ]
+    },
+    "crossing": {
+      "description": "One walked border. This bubble lies left of the line seen from above, the to bubble right of it.",
+      "type": "object",
+      "required": ["to", "line"],
+      "additionalProperties": false,
+      "properties": {
+        "to": { "description": "The bundle bubble on the right of the line. It needs bounds too.", "type": "string", "minLength": 1 },
+        "line": {
+          "description": "The border in bundle space, two points or more. X and Y place it; Z is the ground height for the crossing's spawn points.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/vec3" },
+          "minItems": 2
+        },
+        "width": { "description": "Metres between the two switch lines; each side switches half of it past the line. Default 8, at least 4.", "type": "number", "minimum": 4 }
+      }
+    },
+    "vec3": {
+      "description": "x, y, z in metres, game axes, Z up.",
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "vec2": {
+      "description": "x, y in metres, game axes.",
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "quaternion": {
+      "description": "Rotation as x, y, z, w in game axes. Studio normalises it.",
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "hex_tag": {
+      "description": "An installed tag in hex, with or without 0x.",
+      "type": "string",
+      "pattern": "^(0[xX])?[0-9A-Fa-f]{1,8}$"
+    },
+    "bounds": {
+      "type": "object",
+      "required": ["min", "max"],
+      "additionalProperties": false,
+      "properties": {
+        "min": { "description": "Lowest corner.", "$ref": "#/$defs/vec3" },
+        "max": { "description": "Highest corner.", "$ref": "#/$defs/vec3" }
+      }
+    },
+    "spawn_point": {
+      "type": "object",
+      "required": ["position"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "description": "Makes the point its own spawn set, FNV-1 of BUBBLE:NAME, that a teleport or a landing zone names. Unique in the bubble.", "type": "string" },
+        "position": { "description": "Where the player stands.", "$ref": "#/$defs/vec3" },
+        "facing": { "description": "Yaw in degrees about +Z; 0 faces +X, 90 faces +Y. Default 0.", "type": "number" }
+      }
+    },
+    "static": {
+      "description": "One static mesh. Its transform applies scale, then rotation, then position.",
+      "type": "object",
+      "required": ["glb", "position"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "description": "Part of the new asset names; unique in the bubble. Default: the glb file name without its extension.", "type": "string" },
+        "glb": { "description": "The render glb, relative to the bubble folder.", "type": "string", "x-file": true },
+        "position": { "description": "Where the glb origin goes.", "$ref": "#/$defs/vec3" },
+        "rotation": { "description": "Default: no rotation.", "$ref": "#/$defs/quaternion" },
+        "scale": { "description": "Uniform scale. Default 1.", "type": "number" },
+        "lods": {
+          "description": "Coarser copies of the glb, nearest first, relative to the bubble folder. At most two.",
+          "type": "array",
+          "items": { "type": "string", "x-file": true },
+          "maxItems": 2
+        },
+        "lod_distances": {
+          "description": "Metres where each further level takes over, at the default field of view. No more entries than lods.",
+          "type": "array",
+          "items": { "type": "number", "exclusiveMinimum": 0 },
+          "maxItems": 2
+        },
+        "draw_distance": { "description": "Metres past which the static does not draw, at the default field of view.", "type": "number", "exclusiveMinimum": 0 },
+        "collision": {
+          "description": "A glb whose triangles collide at the static's transform, true for the render glb, or false for none. Default: the render glb.",
+          "anyOf": [{ "type": "boolean" }, { "type": "string", "x-file": true }]
+        },
+        "occluder": { "description": "False keeps the static's closed meshes out of the occlusion bake. Default true.", "type": "boolean" },
+        "surface": { "description": "A collision surface material tag for every collision triangle. Default: the material of the nearest stock triangle.", "$ref": "#/$defs/hex_tag" }
+      }
+    },
+    "light": {
+      "type": "object",
+      "required": ["name", "position"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "description": "Part of the new asset name; unique in the bubble.", "type": "string" },
+        "position": { "description": "Where the light goes.", "$ref": "#/$defs/vec3" }
+      }
+    },
+    "permissions": {
+      "description": "A movement grid as a PNG of square cells, image row 0 at the +Y edge. A cell with red at 128 or more is blocked. Each edge a blocked cell shares with an open cell or the grid border becomes an invisible wall.",
+      "type": "object",
+      "required": ["png", "origin", "cell", "height"],
+      "additionalProperties": false,
+      "properties": {
+        "png": { "description": "The grid PNG, relative to the bubble folder.", "type": "string", "x-file": true },
+        "origin": { "description": "The grid's -X, -Y corner; its Z is the walls' base.", "$ref": "#/$defs/vec3" },
+        "cell": { "description": "Cell size in metres.", "type": "number", "exclusiveMinimum": 0 },
+        "height": { "description": "Wall height in metres.", "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "entity": {
+      "description": "One skinned glb with its armature and named actions. Give plays or device, not both.",
+      "type": "object",
+      "required": ["name", "glb", "position"],
+      "oneOf": [{ "required": ["plays"] }, { "required": ["device"] }],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "description": "Unique in the bubble; lowercase letters, digits and underscores.", "type": "string", "pattern": "^[a-z0-9_]*$" },
+        "glb": { "description": "The skinned glb, relative to the bubble folder.", "type": "string", "x-file": true },
+        "position": { "description": "Where the entity origin goes.", "$ref": "#/$defs/vec3" },
+        "rotation": { "description": "Default: no rotation.", "$ref": "#/$defs/quaternion" },
+        "scale": { "description": "Uniform scale. Default 1.", "type": "number", "exclusiveMinimum": 0 },
+        "plays": { "description": "The action the entity loops by itself.", "type": "string" },
+        "device": {
+          "description": "Makes the entity a device a mission script drives, such as a door.",
+          "type": "object",
+          "required": ["slot", "position"],
+          "additionalProperties": false,
+          "properties": {
+            "slot": { "description": "A device slot of the source activity, by its name there.", "type": "string" },
+            "position": { "description": "The action the position channel scrubs: 0 shows its first frame, 1 its last.", "type": "string" }
+          }
+        },
+        "material": { "description": "A skin material tag. Default: a stock material.", "$ref": "#/$defs/hex_tag" },
+        "events": {
+          "description": "Sounds and effects an action fires on a frame.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/entity_event" }
+        }
+      }
+    },
+    "entity_event": {
+      "description": "Give sound or effect, not both.",
+      "type": "object",
+      "required": ["action", "frame"],
+      "oneOf": [{ "required": ["sound"] }, { "required": ["effect"] }],
+      "additionalProperties": false,
+      "properties": {
+        "action": { "description": "The action that fires the event.", "type": "string" },
+        "frame": { "description": "Frame of the action from 0, at 30 frames a second.", "type": "integer", "minimum": 0 },
+        "sound": { "description": "A sound of bundle.json by name, else an installed sound event tag in hex.", "type": "string" },
+        "effect": { "description": "An installed effect entity tag spawned on the frame.", "$ref": "#/$defs/hex_tag" },
+        "detached": { "description": "True spawns the effect as its own object that stays where it spawned. Default false.", "type": "boolean" }
+      }
+    },
+    "volume": {
+      "description": "Moves a player trigger's volume. With neither size nor corners the volume keeps its shape. Size makes a box; corners and height make a prism.",
+      "type": "object",
+      "required": ["trigger", "position"],
+      "not": { "required": ["size", "corners"] },
+      "dependentRequired": { "corners": ["height"] },
+      "additionalProperties": false,
+      "properties": {
+        "trigger": { "description": "A player trigger of the source activity, by its name there.", "type": "string" },
+        "position": { "description": "Where the middle of the volume's floor goes.", "$ref": "#/$defs/vec3" },
+        "size": {
+          "description": "Width along X, depth along Y, height, in metres. Width and depth not 0; height above 0.",
+          "type": "array",
+          "prefixItems": [
+            { "type": "number", "not": { "const": 0 } },
+            { "type": "number", "not": { "const": 0 } },
+            { "type": "number", "exclusiveMinimum": 0 }
+          ],
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "corners": {
+          "description": "3 to 15 floor corners as x, y offsets from position, in order around a convex floor.",
+          "type": "array",
+          "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+          "minItems": 3,
+          "maxItems": 15
+        },
+        "height": { "description": "With corners: how far the volume reaches up from the floor, in metres.", "type": "number", "exclusiveMinimum": 0 },
+        "yaw": { "description": "With size or corners: turns the floor about position, in degrees about +Z. Default 0.", "type": "number" }
+      }
+    },
+    "far": {
+      "type": "object",
+      "required": ["name", "glb", "covers"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "description": "Part of the new asset and container names; unique in the bundle.", "type": "string" },
+        "glb": { "description": "The far glb, relative to the bundle folder, in the first bubble's bundle space.", "type": "string", "x-file": true },
+        "covers": {
+          "description": "Listed bubbles the tile stands in for. Each needs bounds.",
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "margin": { "description": "Metres the covered area grows by on X and Y. Default 2.", "type": "number", "minimum": 0 },
+        "sink": { "description": "Metres the tile drops, so it sits under near geometry. Default 0.5.", "type": "number", "minimum": 0 }
+      }
+    },
+    "sound": {
+      "type": "object",
+      "required": ["name", "wav", "like"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "description": "Unique in the bundle; an entity event names it.", "type": "string" },
+        "wav": { "description": "A mono or stereo PCM16 wav, relative to the bundle folder.", "type": "string", "x-file": true },
+        "like": { "description": "An installed sound event. The new sound keeps its volume, falloff and containers.", "$ref": "#/$defs/hex_tag" },
+        "variations": {
+          "description": "More PCM16 wavs. With wav they go round the sounds of the like event's random containers.",
+          "type": "array",
+          "items": { "type": "string", "x-file": true }
+        },
+        "switches": {
+          "description": "Switch value name to the PCM16 wav its branch of the like event's switch container plays.",
+          "type": "object",
+          "additionalProperties": { "type": "string", "x-file": true }
+        },
+        "max_distance": { "description": "Metres the sound carries: every distance curve of the like event ends there.", "type": "number" }
+      }
+    },
+    "squad": {
+      "description": "One new squad on an object the import makes; a mission script places it by name with squad:place. Its members copy one installed enemy.",
+      "type": "object",
+      "required": ["name", "entity", "position"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "description": "Unique in the destination; mission scripts name the squad by it.", "type": "string", "minLength": 1, "maxLength": 128 },
+        "entity": { "description": "An installed combatant entity tag in hex, or creature: and the name of a bundle creature.", "type": "string", "pattern": "^((0[xX])?[0-9A-Fa-f]{1,8}|creature:[a-z0-9_]+)$" },
+        "count": { "description": "Members per placement. Default 1.", "type": "integer", "minimum": 1, "maximum": 64 },
+        "position": { "description": "Spawn place in bundle space.", "$ref": "#/$defs/vec3" }
+      }
+    },
+
+    "door": {
+      "description": "One new box trigger. The import makes its player trigger door.<name> and its volume door.<name>.volume on an object of its own.",
+      "type": "object",
+      "required": ["name", "position", "size"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "description": "Unique in the destination; printable ASCII without spaces.", "type": "string", "pattern": "^[!-~]{1,128}$" },
+        "position": { "description": "Where the middle of the box's floor goes, in bundle space.", "$ref": "#/$defs/vec3" },
+        "size": {
+          "description": "Width along X, depth along Y and height, in metres, all above 0.",
+          "type": "array",
+          "items": { "type": "number", "exclusiveMinimum": 0 },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "yaw": { "description": "Turns the box about position, in degrees about +Z. Default 0.", "type": "number" }
+      }
+    },
+
+    "creature": {
+      "description": "A creature with its own skeleton, mesh, texture and clips, built over an installed enemy that keeps its behaviour, weapons and health.",
+      "type": "object",
+      "required": ["name", "glb", "donor", "clips"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "description": "Unique in the bundle; squads name it as creature:name.", "type": "string", "pattern": "^[a-z0-9_]+$" },
+        "glb": { "description": "A skinned glb with named animations, relative to the bundle folder. Each skinned mesh may have its own base colour image.", "type": "string", "x-file": true },
+        "donor": { "description": "The installed combatant entity tag in hex whose behaviour the creature keeps.", "type": "string", "pattern": "^(0[xX])?[0-9A-Fa-f]{1,8}$" },
+        "scale": { "description": "Uniform scale from glb units to metres. Default 1.", "type": "number", "exclusiveMinimum": 0 },
+        "yaw": { "description": "Turn about Z in degrees, so the creature faces the donor's forward. Default 0.", "type": "number" },
+        "clips": {
+          "description": "Glb animation per behaviour: idle (required), locomotion, fire, melee, throw, flinch, evade, death, reaction, spawn, ability.",
+          "type": "object",
+          "required": ["idle"],
+          "propertyNames": { "enum": ["idle", "locomotion", "fire", "melee", "throw", "flinch", "evade", "death", "reaction", "spawn", "ability"] },
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "bones": {
+          "description": "The glb bones that stand for the donor's head, hands and feet.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "head": { "type": "string" }, "right_hand": { "type": "string" }, "left_hand": { "type": "string" },
+            "right_foot": { "type": "string" }, "left_foot": { "type": "string" }
+          }
+        },
+        "follow": {
+          "description": "Donor rig points (pelvis, sternum, neck_base, head, right_hand, left_hand, right_grip, left_grip and the rest) moved onto glb bones, so hit shapes, the name plate and shots follow the creature.",
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "damage": { "description": "Multiplies the donor's gun damage. Default 1.", "type": "number", "exclusiveMinimum": 0, "maximum": 10 },
+        "health": { "description": "Multiplies the donor's hit points. Default 1.", "type": "number", "exclusiveMinimum": 0, "maximum": 10 },
+        "display_name": { "description": "The name plate text. It joins the bank that holds every enemy name. Default: the donor's name.", "type": "string", "minLength": 1, "maxLength": 64 },
+        "grenades": { "description": "False removes the donor's grenade ability. Default true.", "type": "boolean" },
+        "attack": { "description": "gun keeps the donor's loadout; melee empties it, so the creature only closes in and melees. Default gun.", "type": "string", "enum": ["gun", "melee"] },
+        "projectile": { "description": "An installed projectile entity tag in hex that the donor's gun fires instead of its own. Needs attack gun.", "type": "string", "pattern": "^(0[xX])?[0-9A-Fa-f]{1,8}$" },
+        "projectile_speed": { "description": "Projectile speed in metres per second. Default: the projectile's own. Needs attack gun.", "type": "number", "exclusiveMinimum": 0, "maximum": 2000 },
+        "capsule": {
+          "description": "The physical body in metres. Height must be at least 0.3 + 2 * radius. A radius of 1 can make the creature fall through the ground.",
+          "type": "object",
+          "required": ["radius", "height"],
+          "additionalProperties": false,
+          "properties": {
+            "radius": { "type": "number", "exclusiveMinimum": 0 },
+            "height": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    },
+
+    "music": {
+      "description": "PROVISIONAL. Looping music tracks and the bubbles and states that play them.",
+      "x-provisional": true,
+      "type": "object",
+      "required": ["tracks"],
+      "additionalProperties": true,
+      "properties": {
+        "like": { "description": "An installed destination music bank to clone; its state groups are kept.", "$ref": "#/$defs/hex_tag" },
+        "tracks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "wav"],
+            "additionalProperties": true,
+            "properties": {
+              "name": { "description": "Unique in the bundle.", "type": "string" },
+              "wav": { "description": "A PCM16 wav, relative to the bundle folder.", "type": "string", "x-file": true },
+              "loop_start": { "description": "Sample the loop returns to. Default 0.", "type": "integer", "minimum": 0 },
+              "loop_end": { "description": "Sample the loop jumps back from. Default: the last sample.", "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "bubbles": {
+          "description": "Bubble name to the track that plays there.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "combat": { "description": "The track that plays while a squad fights the player.", "type": "string" }
+      }
+    }
+  }
+}

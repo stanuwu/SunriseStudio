@@ -79,6 +79,41 @@ internal static class TomeChecks
         Console.WriteLine($"PASS tome-edit cells+={report.CellsAdded} portals+={report.PortalsAdded} closed={report.ClosedVoxels} reopened={open.OpenedVoxels}");
     }
 
+    /**
+     * A new tome over a closed box room: it rereads exactly, the room is its own cell and cluster,
+     * its wall blocks, and a bake over the fixture bubble's bounds finishes in budget.
+     */
+    internal static void Baked()
+    {
+        var walls = new List<List<Vector3>>
+        {
+            Box(new(3.5f, 3.5f, 1.5f), new(12.5f, 12.5f, 2)), Box(new(3.5f, 3.5f, 6), new(12.5f, 12.5f, 6.5f)),
+            Box(new(3.5f, 3.5f, 2), new(4, 12.5f, 6)), Box(new(12, 3.5f, 2), new(12.5f, 12.5f, 6)),
+            Box(new(4, 3.5f, 2), new(12, 4, 6)), Box(new(4, 12, 2), new(12, 12.5f, 6))
+        };
+        var (tome, report) = TomeBaker.Bake(Vector3.Zero, new(16, 16, 8), 0.25f, walls, [(new(4, 4, 2), new(12, 12, 6))]);
+        var bytes = TomeWriter.Write(tome);
+        var read = TomeReader.Read(bytes);
+        Check(TomeWriter.Write(read).AsSpan().SequenceEqual(bytes), "A baked tome did not rebuild byte for byte.");
+        var inside = read.Locate(new(8, 8, 4));
+        var outside = read.Locate(new(1, 1, 1));
+        Check(inside.Cell >= 0 && outside.Cell >= 0 && inside != outside, "The room and the space outside it share a cell.");
+        Check(read.Clusters.Count == 2 && read.LocateCluster(new(8, 8, 4)) == 1 && read.LocateCluster(new(1, 1, 1)) == 0,
+            $"The room is not its own cluster: {read.Clusters.Count} clusters.");
+        Check(read.Locate(new(8, 8, 1.75f)).Cell == -1 && TomeEditor.BlockedShare(read, walls[2], []) >= 0.5, "The room's floor or wall does not block.");
+        // The fixture bubble: 32 by 32 by 32 m at the stock 0.5 m voxel, with its block and four profile blocks.
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var blocks = new List<List<Vector3>> { Box(new(5, 3, 0), new(7, 5, 3)) };
+        foreach (float x in new[] { -10f, -7, -4, -1 }) blocks.Add(Box(new(x, 9.25f, 0), new(x + 1.5f, 10.75f, 1.5f)));
+        var (bubble, _) = TomeBaker.Bake(new(-16, -16, -8), new(16, 16, 24), 0.5f, blocks);
+        var bubbleBytes = TomeWriter.Write(bubble);
+        Check(TomeWriter.Write(TomeReader.Read(bubbleBytes)).AsSpan().SequenceEqual(bubbleBytes) && TomeEditor.BlockedShare(bubble, blocks[0], []) >= 0.5,
+            "The bubble bake does not reread exactly or does not block its block.");
+        Check(watch.Elapsed.TotalSeconds < 60, $"The bubble bake took {watch.Elapsed.TotalSeconds:F0} s, over its 60 s budget.");
+        Console.WriteLine($"PASS tome-bake room=[cells={read.Tiles.Sum(t => t?.Cells.Count ?? 0)} clusters={read.Clusters.Count} closed={report.ClosedVoxels} bytes={bytes.Length}] "
+            + $"bubble=[tiles={bubble.Tiles.Count(t => t != null)} cells={bubble.Tiles.Sum(t => t?.Cells.Count ?? 0)} bytes={bubbleBytes.Length} seconds={watch.Elapsed.TotalSeconds:F1}]");
+    }
+
     /** A Leviathan slab opened, closed and moved keeps every cluster outside the edit and rebuilds exactly. */
     internal static void InstalledEdit(PackageCatalog catalog)
     {

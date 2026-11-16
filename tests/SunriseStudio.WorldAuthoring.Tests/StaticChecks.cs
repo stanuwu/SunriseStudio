@@ -15,21 +15,59 @@ static class StaticChecks
     /** The fixture glb holds this many vertices; the loaded mesh must too. */
     private const int FixtureVertices = 193;
 
-    /** Places bubble A of the fixture bundle in the project's testbed bubble. */
-    public static PlacedBundleStatic Place(StudioProject project, PackageCatalog catalog, RegistryIndex schema, uint bubble)
+    /**
+     * Places bubble A of the fixture bundle in the project's testbed bubble: the plate and block, the
+     * four profile blocks, and the LOD block.
+     * @return Every placed model; the plate and block come first.
+     */
+    public static IReadOnlyList<PlacedBundleStatic> Place(StudioProject project, PackageCatalog catalog, RegistryIndex schema, uint bubble)
     {
         ushort package = Enumerable.Range(0, 0x10000).Select(x => (ushort)x)
             .First(x => PackageWriter.IsNewPackageId(x) && !catalog.ContainsInstalledPackage(x));
         var placed = WorldBundleImport.PlaceBubble(project, catalog, schema, "testbed", bubble, TestFixtures.TestbedBubble("bubble_a"), package);
-        WorldBuild.Check(placed is [{ Files.Count: 4 }], "The bundle bubble did not place exactly one static as four tags.");
+        WorldBuild.Check(placed.Count == 3 && placed.All(x => x.Files.Count == 4) && placed[0].Name.EndsWith("_terrain_and_block", StringComparison.Ordinal),
+            "The bundle bubble did not place its three statics as four tags each.");
         var world = WorldFiles.Load(project.ContentDirectory, "testbed");
-        var members = ((System.Text.Json.Nodes.JsonArray)world.Fields(placed[0].Container)["contents"]!)
-            .Select(row => WorldFiles.Text(row!["member_tag"])).ToList();
-        WorldBuild.Check(members.Contains(placed[0].Files[^1]) && WorldContent.Containers(world, bubble).Contains(placed[0].Container),
-            "The placed list did not join a container of the bubble.");
+        foreach (var model in placed)
+        {
+            var members = ((System.Text.Json.Nodes.JsonArray)world.Fields(model.Container)["contents"]!)
+                .Select(row => WorldFiles.Text(row!["member_tag"])).ToList();
+            WorldBuild.Check(members.Contains(model.Files[^1]) && WorldContent.Containers(world, bubble).Contains(model.Container),
+                $"The placed list of {model.Name} did not join a container of the bubble.");
+        }
+        Profiles(project, catalog, placed[1]);
+        Lods(project, catalog, placed[2]);
         Console.WriteLine($"world_static placed={placed[0].Name} model=0x{placed[0].ModelTag:X8} container={placed[0].Container} "
-            + $"position={placed[0].Position}");
-        return placed[0];
+            + $"position={placed[0].Position} statics={placed.Count}");
+        return placed;
+    }
+
+    /** The profile blocks: three buffer groups, one per profile, with each colour row's declaration. */
+    private static void Profiles(StudioProject project, PackageCatalog catalog, PlacedBundleStatic placed)
+    {
+        byte[] mesh = project.ReadAddedAsset(project.AddedAssets.Single(asset => asset.Name == placed.Name + ".mesh").Id, catalog);
+        ref readonly var data = ref TagView.Checked<SStaticMeshData>(mesh, 0);
+        var declarations = TagView.Rows(mesh, in data.StageAssignments, SStaticMeshGroup.Class).ToArray()
+            .Where(row => row.RenderStage == 0).Select(row => (int)row.InputLayout).Order().ToArray();
+        WorldBuild.Check(TagView.Rows(mesh, in data.Buffers, SStaticBufferGroup.Class).Length == 3
+            && declarations.SequenceEqual([123, 123, 125, 127]),
+            $"The profile blocks draw with declarations {string.Join(',', declarations)}, not two opaque, one colour and one cutout.");
+        Console.WriteLine("world_static_profiles groups=3 declarations=123,123,125,127");
+    }
+
+    /** The LOD block: near and far parts, and the level-2 switch at its authored 30 m. */
+    private static void Lods(StudioProject project, PackageCatalog catalog, PlacedBundleStatic placed)
+    {
+        byte[] model = project.ReadAddedAsset(project.AddedAssets.Single(asset => asset.Name == placed.Name + ".model").Id, catalog);
+        byte[] mesh = project.ReadAddedAsset(project.AddedAssets.Single(asset => asset.Name == placed.Name + ".mesh").Id, catalog);
+        ref readonly var header = ref TagView.Checked<SStaticMesh>(model, 0);
+        var categories = TagView.Rows(mesh, in TagView.Checked<SStaticMeshData>(mesh, 0).Parts, SStaticMeshPart.Class).ToArray()
+            .Select(part => part.LodCategory).ToArray();
+        WorldBuild.Check(categories.SequenceEqual([StaticLodCategory.Near, StaticLodCategory.Far])
+            && MathF.Abs(header.LodSwitchSize1 * SunriseStudio.Scene.StaticLod.DefaultK1 - 30) < 0.001f
+            && header.LodSwitchSize0 == header.BoundingSphereRadius && header.LodSwitchSize2 == header.BoundingSphereRadius,
+            "The LOD block lost its near and far parts or its authored switch.");
+        Console.WriteLine($"world_static_lods categories={string.Join(',', categories)} switch_m={header.LodSwitchSize1 * SunriseStudio.Scene.StaticLod.DefaultK1}");
     }
 
     /** The project's native assets, as overlay rows, so the loader can read the imported model. */
@@ -44,20 +82,26 @@ static class StaticChecks
             return (entry, project.ReadAddedAsset(asset.Id, catalog));
         }).ToArray();
 
-    /** The loaded bubble draws the model once, from the placed table, at the placed pose. */
-    public static void Loaded(WorldDocument loaded, IReadOnlyList<TftCompiledTag> tags, PlacedBundleStatic placed, uint bubble)
+    /** The loaded bubble draws the model once, from the placed table, at the placed pose, with full AO. */
+    public static void Loaded(PackageCatalog catalog, WorldDocument loaded, IReadOnlyList<TftCompiledTag> tags, PlacedBundleStatic placed,
+        uint bubble)
     {
         uint table = tags.Single(x => x.Name == placed.Files[1]).TagHash;
         // A drawn instance names its bubble by the bubble's tag.
         uint bubbleTag = loaded.MapScene.Bubbles.Single(x => x.NameHash == bubble).TagHash;
-        var drawn = loaded.MapScene.Instances.Where(x => x.InstanceSourceTag == table).ToList();
+        // Colour parts only; each also loads a shadow caster over the same vertices.
+        var drawn = loaded.MapScene.Instances.Where(x => x.InstanceSourceTag == table && x.Mesh.Native?.RenderStage == 0).ToList();
         WorldBuild.Check(drawn.Count > 0 && drawn.All(x => x.BubbleHash == bubbleTag)
             && drawn.Sum(x => x.Mesh.Vertices.Length) == FixtureVertices,
             $"The placed static draws {drawn.Count} parts with {drawn.Sum(x => x.Mesh.Vertices.Length)} vertices in bubbles "
             + $"{string.Join(',', drawn.Select(x => $"0x{x.BubbleHash:X8}").Distinct())}, not 0x{bubbleTag:X8}.");
         var at = drawn[0].Transform.Translation;
         WorldBuild.Check(Vector3.Distance(at, placed.Position) < 0.01f, $"The placed static loads at {at}, not {placed.Position}.");
-        Console.WriteLine($"world_static_loaded parts={drawn.Count} vertices={FixtureVertices} at={at}");
+        // The shader's one AO scalar; zero draws the model with no ambient light.
+        var binding = new AssetSceneLoader(catalog).ReadNativeStaticBinding(drawn[0]);
+        byte occlusion = binding.ScalarBuffer.Data[binding.ScalarByteAddress];
+        WorldBuild.Check(binding.UseSingleScalar && occlusion >= 240, $"The placed static reads AO {occlusion}, not near 255.");
+        Console.WriteLine($"world_static_loaded parts={drawn.Count} vertices={FixtureVertices} at={at} ao={occlusion}");
     }
 
     /** The built packages carry the placed tags and the model. */

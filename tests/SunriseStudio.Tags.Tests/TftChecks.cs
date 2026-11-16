@@ -12,7 +12,7 @@ static class TftChecks
 {
     private const uint Root = 0x80800500, Row = 0x80800501, Inner = 0x80800502, Item = 0x80800503;
     private const string BuildId = "test";
-    private const string Other = "hoenn/other.thing", Installed = "#0x80A1B2C3", Wide = "##0x0123456789ABCDEF";
+    private const string Other = "demo/other.thing", Installed = "#0x80A1B2C3", Wide = "##0x0123456789ABCDEF";
 
     public static void Run()
     {
@@ -58,7 +58,7 @@ static class TftChecks
     }
 
     /** Two rows, an Item, a label, three symbolic references and one literal one, and 0xDEADBEEF at Root +60. */
-    public static TftFile Sample(RegistryIndex schema, string link, string name = "hoenn/test/root.thing")
+    public static TftFile Sample(RegistryIndex schema, string link, string name = "demo/test/root.thing")
     {
         var root = Struct(Root, 64, (40, TftFile.TagRefPlaceholder), (56, BitConverter.SingleToUInt32Bits(1.5f)), (60, 0xDEADBEEF));
         var first = Struct(Row, 24, (0, 1), (4, TftFile.TagRefPlaceholder));
@@ -95,8 +95,8 @@ static class TftChecks
         byte[] data = file.Data.ToArray();
         BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(40), 7);
         Throws(() => Copy(file, data).Write(), "A reference without its placeholder was written.");
-        Throws(() => Copy(file, file.Data, name: "Hoenn/Root.thing").Write(), "An uppercase tag name was written.");
-        Throws(() => Copy(file, file.Data, name: "hoenn/root.other").Write(), "A name that does not end with its tag type was written.");
+        Throws(() => Copy(file, file.Data, name: "Demo/Root.thing").Write(), "An uppercase tag name was written.");
+        Throws(() => Copy(file, file.Data, name: "demo/root.other").Write(), "A name that does not end with its tag type was written.");
     }
 
     private static void Text(TftFile file, RegistryIndex schema)
@@ -134,10 +134,9 @@ static class TftChecks
     }
 
     /**
-     * Registry changes that reread the same bytes: a vec4 split into four f32 fields, with d named inside it
-     * in both layouts; 8 opaque bytes split into two u32 fields; and a u32 widened to u64 over unnamed bytes.
-     * With the same sizes the file keeps its bytes. When its child grows, the move by field name keeps the
-     * split values, and the unnamed bytes land under a new field.
+     * Registry splits that reread the same bytes (vec4 to four f32, 8 opaque bytes to two u32, u32 to u64)
+     * keep the file's bytes at the same sizes. When the child grows, the move by name keeps the split
+     * values and the unnamed bytes land under a new field.
      */
     private static void SplitVector()
     {
@@ -168,7 +167,7 @@ static class TftChecks
         byte[] data = CanonicalTagWriter.Write(root, before, new Dictionary<TagBlueprint, int>());
         var file = new TftFile
         {
-            Name = "hoenn/test/pair.thing", TagType = "thing", ClassId = Pair, TypeInfo = 0x101C, BuildHash = TftFile.HashBuildId(BuildId),
+            Name = "demo/test/pair.thing", TagType = "thing", ClassId = Pair, TypeInfo = 0x101C, BuildHash = TftFile.HashBuildId(BuildId),
             Layout = TftLayout.Extract(before, data, Pair), Data = data,
         };
         var same = TftUpgrade.Run(file, Layout(split: true, grow: false), BuildId);
@@ -217,7 +216,7 @@ static class TftChecks
             var compiler = new TftCompiler(content, allocator, schema, BuildId);
             var tags = compiler.CompileAll();
             uint other = TagHashes.Make(0x0C00, 0), root = TagHashes.Make(0x0C00, 1);
-            var compiled = tags.Single(x => x.Name == "hoenn/test/root.thing");
+            var compiled = tags.Single(x => x.Name == "demo/test/root.thing");
             var rows = TagDocument.Parse(compiled.Data, Root, schema).Root.Children.Single(x => x.Kind == TagNodeKind.Array);
             Check(tags.Count == 2 && compiled.TagHash == root && compiled.TypeInfo == 0x101C
                 && BinaryPrimitives.ReadUInt32LittleEndian(compiled.Data.AsSpan(40)) == other
@@ -235,15 +234,15 @@ static class TftChecks
             File.Delete(otherPath);
             Throws(() => compiler.CompileChanged([rootPath, otherPath]), "A reference to a deleted tag compiled.");
             Put(Sample(schema, Other, Other));
-            string newPath = Put(Sample(schema, Installed, "hoenn/new.thing"));
+            string newPath = Put(Sample(schema, Installed, "demo/new.thing"));
             var changes = compiler.CompileChanged([rootPath, newPath]);
-            Check(changes.Count == 2 && changes.Single(x => x.Name == "hoenn/test/root.thing") is { Kind: TftChangeKind.Changed, Generation: 2 }
-                && changes.Single(x => x.Name == "hoenn/new.thing") is { Kind: TftChangeKind.Added, Generation: 1 } added
+            Check(changes.Count == 2 && changes.Single(x => x.Name == "demo/test/root.thing") is { Kind: TftChangeKind.Changed, Generation: 2 }
+                && changes.Single(x => x.Name == "demo/new.thing") is { Kind: TftChangeKind.Added, Generation: 1 } added
                 && added.TagHash == TagHashes.Make(0x0C00, 2), "Incremental changes are wrong.");
             File.Delete(newPath);
             Check(compiler.CompileChanged([newPath]).Single() is { Kind: TftChangeKind.Removed, Tag: null }, "A deleted file was not reported removed.");
 
-            Put(Sample(schema, "hoenn/missing.thing"));
+            Put(Sample(schema, "demo/missing.thing"));
             Throws(() => compiler.CompileAll(), "A reference to a tag with no file compiled.");
             Put(Sample(schema, Other));
             Throws(() => new TftCompiler(content, new TagAllocator([0x0C00]), Schema(upgraded: true, withoutValue: true), BuildId).CompileAll(),

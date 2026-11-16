@@ -86,6 +86,8 @@ try
         Check(verified > 0, "No owned dense animation fixture was found.");
         Check(modified > 0, "No owned rotation control accepted a verified edit.");
         Console.WriteLine($"PASS owned-animation fixtures={verified} unchanged=byte-identical modified-native-decodes={modified}");
+        NewRigClip(owned);
+        ClipEventChecks.Run(owned);
     }
     int blenderIndex = Array.IndexOf(args, "--blender");
     if (blenderIndex >= 0)
@@ -122,6 +124,56 @@ finally
 {
     if (Directory.Exists(temporary) && Path.GetFullPath(temporary)
         .StartsWith(Path.GetFullPath(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase)) Directory.Delete(temporary, true);
+}
+
+/** A clip for a new five-control rig, written over a two-control prop clip, decodes to its samples. */
+static void NewRigClip(PackageCatalog catalog)
+{
+    const uint template = 0x80C14243, group = 0x12345678;
+    const int controls = 5, frames = 20;
+    var samples = Enumerable.Range(0, controls).Select(control => (IReadOnlyList<BoneTransform>)Enumerable.Range(0, frames).Select(frame =>
+        new BoneTransform(System.Numerics.Quaternion.CreateFromAxisAngle(System.Numerics.Vector3.UnitZ, frame * 0.1f * (control + 1)),
+            new(control, frame * 0.05f, -control * 0.5f), 1)).ToArray()).ToArray();
+    const uint name = 0x0BADF00D;
+    byte[] clip = RigClipCompiler.Prepare(catalog, template, group, name, samples);
+    Check(BinaryPrimitives.ReadUInt32LittleEndian(clip.AsSpan(288)) == name && BinaryPrimitives.ReadUInt32LittleEndian(clip.AsSpan(160)) == 0
+        && BinaryPrimitives.ReadUInt32LittleEndian(clip.AsSpan(164)) == controls - 1, "The new clip lost its name hash or control range.");
+    using var staging = PackageCatalog.Open(catalog.GameRoot, catalog.KeySource);
+    staging.ReadOverride = tag => tag == template ? clip : null;
+    Check(catalog.TryGetEntry(template, out var entry), "The prop clip template is not installed.");
+    staging.SetOverlayEntries([new(entry with { Size = clip.Length })]);
+    var decoded = new AnimationControlReader(staging).Read(template);
+    Check(decoded.ControlCount == controls && decoded.NodeCount == controls && decoded.FrameCount == frames
+        && decoded.ControlGroups.Count == 1 && decoded.ControlGroups[0] == new AnimationControlGroup(group, controls),
+        "The new clip lost its counts or its control group.");
+    float worst = 0;
+    for (int frame = 0; frame < frames; frame++)
+        foreach (var value in decoded.Sample(frame / 30f))
+        {
+            var expected = samples[value.ControlIndex][frame];
+            worst = Math.Max(worst, System.Numerics.Vector3.Distance(value.Translation, expected.Translation));
+            worst = Math.Max(worst, 1 - Math.Abs(System.Numerics.Quaternion.Dot(value.Rotation, expected.Rotation)));
+        }
+    Check(worst < 0.0005f, $"The new clip decodes {worst} away from its samples.");
+    // Events on a compiled clip: they read back in frame order and every sample stays.
+    var schema = SunriseStudio.Packages.Registry.StudioRegistry.Index;
+    byte[] eventful = AnimationClipEvents.Write(clip, schema,
+        [ClipEvent.NewTagged(12, 0x80BBECE3), ClipEvent.NewTagged(3, 0x80BBECE0, 0x1234, "sound\\path")], compact: true);
+    Throws<NotSupportedException>(() => AnimationClipEvents.Write(clip, schema, []));
+    var events = AnimationClipEvents.Read(eventful, schema);
+    Check(events.Count == 2 && events[0].Frame == 3 && events[0].Target == 0x80BBECE0 && events[0].AttachmentPoint == 0x1234
+        && events[0].Path == "sound\\path" && events[1].Frame == 12 && events[1].Path is null && events[1].Kind == ClipEvent.TaggedKind,
+        "The new clip's events did not read back.");
+    using var second = PackageCatalog.Open(catalog.GameRoot, catalog.KeySource);
+    second.ReadOverride = tag => tag == template ? eventful : null;
+    second.SetOverlayEntries([new(entry with { Size = eventful.Length })]);
+    var withEvents = new AnimationControlReader(second).Read(template);
+    Check(withEvents.FrameCount == frames && withEvents.ControlCount == controls, "Events changed the new clip's counts.");
+    for (int frame = 0; frame < frames; frame++)
+        Check(withEvents.Sample(frame / 30f).SequenceEqual(decoded.Sample(frame / 30f)), "Events changed the new clip's samples.");
+    Check(AnimationClipEvents.Write(eventful, schema, []).Length < eventful.Length, "Removing the new clip's events kept them.");
+    Throws<NotSupportedException>(() => RigClipCompiler.Prepare(catalog, 0x80FE2C08, group, name, samples));
+    Console.WriteLine($"PASS new-rig-clip controls={controls} frames={frames} error={worst:G3}");
 }
 
 static void SetChannel(string path, string component, float[] values)

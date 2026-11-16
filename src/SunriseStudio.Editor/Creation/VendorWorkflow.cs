@@ -52,12 +52,11 @@ public sealed partial class VendorWorkflow : CreationWorkflow
             Search = search => SearchVendors(search, false), Hint = "Blank keeps the current icon.",
             Part = new("New", "No vendor icon writer", [])
         };
-        interaction = new("Existing interaction", CreationFieldKind.Tag, editing is null,
+        interaction = new("Existing interaction", CreationFieldKind.Tag, false,
             "Verified launch-owner resource VendorHash")
         {
             Rows = () => interactions.Rows,
-            Part = new("New", "No NPC writer", []),
-            Hint = "Sends this interaction to the vendor.",
+            Hint = "Sends an installed NPC to the vendor. Blank leaves every NPC alone; copy one with Entities > Clone.",
             Evidence = $"Primary {SVendorInteractionPrimary.Class:X8} and resource {SVendorInteractionResource.Class:X8} "
                 + "form reciprocal links read by native activation."
         };
@@ -75,7 +74,7 @@ public sealed partial class VendorWorkflow : CreationWorkflow
     public override IReadOnlyList<CreationField> Fields => [baseVendor, name, interaction, stock, package, subtitle, icon, preparation];
     public override IReadOnlyList<string> Limits =>
     [
-        "Copies the base vendor's policies; no NPC is created.",
+        "Copies the base vendor's policies; no NPC is created. Entities > Clone copies a vendor NPC for it.",
         "Two mods adding rows may conflict.",
         "Only static prices can be bought."
     ];
@@ -168,7 +167,7 @@ public sealed partial class VendorWorkflow : CreationWorkflow
         if (interactionError.Length != 0) yield return interactionError;
         if (TextChanged && textError.Length != 0) yield return textError;
         if (source is null || detail is null || budget is null) { yield return "Choose a valid base vendor."; yield break; }
-        if (editing is null && interactionSite is null || interaction.Tag is not null && interactionSite is null)
+        if (interaction.Tag is not null && interactionSite is null)
             yield return "Choose a valid existing vendor interaction.";
         if (name.Text.Trim().Length > 200 || subtitle.Text.Trim().Length > 2000) yield return "Vendor text is too long.";
         if ((editing is null || TextChanged) && PackageProblem(workspace, package) is { } problem) yield return problem;

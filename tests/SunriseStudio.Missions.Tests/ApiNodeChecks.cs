@@ -56,6 +56,10 @@ internal static class ApiNodeChecks
             && schema.Program.EventParameters.SequenceEqual(["context", "state", "event"]),
             $"The schema fixture did not read whole: receivers {schema.Receivers.Count}/{receivers}, members {schema.Members.Count}/{members}, "
             + $"events {schema.Events.Count}/{events}, event_parameters={string.Join(",", schema.Program.EventParameters)}.");
+        // The teleport request reads as a callable with its two required arguments.
+        Check(schema.Members.Single(member => member.Name == "teleport") is { Callable: true } teleport
+            && teleport.Arguments.Select(argument => argument.Name).SequenceEqual(["region", "spawn_set_hash"]),
+            "The schema fixture does not hold context:teleport{region, spawn_set_hash}.");
         Reject(() => MissionApiSchema.Parse(json.Replace(MissionApiSchema.SchemaName, "sunrise-mission-lua-api-v2", StringComparison.Ordinal)), "Studio reads");
         Reject(() => MissionApiSchema.Parse(json.Replace("\"kind\": \"boolean\"", "\"kind\": \"bool\"", StringComparison.Ordinal)), "value_kinds");
         Reject(() => MissionApiSchema.Parse("{"), "not valid JSON");

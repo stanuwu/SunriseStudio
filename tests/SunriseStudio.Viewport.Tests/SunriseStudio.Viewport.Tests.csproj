@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/SunriseStudio.Viewport/SunriseStudio.Viewport.csproj" />
+    <ProjectReference Include="../../src/SunriseStudio.Interchange/SunriseStudio.Interchange.csproj" />
     <ProjectReference Include="../../src/SunriseStudio.Formats/SunriseStudio.Formats.csproj" />
   </ItemGroup>
 </Project>

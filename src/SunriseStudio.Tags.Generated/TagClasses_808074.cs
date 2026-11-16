@@ -555,8 +555,10 @@ public struct C80807459
     public const uint Class = 0x80807459;
     public const int Align = 8;
 
+    [FieldOffset(0)] public uint MapNodeIndex;
     [FieldOffset(8)] public RewardCondition H373d2eff;
-    [FieldOffset(24)] public uint Unk18;
+    [FieldOffset(24)] public uint KindHash;
+    [FieldOffset(32)] public uint ActivityIndex;
 }
 
 /** `c_8080745a`, class 0x8080745A. */

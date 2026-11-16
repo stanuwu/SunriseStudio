@@ -33,6 +33,11 @@ public sealed class TagAllocator
                 throw new ArgumentOutOfRangeException(nameof(packages), $"0x{id:X4} is outside {PackageWriter.NewPackageIdRange}.");
     }
 
+    /** A package's last entries stay free for the manifests the build adds after its root tags. */
+    public const int ManifestReserve = 1024;
+    /** Entries the allocator hands out per package. */
+    public const int TagEntries = TagHashes.EntriesPerPackage - ManifestReserve;
+
     public IReadOnlyList<ushort> Packages => packages;
     public IReadOnlyDictionary<string, uint> Tags => tags;
     /** Released names; their entries stay taken. */
@@ -99,22 +104,38 @@ public sealed class TagAllocator
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         if (tags.TryGetValue(name, out uint existing)) return existing;
         if (retired.ContainsKey(name)) throw new InvalidOperationException($"\"{name}\" was released; its hash stays retired.");
-        var used = tags.Values.Concat(retired.Values).Select(TagHashes.Split).ToLookup(x => x.PackageId, x => x.EntryIndex);
+        nextEntries ??= NextEntries();
         foreach (ushort package in packages)
         {
-            int next = used[package].DefaultIfEmpty(-1).Max() + 1;
-            if (next >= TagHashes.EntriesPerPackage) continue;
+            int next = nextEntries.GetValueOrDefault(package);
+            if (next >= TagEntries) continue;
             uint hash = TagHashes.Make(package, next);
             tags[name] = hash;
+            nextEntries[package] = next + 1;
             return hash;
         }
         if (Grow is null)
-            throw new InvalidOperationException($"Every package of this project holds {TagHashes.EntriesPerPackage} entries; the project needs another package id.");
+            throw new InvalidOperationException($"Every package of this project holds {TagEntries} tags; the project needs another package id.");
         ushort grown = Grow();
         if (!PackageWriter.IsNewPackageId(grown) || packages.Contains(grown))
             throw new InvalidOperationException($"Package 0x{grown:X4} cannot extend this project.");
         packages.Add(grown);
+        nextEntries[grown] = 1;
         return tags[name] = TagHashes.Make(grown, 0);
+    }
+
+    // Each package's entry after the highest one ever used; built on the first Allocate.
+    private Dictionary<ushort, int>? nextEntries;
+
+    private Dictionary<ushort, int> NextEntries()
+    {
+        var result = new Dictionary<ushort, int>();
+        foreach (uint hash in tags.Values.Concat(retired.Values))
+        {
+            var (package, entry) = TagHashes.Split(hash);
+            result[package] = Math.Max(result.GetValueOrDefault(package), entry + 1);
+        }
+        return result;
     }
 
     /** Releases a name; its entry is never handed out again. */

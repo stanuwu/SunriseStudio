@@ -545,6 +545,7 @@ internal sealed class WwiseReader(byte[] data)
 {
     public int At { get; private set; }
     public int Remaining => data.Length - At;
+    public byte[] Data => data;
     public byte U8() { Need(1); return data[At++]; }
     public ushort U16() { Need(2); var value = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(At)); At += 2; return value; }
     public short S16() => unchecked((short)U16());

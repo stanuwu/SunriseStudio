@@ -4,16 +4,20 @@ public static partial class CreationTypes
 {
     public const string GuardianBlocker = "Guardians need character data Studio cannot write.";
 
-    /** Nothing writes a new or copied entity that the game spawns, so every action here stays blocked. */
+    /** Entities are placed in a project destination. An enemy copy is spawned by a squad; a new enemy stays blocked. */
     static partial void AddEntityTypes()
     {
         Add(StudioCategories.EnemiesCategory, CreationMode.New,
-            new("Enemy", "", "No AI, health or loot field is known."));
-        Add(StudioCategories.EnemiesCategory, CreationMode.Clone, new("Enemy copy", "", CombatantBlocker));
+            new("Enemy", "", "No AI, hit point or loot field is known. Copy an installed enemy."));
+        Add(StudioCategories.EnemiesCategory, CreationMode.Clone,
+            new("Enemy copy", "A copy of this enemy that one squad of a destination this project made spawns.", "",
+                workspace => new EnemyWorkflow(workspace)));
         Add(StudioCategories.EntityCategory, CreationMode.New,
-            new("Entity", "", "Use Import skinned model (Hob rig)."));
+            new("Entity", "An animated entity from a skinned glb, placed in a destination this project made.", "",
+                workspace => new EntityWorkflow(workspace, clone: false)));
         Add(StudioCategories.EntityCategory, CreationMode.Clone,
-            new("Entity copy", "", "Nothing spawns or places a copy yet."));
+            new("Entity copy", "A copy of this entity and its component configs, placed in a destination this project made.", "",
+                workspace => new EntityWorkflow(workspace, clone: true)));
         Add(StudioCategories.GuardiansName, CreationMode.New, new("Guardian", "", GuardianBlocker));
         Add(StudioCategories.GuardiansName, CreationMode.Clone, new("Guardian copy", "", GuardianBlocker));
     }

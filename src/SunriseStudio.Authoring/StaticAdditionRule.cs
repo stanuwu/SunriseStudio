@@ -1,4 +1,5 @@
 using System.Numerics;
+using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Tags.Generated;
 using SunriseStudio.Tags.Views;
@@ -15,20 +16,32 @@ internal sealed class StaticAdditionRule : IObjectEditRule
     public IReadOnlyCollection<ObjectEditLayout> Layouts => [ObjectEditLayout.StaticInstance, ObjectEditLayout.Container];
     public IReadOnlyCollection<ObjectEditKind> Kinds => [ObjectEditKind.AddInstance, ObjectEditKind.AddPlacement];
 
+    /**
+     * True keeps the owner list between Apply calls. Set it only when every call reads the same
+     * catalog and adds no owner of its own.
+     */
+    public bool KeepOwners { get; init; }
+    private IsolationNode[]? keptOwners;
+
     /** One static placement a new object copies: its list row and the owner and table behind it. */
     private sealed record Template(InstanceIsolationScope.Placement Placement, uint Owner, uint Table, int Row);
 
     public void Apply(ObjectEditContext context, IReadOnlyList<ObjectEdit> edits)
     {
-        context.Catalog.RequireCurrentOriginalPackages();
+        // The package check reads every package header; a rule that keeps its owners ran it when it listed them.
+        bool check = !KeepOwners || keptOwners is null;
+        if (check) context.Catalog.RequireCurrentOriginalPackages();
         var sources = new InstanceIsolationSources(context);
-        var owners = sources.OfClass(SMapResourceLink.Class).Where(owner => owner.Valid).ToArray();
+        // Listing every installed owner reads the whole catalog, so a rule that places many statics lists them once.
+        var owners = KeepOwners && keptOwners is not null ? keptOwners
+            : sources.OfClass(SMapResourceLink.Class).Where(owner => owner.Valid).ToArray();
+        if (KeepOwners) keptOwners = owners;
         foreach (var edit in edits)
         {
             if (edit.Kind == ObjectEditKind.AddInstance) AddInstance(context, sources, owners, edit);
             else AddPlacement(context, sources, owners, edit);
         }
-        context.Catalog.RequireCurrentOriginalPackages();
+        if (check) context.Catalog.RequireCurrentOriginalPackages();
     }
 
     /** A copy of one installed row, through every placement of its table, at the edit's table-space pose. */
@@ -118,7 +131,7 @@ internal sealed class StaticAdditionRule : IObjectEditRule
         uint table = context.ReserveGenerated(key + "/table", $"Added static instances {tableTag:X8}", tableTag);
         context.CompleteGenerated(bounds, InstanceIsolationWriter.EmptyBounds());
         byte[] compact = InstanceIsolationWriter.Compact(tableTag, source, tags.Read(boundsSource), [templates[0].Row], bounds).Bytes;
-        var pose = Pose(compact, edit, model is not null);
+        var pose = Pose(context.Catalog, compact, edit, model is not null);
         if (model is uint resource)
             TagView.Edit<SStaticInstanceResource>(compact, InstanceTagReads.Rows<SStaticMeshInstances, SStaticInstanceResource>(
                 compact, 0, "Instances.Resources", SStaticInstanceResource.Class)[0]).StaticMesh = resource;
@@ -172,7 +185,7 @@ internal sealed class StaticAdditionRule : IObjectEditRule
      * Sets the one row's pose from the edit and returns its matrix. A new model draws one AO scalar,
      * since the template's per-vertex AO belongs to other geometry.
      */
-    private static Matrix4x4 Pose(byte[] table, ObjectEdit edit, bool newModel)
+    private static Matrix4x4 Pose(PackageCatalog catalog, byte[] table, ObjectEdit edit, bool newModel)
     {
         int at = InstanceTagReads.Rows<SStaticMeshInstances, SStaticInstanceTransform>(table, 0, "Instances.Transforms",
             SStaticInstanceTransform.Class)[0];
@@ -182,7 +195,13 @@ internal sealed class StaticAdditionRule : IObjectEditRule
         else if (newModel) row.Rotation = Quaternion.Identity;
         if (edit.Scale is float scale) row.Scale = scale;
         else if (newModel) row.Scale = 1;
-        if (newModel) row.AoSingleScalar = 1;
+        if (newModel)
+        {
+            row.AoSingleScalar = 1;
+            // The template's offset names its first vertex, which may be fully occluded.
+            if (StaticOcclusion.Brightest(catalog, TagView.Edit<SStaticMeshInstances>(table).Instances.AmbientOcclusionKey) is uint offset)
+                row.AoInstanceByteOffset = offset;
+        }
         return InstanceBoundsRule.RowMatrix(table, at);
     }
 

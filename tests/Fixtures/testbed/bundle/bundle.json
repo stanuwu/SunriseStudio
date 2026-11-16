@@ -5,5 +5,30 @@
     "bubble_a",
     "bubble_b",
     "bubble_c"
-  ]
+  ],
+  "far": [
+    {
+      "name": "bubble_b",
+      "glb": "far/far_bubble_b.glb",
+      "covers": [
+        "bubble_b"
+      ],
+      "margin": 2,
+      "sink": 0.5
+    }
+  ],
+  "sounds": [
+    {
+      "name": "door_open",
+      "wav": "sounds/door_open.wav",
+      "like": "0x80F5D86D",
+      "variations": [
+        "sounds/door_open_2.wav"
+      ],
+      "max_distance": 25
+    }
+  ],
+  "sky": {
+    "panorama": "sky/dome.png"
+  }
 }

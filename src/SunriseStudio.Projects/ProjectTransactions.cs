@@ -152,7 +152,8 @@ public sealed partial class StudioProject
                         throw new InvalidDataException("An immutable project payload has changed.");
                     continue;
                 }
-                ProjectPaths.AtomicWrite(path, bytes); created.Add(relative);
+                // Payloads are named by their hash and verified on read; the flushed manifest below commits them.
+                ProjectPaths.AtomicWrite(path, bytes, durable: false); created.Add(relative);
             }
             ReplaceManifest(next);
         }

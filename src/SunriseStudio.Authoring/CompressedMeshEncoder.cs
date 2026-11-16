@@ -32,7 +32,8 @@ public static class CompressedMeshEncoder
 {
     // A primitive index is a byte, so a section names at most 255 vertices.
     private const int MaxSectionVertices = 255;
-    private const int MaxSharedVertices = 65536;
+    // A section's shared indices are u16 above its page base.
+    private const int PageSize = 65536;
     private const uint SharedMaxXY = 0x1FFFFF, SharedMaxZ = 0x3FFFFF;
 
     private sealed class Primitive
@@ -95,7 +96,9 @@ public static class CompressedMeshEncoder
         var sourceBoxes = groups.Select(g => Box(g.SelectMany(p => p.Vertices).Select(v => positions[v]))).ToArray();
         mesh.TopNodes = MeshTree.Build(MeshTreeKind.Top, sourceBoxes, mesh.Domain, out int[] sectionOrder);
 
+        // A section reads shared vertices page * 65536 to page * 65536 + 65535; a vertex the window lacks is stored again.
         var sharedNumber = new Dictionary<int, int>();
+        int page = 0;
         var sharedVertices = new List<ulong>();
         var sharedIndices = new List<ushort>();
         var packed = new List<uint>();
@@ -119,15 +122,22 @@ public static class CompressedMeshEncoder
             };
             section.Codec = Codec(own.Select(v => positions[v]).ToArray());
             foreach (int v in own) packed.Add(Pack(section.Codec, positions[v]));
+            bool InWindow(int v) => sharedNumber.TryGetValue(v, out int n) && n >= page * PageSize && n < (page + 1) * PageSize;
+            if (sharedVertices.Count + common.Count(v => !InWindow(v)) > (page + 1) * PageSize)
+            {
+                if (++page > byte.MaxValue) throw new NotSupportedException("The mesh needs more than 256 pages of shared vertices.");
+                // The new page starts at its base; the few slots below it stay unused.
+                while (sharedVertices.Count < page * PageSize) sharedVertices.Add(0);
+            }
+            section.Page = page;
             foreach (int v in common)
             {
-                if (!sharedNumber.TryGetValue(v, out int number))
+                if (!InWindow(v))
                 {
-                    if (sharedVertices.Count >= MaxSharedVertices) throw new NotSupportedException("More than 65536 shared vertices need pages, which are not written.");
-                    sharedNumber[v] = number = sharedVertices.Count;
+                    sharedNumber[v] = sharedVertices.Count;
                     sharedVertices.Add(PackShared(mesh, positions[v]));
                 }
-                sharedIndices.Add((ushort)number);
+                sharedIndices.Add((ushort)(sharedNumber[v] - page * PageSize));
             }
             // Leaf boxes hold the decoded vertices, so the tree encloses what the client reads.
             Vector3 Decoded(int v) => slot[v] < own.Length

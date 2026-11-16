@@ -232,11 +232,11 @@ static class DocumentChecks
         var loaded = TagAllocator.Parse(allocator.ToJson());
         Check(loaded.ToJson().AsSpan().SequenceEqual(allocator.ToJson()) && loaded.Allocate("d") == TagHashes.Make(0x0412, 3),
             "allocation.json does not round trip.");
-        for (int index = 4; index < TagHashes.EntriesPerPackage; index++) loaded.Allocate($"n{index}");
+        for (int index = 4; index < TagAllocator.TagEntries; index++) loaded.Allocate($"n{index}");
         Check(loaded.Allocate("next") == TagHashes.Make(0x0413, 0), "A full package did not move on to the next.");
         var single = new TagAllocator([0x0500]);
-        for (int index = 0; index < TagHashes.EntriesPerPackage; index++) single.Allocate($"n{index}");
-        Throws<InvalidOperationException>(() => single.Allocate("over"), "Entry 8193 was allocated in a one-package project.");
+        for (int index = 0; index < TagAllocator.TagEntries; index++) single.Allocate($"n{index}");
+        Throws<InvalidOperationException>(() => single.Allocate("over"), "An entry past the manifest reserve was allocated in a one-package project.");
     }
 
     private static void Throws<T>(Action action, string message) where T : Exception

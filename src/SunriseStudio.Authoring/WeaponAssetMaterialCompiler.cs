@@ -33,10 +33,13 @@ public static class WeaponAssetMaterialCompiler
                 var unsupported = OriginalAssetMaterials.Unsupported(document.RootElement, index);
                 if (unsupported.Count != 0)
                     throw new NotSupportedException("Weapon material cannot encode " + string.Join(", ", unsupported) + ".");
+                // The weapon vertex shader replaces only the opaque technique's.
+                if (OriginalAssetMaterials.ProfileOf(document.RootElement, index, false) != StaticProfile.Opaque)
+                    throw new NotSupportedException("Weapon material cannot encode alpha masking.");
             }
             var prepared = OriginalAssetMaterials.Prepare(catalog, document.RootElement,
-                index < 0 ? null : index, images, name + ".material" + tags.Count,
-                packageId, cursor, false, CancellationToken.None);
+                index < 0 ? null : index, StaticProfile.Opaque, images, name + ".material" + tags.Count,
+                packageId, cursor, false, true, CancellationToken.None);
             var material = prepared.Assets.Single(asset => asset.Native?.Reference == STechnique.Class);
             TagView.Edit<uint>(material.Data, TagView.FieldOffset<STechnique>("VertexShader.Shader")) = vertexShaderTag;
             tags.Add(index, prepared.MaterialTag);

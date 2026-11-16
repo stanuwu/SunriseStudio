@@ -41,7 +41,8 @@ var tests = new (string Name, Action Run)[]
     ("typed asset links preserve scene animation ownership", AssetConnectionFixtures.Run),
     ("combatant damage parts and float writers", CombatantDamageChecks.Run),
     ("occlusion tome round trip and lookup", TomeChecks.Run),
-    ("occlusion tome occluder edits", TomeChecks.Edit)
+    ("occlusion tome occluder edits", TomeChecks.Edit),
+    ("occlusion tome bake", TomeChecks.Baked)
 };
 int failures = 0;
 foreach (var (name, run) in tests)
@@ -423,6 +424,7 @@ static void InstalledAssets(string gameRoot)
     using var catalog = PackageCatalog.Open(gameRoot);
     AssetConnectionFixtures.Installed(catalog);
     CombatantDamageChecks.Installed(catalog);
+    CombatantAbilityChecks.Installed(catalog);
     TomeChecks.InstalledEdit(catalog);
     TomeChecks.Installed(catalog);
     var service = new AssetInspectionService();

@@ -67,8 +67,16 @@ internal static class CreationSafetyChecks
         var activity = CreationTypes.Activity.Factory!(workspace);
         Check(activity.AnchorTag == ActivityRows.ActivityTable
             && activity.Problems(workspace).Any(problem => problem.Contains("Destination")), "An activity without a destination had no problem.");
+        Check(CreationTypes.Director is { Available: true, Factory: not null }, "Director entry cannot start.");
+        var director = CreationTypes.Director.Factory!(workspace);
+        Check(director.AnchorTag == ActivityRows.ActivityTable
+            && director.Problems(workspace).Any(problem => problem.Contains("Destination")), "A Director entry without a destination had no problem.");
+        Check(CreationTypes.Door is { Available: true, Factory: not null }, "Door from model cannot start.");
+        var door = CreationTypes.Door.Factory!(workspace);
+        Check(door.Fields.Any(field => field.Label == "Slot" && field.Visible) && door.Fields.Any(field => field.Label == "Opens with")
+            && door.Problems(workspace).Count > 0, "An empty door workflow had no problem or lacks its slot field.");
         Console.WriteLine("creation_safety static_template=installed material_io=contained retry=pass search_error=nonselectable"
-            + " row_swap=refiltered record_key=pass destination=available activity=available");
+            + " row_swap=refiltered record_key=pass destination=available activity=available director=available");
     }
 
     /** A new row array with the same revision and search must refilter. */

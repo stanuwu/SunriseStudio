@@ -15,6 +15,9 @@ public sealed record PlacedStaticTag(uint Tag, uint Class, uint TypeInfo, byte[]
  */
 public static class StaticPlacement
 {
+    // One rule per catalog: it keeps the installed owner list, which each unit only adds a model to.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<PackageCatalog, StaticAdditionRule> Rules = new();
+
     /**
      * Builds the unit from a static placement of an installed container, as an added placement does.
      * @param container The installed container whose static placements are the template.
@@ -34,7 +37,8 @@ public static class StaticPlacement
                 : [new AddedObjectEntry(model, SStaticMesh.Class, 0, WideHashAliases.Empty, () => modelData)],
             ModProbe = true,
         };
-        var compiled = new ObjectEditCompiler([new StaticAdditionRule()]).Compile([edit], catalog.ReadOriginal, catalog, options);
+        var compiled = new ObjectEditCompiler([Rules.GetValue(catalog, _ => new StaticAdditionRule { KeepOwners = true })])
+            .Compile([edit], catalog.ReadOriginal, catalog, options);
         uint[] order = [SInstanceBoundsTable.Class, SStaticMeshInstances.Class, SMapResourceLink.Class, SMapPlacements.Class];
         return compiled.GeneratedAssets.OrderBy(asset => Array.IndexOf(order, asset.Native.Reference))
             .Select(asset => new PlacedStaticTag(asset.TagHash, asset.Native.Reference, asset.Native.TypeInfo, asset.Data)).ToArray();

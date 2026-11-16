@@ -24,7 +24,7 @@ public static class StaticLod
     // Levels per part category 0 to 10.
     private static readonly byte[] CategoryLevels = [0b0001, 0b0011, 0b0111, 0b1111, 0b0010, 0b0110, 0b1110, 0b0100, 0b1100, 0b1000, 0b0001];
     // Code default scales of 0x7FF742E467E0; no installed tag overrides them.
-    private const float DefaultK0 = 16, DefaultK1 = 30, DefaultK2 = 200;
+    public const float DefaultK0 = 16, DefaultK1 = 30, DefaultK2 = 200;
     /** The value every draw path refuses: the far cull. */
     public const int Culled = 12;
 

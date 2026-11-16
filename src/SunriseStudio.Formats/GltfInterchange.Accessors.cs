@@ -8,6 +8,8 @@ public static partial class GltfInterchange
     /** Geometry and skin readers share bounded accessor decoding. */
     private sealed class GltfAccessors(JsonElement document, List<byte[]> buffers)
     {
+        // A 2M-vertex terrain grid has 12M indices; the cap only refuses counts no mesh reaches.
+        private const int MaxAccessorCount = 1 << 26;
         private readonly JsonElement accessors = document.GetProperty("accessors");
         private readonly JsonElement views = document.GetProperty("bufferViews");
         private (byte[] Data, int Start, int Stride, int Count, int Type, bool Normalized) Accessor(int index, string shape)
@@ -26,7 +28,7 @@ public static partial class GltfInterchange
             int stride = view.TryGetProperty("byteStride", out var strideValue) ? strideValue.GetInt32() : width * size;
             int viewLength = view.GetProperty("byteLength").GetInt32();
             bool normalized = accessor.TryGetProperty("normalized", out var normalization) && normalization.GetBoolean();
-            if (count is < 0 or > 10_000_000 || viewStart < 0 || viewLength < 0 || viewStart > bytes.Length - viewLength
+            if (count is < 0 or > MaxAccessorCount || viewStart < 0 || viewLength < 0 || viewStart > bytes.Length - viewLength
                 || start < viewStart || start % size != 0 || OptionalInt(accessor, "byteOffset") % size != 0
                 || stride < width * size || stride % size != 0 || normalized && type is 5125 or 5126
                 || view.TryGetProperty("byteStride", out _) && (stride is < 4 or > 252 || stride % 4 != 0)
@@ -34,6 +36,13 @@ public static partial class GltfInterchange
                 throw new InvalidDataException("glTF accessor leaves its buffer view.");
             return (bytes, start, stride, count, type, normalized);
         }
+        /** Lanes of a VEC3 or VEC4 accessor; any other shape throws. */
+        public int Width(int index) => accessors[index].GetProperty("type").GetString() switch
+        {
+            "VEC3" => 3,
+            "VEC4" => 4,
+            _ => throw new NotSupportedException("glTF colors must be VEC3 or VEC4.")
+        };
         public float[] Floats(int index, int width)
         {
             var a = Accessor(index, width switch { 16 => "MAT4", 4 => "VEC4", 3 => "VEC3", 2 => "VEC2", _ => "SCALAR" });

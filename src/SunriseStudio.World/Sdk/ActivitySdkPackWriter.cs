@@ -20,6 +20,16 @@ public sealed class ActivitySdkTables
     public List<SdkOccurrence> Occurrences { get; } = [];
     public List<SdkSlot> Slots { get; } = [];
     public List<SdkAuthoredSceneResource> AuthoredSceneResources { get; } = [];
+    public List<SdkActorClass> ActorClasses { get; } = [];
+    public List<SdkSquad> Squads { get; } = [];
+    public List<SdkSquadMember> SquadMembers { get; } = [];
+    public List<SdkSquadAnchor> SquadAnchors { get; } = [];
+
+    /** Rows of the sections copied as plain words, by section. */
+    public Dictionary<SdkSection, List<uint>> WordRows { get; } = [];
+
+    /** The word list of one section, made on first use. */
+    public List<uint> Words(SdkSection section) => WordRows.TryGetValue(section, out var known) ? known : WordRows[section] = [];
 
     public byte[] StringBytes => strings.ToArray();
 
@@ -58,6 +68,16 @@ public static class ActivitySdkPackWriter
         Put(sections, strides, SdkSection.Occurrences, tables.Occurrences);
         Put(sections, strides, SdkSection.Slots, tables.Slots);
         Put(sections, strides, SdkSection.AuthoredSceneResources, tables.AuthoredSceneResources);
+        Put(sections, strides, SdkSection.ActorClasses, tables.ActorClasses);
+        Put(sections, strides, SdkSection.Squads, tables.Squads);
+        Put(sections, strides, SdkSection.SquadMembers, tables.SquadMembers);
+        Put(sections, strides, SdkSection.SquadAnchors, tables.SquadAnchors);
+
+        foreach (var (section, words) in tables.WordRows)
+        {
+            if (words.Count * sizeof(uint) % strides[(int)section] != 0) throw new InvalidDataException($"The {section} rows are not whole.");
+            sections[(int)section] = MemoryMarshal.AsBytes(CollectionsMarshal.AsSpan(words)).ToArray();
+        }
 
         long size = ActivitySdkFormat.HeaderSize + sections.Sum(x => (long)x.Length);
         var image = new byte[checked((int)size)];

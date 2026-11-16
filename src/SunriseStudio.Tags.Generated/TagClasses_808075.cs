@@ -162,9 +162,9 @@ public struct C80807510
     public const uint Class = 0x80807510;
     public const int Align = 8;
 
-    [FieldOffset(0)] public uint Unk0;
+    [FieldOffset(0)] public uint GraphHash;
     [FieldOffset(8)] public RelativePointer<byte> Unk8;
-    [FieldOffset(16)] public uint Unk10;
+    [FieldOffset(16)] public uint Graph;
 }
 
 /** `c_80807511`, class 0x80807511. */
@@ -205,7 +205,7 @@ public struct C80807514
     public const uint Class = 0x80807514;
     public const int Align = 8;
 
-    [FieldOffset(0)] public uint Unk0;
+    [FieldOffset(0)] public uint NodeHash;
     [FieldOffset(8)] public TagArray<C80807519> Activities;
     [FieldOffset(24)] public TagArray<C80807517> States;
 }
@@ -255,7 +255,8 @@ public struct C80807519
     public const uint Class = 0x80807519;
     public const int Align = 8;
 
-    [FieldOffset(0)] public uint Unk0;
+    [FieldOffset(0)] public uint NodeHash;
+    [FieldOffset(4)] public int ActivityIndex;
     [FieldOffset(8)] public RewardCondition UnlockExpression;
 }
 

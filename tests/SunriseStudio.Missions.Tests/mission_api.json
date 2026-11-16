@@ -2640,6 +2640,26 @@
           }
         },
         {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "spawn_generation",
+          "note": "spawn generation the squad Sense echoes from its placement; nil when unreported",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "sense_generation",
+          "note": "msg-6 record counter plus one; nil when absent",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
           "group": "squad_alive",
           "kind": "field",
           "name": "alive_count",
@@ -2654,6 +2674,16 @@
           "name": "previous_alive_count",
           "type": {
             "kind": "integer",
+            "optional": false
+          }
+        },
+        {
+          "group": "squad_removal",
+          "kind": "field",
+          "name": "removal_flag",
+          "note": "false when the report did not carry it",
+          "type": {
+            "kind": "boolean",
             "optional": false
           }
         },
@@ -2724,15 +2754,6 @@
         {
           "group": "squad_state",
           "kind": "field",
-          "name": "removal_flag",
-          "type": {
-            "kind": "boolean",
-            "optional": false
-          }
-        },
-        {
-          "group": "squad_state",
-          "kind": "field",
           "name": "slot_counts",
           "type": {
             "element": {
@@ -2743,13 +2764,59 @@
             "note": "one entry per member, from 1",
             "optional": false
           }
+        },
+        {
+          "group": "squad_state",
+          "kind": "field",
+          "name": "initial_observation",
+          "note": "the first report of this squad; never a death",
+          "type": {
+            "kind": "boolean",
+            "optional": false
+          }
+        },
+        {
+          "group": "squad_state",
+          "kind": "field",
+          "name": "population_available",
+          "note": "false until an alive count is reported; until then the counts are zero placeholders",
+          "type": {
+            "kind": "boolean",
+            "optional": false
+          }
+        },
+        {
+          "group": "squad_state",
+          "kind": "field",
+          "name": "objective_revision",
+          "note": "objective revision the squad echoed with its costs; 0 before any",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
+        },
+        {
+          "group": "squad_state",
+          "kind": "field",
+          "name": "task_costs",
+          "type": {
+            "element": {
+              "kind": "number",
+              "optional": false
+            },
+            "kind": "table",
+            "note": "reported cost per task group, keyed from 1; a group without one is absent",
+            "optional": false
+          }
         }
       ],
       "groups": [
         "common",
         "mission_sequence",
         "slot_identity",
+        "sense_generation",
         "squad_alive",
+        "squad_removal",
         "squad_state"
       ],
       "kind": 20,
@@ -2858,6 +2925,26 @@
           }
         },
         {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "spawn_generation",
+          "note": "spawn generation the squad Sense echoes from its placement; nil when unreported",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "sense_generation",
+          "note": "msg-6 record counter plus one; nil when absent",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
           "group": "entity_spawned",
           "kind": "field",
           "name": "member_slot",
@@ -2889,6 +2976,7 @@
         "common",
         "mission_sequence",
         "slot_identity",
+        "sense_generation",
         "entity_spawned"
       ],
       "kind": 21,
@@ -2997,6 +3085,26 @@
           }
         },
         {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "spawn_generation",
+          "note": "spawn generation the squad Sense echoes from its placement; nil when unreported",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "sense_generation",
+          "note": "msg-6 record counter plus one; nil when absent",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
           "group": "squad_alive",
           "kind": "field",
           "name": "alive_count",
@@ -3013,13 +3121,25 @@
             "kind": "integer",
             "optional": false
           }
+        },
+        {
+          "group": "squad_removal",
+          "kind": "field",
+          "name": "removal_flag",
+          "note": "false when the report did not carry it",
+          "type": {
+            "kind": "boolean",
+            "optional": false
+          }
         }
       ],
       "groups": [
         "common",
         "mission_sequence",
         "slot_identity",
-        "squad_alive"
+        "sense_generation",
+        "squad_alive",
+        "squad_removal"
       ],
       "kind": 22,
       "lua_class": "SunriseEntityDiedEvent",
@@ -4377,6 +4497,26 @@
           }
         },
         {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "spawn_generation",
+          "note": "spawn generation the squad Sense echoes from its placement; nil when unreported",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "sense_generation",
+          "note": "msg-6 record counter plus one; nil when absent",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
           "group": "object",
           "kind": "field",
           "name": "generation",
@@ -4441,12 +4581,51 @@
             "kind": "decimal_string",
             "optional": true
           }
+        },
+        {
+          "group": "object",
+          "kind": "field",
+          "name": "initial_observation",
+          "note": "first report of this generation",
+          "type": {
+            "kind": "boolean",
+            "optional": false
+          }
+        },
+        {
+          "group": "object",
+          "kind": "field",
+          "name": "entry_index",
+          "note": "authored entry the object instantiated",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
+        },
+        {
+          "group": "object",
+          "kind": "field",
+          "name": "spawn_mask_low",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
+        },
+        {
+          "group": "object",
+          "kind": "field",
+          "name": "spawn_mask_high",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
         }
       ],
       "groups": [
         "common",
         "mission_sequence",
         "slot_identity",
+        "sense_generation",
         "object"
       ],
       "kind": 33,
@@ -4776,6 +4955,26 @@
           }
         },
         {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "spawn_generation",
+          "note": "spawn generation the squad Sense echoes from its placement; nil when unreported",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "sense_generation",
+          "note": "msg-6 record counter plus one; nil when absent",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
           "group": "object",
           "kind": "field",
           "name": "generation",
@@ -4840,12 +5039,51 @@
             "kind": "decimal_string",
             "optional": true
           }
+        },
+        {
+          "group": "object",
+          "kind": "field",
+          "name": "initial_observation",
+          "note": "first report of this generation",
+          "type": {
+            "kind": "boolean",
+            "optional": false
+          }
+        },
+        {
+          "group": "object",
+          "kind": "field",
+          "name": "entry_index",
+          "note": "authored entry the object instantiated",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
+        },
+        {
+          "group": "object",
+          "kind": "field",
+          "name": "spawn_mask_low",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
+        },
+        {
+          "group": "object",
+          "kind": "field",
+          "name": "spawn_mask_high",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
         }
       ],
       "groups": [
         "common",
         "mission_sequence",
         "slot_identity",
+        "sense_generation",
         "object"
       ],
       "kind": 36,
@@ -5511,6 +5749,200 @@
       "kind": 41,
       "lua_class": "SunriseSceneOutputEvent",
       "name": "SCENE_OUTPUT"
+    },
+    {
+      "callback": "on_event_trigger_state",
+      "fields": [
+        {
+          "group": "common",
+          "kind": "field",
+          "name": "kind",
+          "type": {
+            "kind": "integer",
+            "note": "the EventKind number",
+            "optional": false,
+            "ref": "EventKind"
+          }
+        },
+        {
+          "group": "common",
+          "kind": "field",
+          "name": "sequence",
+          "note": "event order number",
+          "type": {
+            "kind": "decimal_string",
+            "optional": false
+          }
+        },
+        {
+          "group": "common",
+          "kind": "field",
+          "name": "source_generation",
+          "note": "client generation that produced it",
+          "type": {
+            "kind": "decimal_string",
+            "optional": false
+          }
+        },
+        {
+          "group": "common",
+          "kind": "field",
+          "name": "attempt_generation",
+          "note": "attempt it belongs to",
+          "type": {
+            "kind": "decimal_string",
+            "optional": false
+          }
+        },
+        {
+          "group": "mission_sequence",
+          "kind": "field",
+          "name": "mission_sequence",
+          "note": "the input order",
+          "type": {
+            "kind": "decimal_string",
+            "optional": false
+          }
+        },
+        {
+          "group": "slot_identity",
+          "kind": "field",
+          "name": "registry_key",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
+        },
+        {
+          "group": "slot_identity",
+          "kind": "field",
+          "name": "object_tag",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
+        },
+        {
+          "group": "slot_identity",
+          "kind": "field",
+          "name": "slot_index",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
+        },
+        {
+          "group": "slot_identity",
+          "kind": "field",
+          "name": "slot_type",
+          "type": {
+            "kind": "integer",
+            "optional": false
+          }
+        },
+        {
+          "group": "slot_identity",
+          "kind": "field",
+          "name": "slot",
+          "type": {
+            "kind": "handle",
+            "note": "nil when the slot is not in this activity",
+            "optional": true,
+            "ref": "slot"
+          }
+        },
+        {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "spawn_generation",
+          "note": "spawn generation the squad Sense echoes from its placement; nil when unreported",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "group": "sense_generation",
+          "kind": "field",
+          "name": "sense_generation",
+          "note": "msg-6 record counter plus one; nil when absent",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "group": "trigger_level",
+          "kind": "field",
+          "name": "available",
+          "note": "the report carried a complete occupancy level",
+          "type": {
+            "kind": "boolean",
+            "optional": false
+          }
+        },
+        {
+          "group": "trigger_level",
+          "kind": "field",
+          "name": "continuity",
+          "type": {
+            "kind": "string",
+            "note": "baseline, consecutive, duplicate, conflict, gap, reset, missing_counter, wrap or invalid",
+            "optional": false
+          }
+        },
+        {
+          "group": "trigger_level",
+          "kind": "field",
+          "name": "occupied",
+          "note": "nil when available is false",
+          "type": {
+            "kind": "boolean",
+            "optional": true
+          }
+        },
+        {
+          "group": "trigger_level",
+          "kind": "field",
+          "name": "member_count",
+          "note": "nil when available is false",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "group": "trigger_level",
+          "kind": "field",
+          "name": "value",
+          "note": "nil when available is false",
+          "type": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "group": "trigger_level",
+          "kind": "field",
+          "name": "all_inside",
+          "note": "nil when available is false",
+          "type": {
+            "kind": "boolean",
+            "optional": true
+          }
+        }
+      ],
+      "groups": [
+        "common",
+        "mission_sequence",
+        "slot_identity",
+        "sense_generation",
+        "trigger_level"
+      ],
+      "kind": 42,
+      "lua_class": "SunriseTriggerStateEvent",
+      "name": "TRIGGER_STATE",
+      "note": "every accepted occupancy report and its counter continuity; it never changes when entered and exited fire"
     }
   ],
   "members": [
@@ -5895,6 +6327,41 @@
       "kind": "request",
       "name": "restart_checkpoint",
       "note": "arms a hard wipe at a spawn set, or releases one with release_request",
+      "receiver": "context",
+      "refuses_unknown_keys": true,
+      "returns": [
+        {
+          "kind": "handle",
+          "optional": false,
+          "ref": "request_key"
+        }
+      ]
+    },
+    {
+      "arguments": [
+        {
+          "kind": "integer",
+          "maximum": 1022,
+          "minimum": 0,
+          "name": "region",
+          "note": "the region to arrive in",
+          "optional": false
+        },
+        {
+          "kind": "integer",
+          "maximum": 4294967294,
+          "minimum": 1,
+          "name": "spawn_set_hash",
+          "note": "a spawn set the region declares",
+          "optional": false
+        }
+      ],
+      "call": "named",
+      "colon": true,
+      "effect": "mission.teleport",
+      "kind": "request",
+      "name": "teleport",
+      "note": "moves the player to a spawn set; refused during a hard wipe",
       "receiver": "context",
       "refuses_unknown_keys": true,
       "returns": [
@@ -6495,6 +6962,34 @@
           }
         },
         {
+          "element": {
+            "kind": "handle",
+            "optional": false,
+            "ref": "slot",
+            "slot_gate": {
+              "checks": [],
+              "slot_type": 4
+            }
+          },
+          "kind": "list",
+          "max_count": 8,
+          "min_count": 1,
+          "name": "targets",
+          "note": "adds one test per object",
+          "optional": true
+        },
+        {
+          "kind": "handle",
+          "name": "squad",
+          "note": "adds a test: this squad",
+          "optional": true,
+          "ref": "slot",
+          "slot_gate": {
+            "checks": [],
+            "slot_type": 1
+          }
+        },
+        {
           "kind": "handle",
           "name": "inside",
           "note": "adds a test: objects inside this volume",
@@ -6533,6 +7028,51 @@
       },
       "kind": "request",
       "name": "set_object_filter",
+      "note": "all tests share eight predicates; a filter that needs more is refused",
+      "receiver": "slot",
+      "refuses_unknown_keys": true,
+      "returns": [
+        {
+          "kind": "handle",
+          "optional": false,
+          "ref": "request_key"
+        }
+      ]
+    },
+    {
+      "arguments": [
+        {
+          "kind": "handle",
+          "name": "volume",
+          "note": "an authored volume of the toggle's own object",
+          "optional": false,
+          "ref": "slot",
+          "scope": "same_object",
+          "slot_gate": {
+            "checks": [],
+            "slot_type": 60
+          }
+        },
+        {
+          "kind": "boolean",
+          "name": "active",
+          "note": "true turns it on, false off",
+          "optional": false
+        }
+      ],
+      "call": "named",
+      "colon": true,
+      "gate": {
+        "checks": [
+          "component_class",
+          "auth_schema",
+          "exact_join"
+        ],
+        "slot_type": 32
+      },
+      "kind": "request",
+      "name": "set_volume_active",
+      "note": "turns one authored volume on or off through its type-32 toggle",
       "receiver": "slot",
       "refuses_unknown_keys": true,
       "returns": [
@@ -9158,7 +9698,7 @@
     {
       "complete": true,
       "lua_class": "SunriseContext",
-      "member_count": 28,
+      "member_count": 29,
       "name": "context",
       "source": "first callback argument"
     },
@@ -9215,7 +9755,7 @@
     {
       "complete": true,
       "lua_class": "SunriseSlotHandle",
-      "member_count": 52,
+      "member_count": 53,
       "name": "slot",
       "source": "context:slot(selector), event.slot, context.sdk.slots:at(n)"
     },

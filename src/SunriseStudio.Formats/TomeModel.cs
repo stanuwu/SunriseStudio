@@ -72,7 +72,10 @@ public sealed class TomeKdTree
 {
     public const byte Leaf = 3;
     public List<byte> Codes { get; init; } = [];
-    /** Node i below this count splits here; later inner nodes split at their box middle. */
+    /**
+     * Node i below this count splits here; later inner nodes split at their box middle.
+     * A tile tree needs one per node: the client reads all of them and has no middle fallback there.
+     */
     public List<float> Splits { get; init; } = [];
 
     public int LeafCount => Codes.Count(code => code == Leaf);

@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using SunriseStudio.Animation;
 using SunriseStudio.Packages;
+using SunriseStudio.Packages.Registry;
 using SunriseStudio.Tags.Generated;
 using SunriseStudio.Tags.Views;
 
@@ -31,9 +32,15 @@ public static class WeaponAssetAnimationCompiler
         return PrepareCore(catalog, staging, entry, catalog.Read(templateTag), replacements, codec);
     }
 
+    // A component whose samples stay within this range is written once, to the static section.
+    private const float ConstantRange = 2e-5f;
+
+    /**
+     * @param staticConstants Writes constant components once into a codec-3 static section, as installed clips do.
+     */
     private static PreparedWeaponAnimation PrepareCore(PackageCatalog catalog, PackageCatalog staging,
         PackageEntry entry, byte[] source, IReadOnlyDictionary<int, IReadOnlyList<BoneTransform>> replacements,
-        byte[] codec)
+        byte[] codec, bool staticConstants = false)
     {
         if (ReferenceEquals(catalog, staging))
             throw new ArgumentException("The staging catalog must be a separate catalog.", nameof(staging));
@@ -63,6 +70,17 @@ public static class WeaponAssetAnimationCompiler
         int[] scales = frames[0].Values.Where(value => value.HasScale).Select(value => value.ControlIndex).Order().ToArray();
         int[] rotations = frames[0].Values.Where(value => value.HasRotation).Select(value => value.ControlIndex).Order().ToArray();
         int[] translations = frames[0].Values.Where(value => value.HasTranslation).Select(value => value.ControlIndex).Order().ToArray();
+        int[] staticScales = [], staticRotations = [], staticTranslations = [];
+        if (staticConstants)
+        {
+            staticScales = scales.Where(control => Constant(frames, control, value => [value.Scale])).ToArray();
+            staticRotations = rotations.Where(control => Constant(frames, control, value => Hemisphere(value.Rotation, frames[0][control].Rotation))).ToArray();
+            staticTranslations = translations.Where(control => Constant(frames, control,
+                value => [value.Translation.X, value.Translation.Y, value.Translation.Z])).ToArray();
+            scales = scales.Except(staticScales).ToArray();
+            rotations = rotations.Except(staticRotations).ToArray();
+            translations = translations.Except(staticTranslations).ToArray();
+        }
         int components = checked(scales.Length + rotations.Length * 4 + translations.Length * 3);
         if ((long)components * clip.FrameCount > 8_000_000)
             throw new InvalidDataException("Weapon control samples exceed the native authoring limit.");
@@ -102,43 +120,128 @@ public static class WeaponAssetAnimationCompiler
             value => [value.Translation.X, value.Translation.Y, value.Translation.Z]);
 
         var writer = new Writer(source);
-        int resource = writer.Resource(CodecClass, codec);
-        int wordsField, extentsField, biasesField;
+        int? staticResource = null;
+        float staticError = 0;
+        if (staticConstants)
         {
-            ref var quantized = ref writer.Edit<SAnimationCodec2Quantized>(resource);
-            quantized.CodecId2 = 2;
-            quantized.ScaleTrackCount = checked((ushort)scales.Length);
-            quantized.RotationTrackCount = checked((ushort)rotations.Length);
-            quantized.TranslationTrackCount = checked((ushort)translations.Length);
-            quantized.FrameCount = checked((uint)clip.FrameCount);
-            wordsField = writer.OffsetOf(in quantized.ComponentWords);
-            extentsField = writer.OffsetOf(in quantized.ComponentExtents);
-            biasesField = writer.OffsetOf(in quantized.ComponentBiases);
+            var (header, staticWords, sectionError) = StaticSection(frames, staticScales, staticRotations, staticTranslations);
+            staticResource = writer.Resource(StaticCodecClass, header);
+            writer.Array<SU16Element>(staticResource.Value + TagView.FieldOffset<SAnimationCodec3Uniform>(nameof(SAnimationCodec3Uniform.ComponentWords)),
+                WordClass, Words(staticWords));
+            staticError = sectionError;
         }
-        writer.Array<SU16Element>(wordsField, WordClass, Words(words));
-        writer.Array<SF32Column>(extentsField, FloatClass, Floats(extents));
-        writer.Array<SF32Column>(biasesField, FloatClass, Floats(biases));
-        int scaleMap, rotationMap, translationMap;
+        // With no animated section, the static block's size points where one would start.
+        int animatedAt = writer.NextResourceOffset;
+        int? resource = null;
+        if (components > 0 || !staticConstants)
+        {
+            resource = writer.Resource(CodecClass, codec);
+            int wordsField, extentsField, biasesField;
+            {
+                ref var quantized = ref writer.Edit<SAnimationCodec2Quantized>(resource.Value);
+                quantized.CodecId2 = 2;
+                quantized.ScaleTrackCount = checked((ushort)scales.Length);
+                quantized.RotationTrackCount = checked((ushort)rotations.Length);
+                quantized.TranslationTrackCount = checked((ushort)translations.Length);
+                quantized.FrameCount = checked((uint)clip.FrameCount);
+                wordsField = writer.OffsetOf(in quantized.ComponentWords);
+                extentsField = writer.OffsetOf(in quantized.ComponentExtents);
+                biasesField = writer.OffsetOf(in quantized.ComponentBiases);
+            }
+            writer.Array<SU16Element>(wordsField, WordClass, Words(words));
+            writer.Array<SF32Column>(extentsField, FloatClass, Floats(extents));
+            writer.Array<SF32Column>(biasesField, FloatClass, Floats(biases));
+            animatedAt = resource.Value;
+        }
+        int[] maps = new int[6];
         {
             ref var header = ref writer.Edit<SAnimationClip>(0).H42cf5d81;
-            header.Unknown0x128Zeroed = 0;
-            header.CodecResourceByteSize = checked((uint)(writer.NextResourceOffset - resource));
-            writer.SetTarget(in header.PayloadSection0, null);
+            // Installed clips hold the animated section's offset from the static one here.
+            header.Unknown0x128Zeroed = staticResource is int start ? checked((uint)(animatedAt - start)) : 0;
+            header.CodecResourceByteSize = resource is int animated ? checked((uint)(writer.NextResourceOffset - animated)) : 0;
+            writer.SetTarget(in header.PayloadSection0, staticResource);
             writer.SetTarget(in header.PayloadSection1, resource);
-            writer.Array<SU16Element>(writer.OffsetOf(in header.H55a58532.Scale), WordClass, []);
-            writer.Array<SU16Element>(writer.OffsetOf(in header.H55a58532.Rotation), WordClass, []);
-            writer.Array<SU16Element>(writer.OffsetOf(in header.H55a58532.Translation), WordClass, []);
-            scaleMap = writer.OffsetOf(in header.H2b572397.Scale);
-            rotationMap = writer.OffsetOf(in header.H2b572397.Rotation);
-            translationMap = writer.OffsetOf(in header.H2b572397.Translation);
+            maps[0] = writer.OffsetOf(in header.H55a58532.Scale);
+            maps[1] = writer.OffsetOf(in header.H55a58532.Rotation);
+            maps[2] = writer.OffsetOf(in header.H55a58532.Translation);
+            maps[3] = writer.OffsetOf(in header.H2b572397.Scale);
+            maps[4] = writer.OffsetOf(in header.H2b572397.Rotation);
+            maps[5] = writer.OffsetOf(in header.H2b572397.Translation);
         }
-        writer.Array<SU16Element>(scaleMap, WordClass, Words(scales.Select(value => checked((ushort)value)).ToArray()));
-        writer.Array<SU16Element>(rotationMap, WordClass, Words(rotations.Select(value => checked((ushort)value)).ToArray()));
-        writer.Array<SU16Element>(translationMap, WordClass, Words(translations.Select(value => checked((ushort)value)).ToArray()));
+        int[][] controls = [staticScales, staticRotations, staticTranslations, scales, rotations, translations];
+        for (int map = 0; map < maps.Length; map++)
+            writer.Array<SU16Element>(maps[map], WordClass, Words(controls[map].Select(value => checked((ushort)value)).ToArray()));
         byte[] output = writer.Finish();
-        float tolerance = extents.DefaultIfEmpty(0).Max() / ushort.MaxValue * 4 + 0.00002f;
+        float tolerance = Math.Max(extents.DefaultIfEmpty(0).Max() / ushort.MaxValue * 4 + 0.00002f, staticError + 0.00002f);
         float error = Verify(catalog, staging, entry, clip, output, frames, tolerance);
         return new(entry.TagHash, output, clip.FrameCount, replacements.Count, error);
+    }
+
+    private const uint StaticCodecClass = SAnimationCodec3Uniform.Class;
+
+    /** True when every component `select` gives stays within ConstantRange over all frames. */
+    private static bool Constant(IReadOnlyList<Dictionary<int, AnimationControlSample>> frames, int control,
+        Func<AnimationControlSample, float[]> select)
+    {
+        var samples = frames.Select(frame => select(frame[control])).ToArray();
+        for (int axis = 0; axis < samples[0].Length; axis++)
+            if (samples.Max(value => value[axis]) - samples.Min(value => value[axis]) > ConstantRange) return false;
+        return true;
+    }
+
+    /** The rotation's components, sign-flipped onto the side of `reference`. */
+    private static float[] Hemisphere(Quaternion rotation, Quaternion reference) =>
+        Quaternion.Dot(rotation, reference) < 0 ? [-rotation.X, -rotation.Y, -rotation.Z, -rotation.W]
+            : [rotation.X, rotation.Y, rotation.Z, rotation.W];
+
+    /**
+     * One frame of the given constant controls in codec 3: rotations on the fixed [-1, 1] quantizer, scales and
+     * translations on one shared quantizer each.
+     * @return The section header, its words, and the largest component error.
+     */
+    private static (byte[] Header, ushort[] Words, float Error) StaticSection(IReadOnlyList<Dictionary<int, AnimationControlSample>> frames,
+        int[] scales, int[] rotations, int[] translations)
+    {
+        float Middle(int control, Func<AnimationControlSample, float> select) =>
+            (frames.Max(frame => select(frame[control])) + frames.Min(frame => select(frame[control]))) / 2;
+        var words = new List<ushort>();
+        float error = ConstantRange / 2;
+        ushort Quantize(float value, float bias, float extent) =>
+            (ushort)Math.Clamp(Math.Round(extent == 0 ? 0 : (value - bias) / extent * ushort.MaxValue), 0, ushort.MaxValue);
+        float[] scaleValues = scales.Select(control => Middle(control, value => value.Scale)).ToArray();
+        float scaleBias = scaleValues.DefaultIfEmpty(0).Min(), scaleExtent = scaleValues.DefaultIfEmpty(0).Max() - scaleBias;
+        foreach (float value in scaleValues) words.Add(Quantize(value, scaleBias, scaleExtent));
+        foreach (int control in rotations)
+        {
+            var reference = frames[0][control].Rotation;
+            float[] middle = Enumerable.Range(0, 4).Select(axis => Middle(control, value => Hemisphere(value.Rotation, reference)[axis])).ToArray();
+            var unit = Quaternion.Normalize(new Quaternion(middle[0], middle[1], middle[2], middle[3]));
+            foreach (float value in (float[])[unit.X, unit.Y, unit.Z, unit.W]) words.Add(Quantize(value, -1, 2));
+        }
+        var translationValues = translations.Select(control => new Vector3(Middle(control, value => value.Translation.X),
+            Middle(control, value => value.Translation.Y), Middle(control, value => value.Translation.Z))).ToArray();
+        var translationBias = translationValues.Length == 0 ? Vector3.Zero : translationValues.Aggregate(Vector3.Min);
+        var translationExtent = translationValues.Length == 0 ? Vector3.Zero : translationValues.Aggregate(Vector3.Max) - translationBias;
+        foreach (var value in translationValues)
+        {
+            words.Add(Quantize(value.X, translationBias.X, translationExtent.X));
+            words.Add(Quantize(value.Y, translationBias.Y, translationExtent.Y));
+            words.Add(Quantize(value.Z, translationBias.Z, translationExtent.Z));
+        }
+        float step = Math.Max(Math.Max(scaleExtent, 2), Math.Max(translationExtent.X, Math.Max(translationExtent.Y, translationExtent.Z)));
+        error += step / ushort.MaxValue * 2;
+        byte[] header = new byte[Unsafe.SizeOf<SAnimationCodec3Uniform>()];
+        ref var section = ref TagView.Edit<SAnimationCodec3Uniform>(header, 0);
+        section.CodecId3 = 3;
+        section.ScaleTrackCount = checked((ushort)scales.Length);
+        section.RotationTrackCount = checked((ushort)rotations.Length);
+        section.TranslationTrackCount = checked((ushort)translations.Length);
+        section.FrameCount = 1;
+        section.ScaleExtent = scaleExtent;
+        section.ScaleBias = scaleBias;
+        section.TranslationExtent = translationExtent;
+        section.TranslationBias = translationBias;
+        return (header, [.. words], error);
     }
 
     /** Added clips use an installed empty-auxiliary profile and the destination rig's binding tables. */
@@ -146,21 +249,41 @@ public static class WeaponAssetAnimationCompiler
         uint bindingTemplateTag, uint emptyTemplateTag, IReadOnlyDictionary<int, IReadOnlyList<BoneTransform>> samples,
         byte[] codec)
     {
-        var binding = new AnimationControlReader(catalog).Read(bindingTemplateTag);
+        var clip = new AnimationControlReader(catalog).Read(bindingTemplateTag);
+        if (clip.PoseMode != 0) throw new NotSupportedException("A new weapon clip needs an absolute binding template.");
+        byte[] bound = catalog.Read(bindingTemplateTag);
+        var binding = new ClipBinding(clip.NodeCount, clip.ControlCount, clip.ControlGroups, clip.RetargetKeys,
+            ClipValue<uint>(bound, "H42cf5d81.BindingWordACopiedFromBindingTemplate"), ClipValue<uint>(bound, "H42cf5d81.BindingWordBCopied"));
+        return PrepareNew(catalog, staging, binding, emptyTemplateTag, samples, codec);
+    }
+
+    /** What ties a clip to its rig: counts, the rig's control groups in order, and the copied words. */
+    internal sealed record ClipBinding(int NodeCount, int ControlCount, IReadOnlyList<AnimationControlGroup> ControlGroups,
+        IReadOnlyList<uint> RetargetKeys, uint WordA, uint WordB);
+
+    /**
+     * A new clip over an installed empty-auxiliary template, bound as `binding` says.
+     * @param staticConstants Writes constant components once, in a static section.
+     */
+    internal static PreparedWeaponAnimation PrepareNew(PackageCatalog catalog, PackageCatalog staging,
+        ClipBinding binding, uint emptyTemplateTag, IReadOnlyDictionary<int, IReadOnlyList<BoneTransform>> samples,
+        byte[] codec, bool staticConstants = false)
+    {
         var empty = new AnimationControlReader(catalog).Read(emptyTemplateTag);
-        if (binding.PoseMode != 0 || empty.PoseMode != 0 || empty.PoseSpace is not null
+        if (empty.PoseMode != 0 || empty.PoseSpace is not null
             || empty.AuxiliarySections.Count != 0 || samples.Count != binding.ControlCount
             || !samples.Keys.Order().SequenceEqual(Enumerable.Range(0, binding.ControlCount)))
-            throw new NotSupportedException("A new weapon clip needs all destination controls and an absolute empty-auxiliary template.");
+            throw new NotSupportedException("A new clip needs all destination controls and an absolute empty-auxiliary template.");
         int frames = samples.Values.First().Count;
         if (frames is < 2 or > short.MaxValue || samples.Values.Any(values => values.Count != frames))
-            throw new InvalidDataException("New weapon control samples need one shared frame count.");
+            throw new InvalidDataException("New control samples need one shared frame count.");
         byte[] source = catalog.Read(emptyTemplateTag).ToArray();
-        byte[] bound = catalog.Read(bindingTemplateTag);
         if (ClipValue<long>(source, "H42cf5d81.ChannelNameHashes.Count") != 0
-            || ClipValue<long>(source, "H42cf5d81.AuxiliaryMapArrayMustBeEmpty") != 0
-            || ClipValue<long>(source, "Events.Count") != 0)
-            throw new NotSupportedException("New weapon clips require an empty channel, auxiliary-map and event profile.");
+            || ClipValue<long>(source, "H42cf5d81.AuxiliaryMapArrayMustBeEmpty") != 0)
+            throw new NotSupportedException("New clips require an empty channel and auxiliary-map profile.");
+        // A template's events time its own motion, so the new clip starts with none.
+        if (ClipValue<long>(source, "Events.Count") != 0)
+            source = AnimationClipEvents.Write(source, StudioRegistry.Index, []);
         // Only the fields written must fit, so these writes go field by field.
         var writer = new Writer(source);
         writer.Field<SAnimationClip, long>(0, "H42cf5d81.PayloadSection0") = 0;
@@ -170,9 +293,8 @@ public static class WeaponAssetAnimationCompiler
         writer.Field<SAnimationClip, short>(0, "H42cf5d81.FrameCount") = unchecked((short)checked((ushort)frames));
         writer.Field<SAnimationClip, ushort>(0, "H42cf5d81.NodeCount") = checked((ushort)binding.NodeCount);
         writer.Field<SAnimationClip, ushort>(0, "H42cf5d81.ControlCount") = checked((ushort)binding.ControlCount);
-        writer.Field<SAnimationClip, uint>(0, "H42cf5d81.BindingWordACopiedFromBindingTemplate") =
-            ClipValue<uint>(bound, "H42cf5d81.BindingWordACopiedFromBindingTemplate");
-        writer.Field<SAnimationClip, uint>(0, "H42cf5d81.BindingWordBCopied") = ClipValue<uint>(bound, "H42cf5d81.BindingWordBCopied");
+        writer.Field<SAnimationClip, uint>(0, "H42cf5d81.BindingWordACopiedFromBindingTemplate") = binding.WordA;
+        writer.Field<SAnimationClip, uint>(0, "H42cf5d81.BindingWordBCopied") = binding.WordB;
         foreach (string map in (string[])["H55a58532.Scale", "H55a58532.Rotation", "H55a58532.Translation",
                      "H2b572397.Scale", "H2b572397.Rotation", "H2b572397.Translation"])
             writer.Array<SU16Element>(TagView.FieldOffset<SAnimationClip>("H42cf5d81." + map), WordClass, []);
@@ -192,7 +314,7 @@ public static class WeaponAssetAnimationCompiler
         writer.Array<SU32HashElement>(keysField, SU32HashElement.Class, keys);
         byte[] prepared = writer.Finish();
         var entry = RequireClip(catalog, emptyTemplateTag);
-        return PrepareCore(catalog, staging, entry, prepared, samples, codec);
+        return PrepareCore(catalog, staging, entry, prepared, samples, codec, staticConstants);
     }
 
     /** Decodes clip bytes in place of the template entry; other tags read through the catalog. */

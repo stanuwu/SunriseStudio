@@ -178,7 +178,11 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
             int at = edit.Target.Offset;
             bool held = Held(data => Floats(ObjectRows.Field<STriggerVolumeRow, Vector3>(data, at, "Sector.BoundsMin")), edit.Minimum)
                 && Held(data => Floats(ObjectRows.Field<STriggerVolumeRow, Vector3>(data, at, "Sector.BoundsMax")), edit.Maximum);
-            next = held ? edit with { Minimum = null, Maximum = null } : edit;
+            bool placed = Held(data => Floats(ObjectRows.Field<STriggerVolumeRow, Vector3>(data, at, "SpawnEntry.Position")), edit.Position);
+            next = edit with
+            {
+                Minimum = held ? null : edit.Minimum, Maximum = held ? null : edit.Maximum, Position = placed ? null : edit.Position,
+            };
         }
         else
         {
@@ -208,8 +212,11 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
         if (edit.Target.Layout == ObjectEditLayout.DecoratorInstance) return;
         if (edit.Kind == ObjectEditKind.TriggerBounds)
         {
-            Vector3 minimum = Vector(edit.Minimum!), maximum = Vector(edit.Maximum!);
             int at = edit.Target.Offset;
+            // The client adds the row's placement position to the volume's shape.
+            if (edit.Position is { } placed) ObjectRows.Member<STriggerVolumeRow, Vector3>(bytes, at, "SpawnEntry.Position") = Vector(placed);
+            if (edit.Minimum is null) { context.Produced(edit, tag); return; }
+            Vector3 minimum = Vector(edit.Minimum), maximum = Vector(edit.Maximum!);
             float extrusion = ObjectRows.Field<STriggerVolumeRow, float>(bytes, at, "Sector.ExtrusionHeight");
             if (!float.IsFinite(extrusion) || extrusion < 0) throw new InvalidDataException("Trigger extrusion is invalid.");
             foreach (ref readonly var point in ObjectRows.Rows<STriggerVolumeRow, SVec4Point>(bytes, at, "Sector.Vertices", SVec4Point.Class))

@@ -1199,9 +1199,9 @@ public struct C80805e77
     public const uint Class = 0x80805E77;
     public const int Align = 8;
 
-    [FieldOffset(0)] public uint Unk0;
+    [FieldOffset(0)] public uint GraphHash;
     [FieldOffset(8)] public RelativePointer<byte> Unk8;
-    [FieldOffset(16)] public uint Unk10;
+    [FieldOffset(16)] public uint Graph;
 }
 
 /** `c_80805e78`, class 0x80805E78. */
@@ -1222,8 +1222,10 @@ public struct C80805e79
     public const uint Class = 0x80805E79;
     public const int Align = 8;
 
-    [FieldOffset(8)] public uint Unk8;
+    [FieldOffset(8)] public uint ArtKey;
+    [FieldOffset(12)] public ushort NameBank;
     [FieldOffset(16)] public uint Unk10;
+    [FieldOffset(20)] public ushort SubtitleBank;
     [FieldOffset(24)] public uint Unk18;
     [FieldOffset(32)] public TagArray<C80805e83> DisplayProgressions;
     [FieldOffset(48)] public TagArray<Unknown> DisplayObjectives;
@@ -1232,7 +1234,7 @@ public struct C80805e79
     [FieldOffset(96)] public TagArray<Unknown> Connections;
     [FieldOffset(112)] public TagArray<C80805e86> ArtElements;
     [FieldOffset(128)] public TagArray<Unknown> TimerElements;
-    [FieldOffset(144)] public uint Unk90;
+    [FieldOffset(144)] public uint MapTransform;
 }
 
 /** `c_80805e7a`, class 0x80805E7A. */
@@ -1342,12 +1344,15 @@ public struct C80805e84
     public const uint Class = 0x80805E84;
     public const int Align = 8;
 
-    [FieldOffset(0)] public uint Unk0;
+    [FieldOffset(0)] public uint RowHash;
     [FieldOffset(8)] public TagArray<C808076d8> LinkedActivityGraphs;
     [FieldOffset(24)] public RewardCondition DisplayUnlockExpression;
-    [FieldOffset(44)] public uint Unk2c;
-    [FieldOffset(52)] public uint Unk34;
-    [FieldOffset(60)] public uint Unk3c;
+    [FieldOffset(40)] public uint NameBank;
+    [FieldOffset(44)] public uint NameHash;
+    [FieldOffset(48)] public uint DescriptionBank;
+    [FieldOffset(52)] public uint DescriptionHash;
+    [FieldOffset(56)] public uint ShortNameBank;
+    [FieldOffset(60)] public uint ShortNameHash;
 }
 
 /** `c_80805e85`, class 0x80805E85. */
@@ -1390,7 +1395,7 @@ public struct C80805e88
 
     [FieldOffset(0)] public TagArray<C80805e8c> Activities;
     [FieldOffset(16)] public TagArray<Unknown> FeaturingStates;
-    [FieldOffset(32)] public uint Unk20;
+    [FieldOffset(32)] public uint NodeHash;
     [FieldOffset(36)] public uint Unk24;
     [FieldOffset(52)] public uint Unk34;
     [FieldOffset(64)] public uint Unk40;

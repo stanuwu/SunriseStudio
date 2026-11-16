@@ -35,6 +35,7 @@ Check(Snorm(MeshAssetImporter.EncodeGeometry(mirrored).Attributes, 18) == -1, "M
 Reject<InvalidDataException>(() => MeshAssetImporter.EncodeGeometry(mesh with { Indices = [0, 1, 99] }));
 Reject<OperationCanceledException>(() => MeshAssetImporter.EncodeGeometry(mesh, new CancellationToken(true)));
 Console.WriteLine("pass mirrored_uv=verified invalid_indices=rejected cancellation=verified");
+HeightfieldChecks.Run();
 CompatibleSkinChecks.Weights();
 EntityMaterialChecks.Synthetic();
 
@@ -124,11 +125,11 @@ static void RunInstalled(string gameRoot, InterchangeMesh mesh)
         catalog.ReadOverride = tag => bytesByTag.GetValueOrDefault(tag);
         var preview = new AssetSceneLoader(catalog).LoadMesh(imported.ModelTag);
         CheckMesh(preview, mesh);
-        Check(preview.Instances.Single().Mesh.Native is { InputLayoutVerified: true, NativeDeclarationId: 123 },
+        Check(Color(preview).Mesh.Native is { InputLayoutVerified: true, NativeDeclarationId: 123 },
             "Authored overlay lost its verified native declaration.");
-        Check(preview.Instances.Single().Mesh.MaterialTag != 0, "Authored material assignment is missing.");
+        Check(Color(preview).Mesh.MaterialTag != 0, "Authored material assignment is missing.");
         Console.WriteLine($"pass overlay template={imported.TemplateTag:X8} model={imported.ModelTag:X8} vertices=4 triangles=2 native_layout=123");
-        Draw(preview.Instances.Single().Mesh, Path.Combine(temporary, "mesh.png"));
+        Draw(Color(preview).Mesh, Path.Combine(temporary, "mesh.png"));
         DrawNative(catalog, preview, Path.Combine(temporary, "native-mesh.png"));
         catalog.ReadOverride = null;
         catalog.SetOverlayEntries([]);
@@ -166,8 +167,10 @@ static void RunInstalled(string gameRoot, InterchangeMesh mesh)
 
 static void CheckMesh(SceneDocument scene, InterchangeMesh expected)
 {
-    Check(scene.DecodeErrorCount == 0 && scene.Instances.Count == 1, string.Join(';', scene.Diagnostics));
-    var mesh = scene.Instances.Single().Mesh;
+    // One colour part and its shadow caster, as stock static parts load.
+    Check(scene.DecodeErrorCount == 0 && scene.Instances.Count == 2
+        && scene.Instances.Count(instance => instance.Mesh.Native?.RenderStage == 3) == 1, string.Join(';', scene.Diagnostics));
+    var mesh = Color(scene).Mesh;
     Check(mesh.Vertices.Length == expected.Positions.Length && mesh.Indices.SequenceEqual(expected.Indices),
         "Native mesh topology differs from user geometry.");
     for (int i = 0; i < mesh.Vertices.Length; i++)
@@ -207,7 +210,7 @@ static void DrawNative(PackageCatalog catalog, SceneDocument scene, string path)
             "Standalone static native-plan limitation changed; update the fixture contract.");
         Console.WriteLine("pass native_scene limitation=authored_48_byte_instance_and_map_ao_required");
     }
-    var native = scene.Instances.Single().Mesh.Native!;
+    var native = Color(scene).Mesh.Native!;
     byte[] vertexCode = catalog.Read(native.VertexShaderDataTag);
     using var vertexShader = renderer.Device.CreateVertexShader(vertexCode);
     var pixelCode = Compiler.Compile("""
@@ -265,6 +268,7 @@ static void DrawNative(PackageCatalog catalog, SceneDocument scene, string path)
     Console.WriteLine("pass dx11=warp shader=installed_vertex_shader positions=verified uv=verified tangent_basis=verified handedness=verified");
 }
 
+static MeshInstance Color(SceneDocument scene) => scene.Instances.Single(instance => instance.Mesh.Native?.RenderStage == 0);
 static float Snorm(byte[] bytes, int offset) => Math.Max(BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(offset)) / 32767f, -1);
 static void Check(bool condition, string message) { if (!condition) throw new InvalidDataException(message); }
 static void Reject<T>(Action action) where T : Exception

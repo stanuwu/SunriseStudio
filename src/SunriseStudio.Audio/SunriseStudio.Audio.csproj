@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net9.0-windows</TargetFramework></PropertyGroup>
+  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
   <ItemGroup><ProjectReference Include="../SunriseStudio.Packages/SunriseStudio.Packages.csproj" /></ItemGroup>
   <!-- Wwise Vorbis codebook library, packed from the libvorbis/aoTuV 6.03 encoder books (BSD). -->
   <ItemGroup><EmbeddedResource Include="Resources/wwise-vorbis-codebooks.bin" LogicalName="SunriseStudio.Audio.WwiseVorbisCodebooks" /></ItemGroup>

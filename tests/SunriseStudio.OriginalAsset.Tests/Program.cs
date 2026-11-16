@@ -104,6 +104,9 @@ try
             "Material templates or headers were stored as whole original data.");
         Console.WriteLine($"pass installed entries=17 summary=\"{summary}\"");
         OriginalNormalChecks.Run(owned, temporary, free);
+        ushort profiles = Enumerable.Range(free + 1, 0x0C00).Select(x => (ushort)x)
+            .First(id => owned.Entries.All(x => x.PackageId != id));
+        OriginalProfileChecks.Run(owned, temporary, profiles);
     }
 }
 finally

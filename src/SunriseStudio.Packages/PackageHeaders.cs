@@ -21,12 +21,17 @@ public struct TextureHeader
     [FieldOffset(0x12)] public ushort Depth;
     /** 6 on a cube. */
     [FieldOffset(0x14)] public ushort ArraySize;
+    /** Bits per pixel of Format: 32 for RGBA8, 8 for BC7, 4 for BC1, on every installed header. */
     [FieldOffset(0x16)] public byte Unk16;
     [FieldOffset(0x17)] public byte MipCount;
     /** The largest mips, which live in StreamedTag; non-zero exactly when StreamedTag is set. */
     [FieldOffset(0x18)] public byte StreamedMipCount;
     [FieldOffset(0x19)] public byte Unk19;
     [FieldOffset(0x1B)] public byte Unk1b;
+    /** 1 when StreamedMipCount is non-zero, else 0, on every installed header. */
+    [FieldOffset(0x1C)] public byte Streamed;
+    /** 5 for an sRGB Format and 3 for any other, on every installed header. */
+    [FieldOffset(0x21)] public byte ColorSpace;
     /** A type 48 tag, or NoStreamedTag. */
     [FieldOffset(0x24)] public uint StreamedTag;
 }

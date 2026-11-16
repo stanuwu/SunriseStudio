@@ -321,23 +321,27 @@ public struct C80809030
     [FieldOffset(8)] public RelativePointer<Unknown> Unk8;
 }
 
-/** `c_80809031`, class 0x80809031. */
+/** `animation_event_kind5`, class 0x80809031. */
 [StructLayout(LayoutKind.Explicit, Size = 12)]
-public struct C80809031
+public struct AnimationEventKind5
 {
     public const uint Class = 0x80809031;
     public const int Align = 4;
 
+    [FieldOffset(0)] public short Frame;
+    [FieldOffset(2)] public byte EventKind;
     [FieldOffset(8)] public uint Unk8;
 }
 
-/** `c_80809032`, class 0x80809032. */
+/** `animation_event_kind4`, class 0x80809032. */
 [StructLayout(LayoutKind.Explicit, Size = 8)]
-public struct C80809032
+public struct AnimationEventKind4
 {
     public const uint Class = 0x80809032;
     public const int Align = 4;
 
+    [FieldOffset(0)] public short Frame;
+    [FieldOffset(2)] public byte EventKind;
     [FieldOffset(4)] public uint Unk4;
 }
 
@@ -350,6 +354,8 @@ public struct AnimationTagEvent
 
     [FieldOffset(0)] public short Frame;
     [FieldOffset(2)] public byte EventKind;
+    [FieldOffset(4)] public byte ViewFilter;
+    [FieldOffset(5)] public byte DetachedSpawn;
     [FieldOffset(8)] public uint AttachmentPoint;
     [FieldOffset(16)] public RelativePointer<byte> AudioPath;
     [FieldOffset(24)] public uint EventTarget;
@@ -371,12 +377,15 @@ public struct C80809036
     public const int Align = 4;
 }
 
-/** `c_8080903a`, class 0x8080903A. */
+/** `animation_event_kind2`, class 0x8080903A. */
 [StructLayout(LayoutKind.Explicit, Size = 6)]
-public struct C8080903a
+public struct AnimationEventKind2
 {
     public const uint Class = 0x8080903A;
     public const int Align = 2;
+
+    [FieldOffset(0)] public short Frame;
+    [FieldOffset(2)] public byte EventKind;
 }
 
 /** `c_8080903b`, class 0x8080903B. */

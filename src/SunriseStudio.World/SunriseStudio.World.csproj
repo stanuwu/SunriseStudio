@@ -5,4 +5,7 @@
   <ItemGroup>
     <ProjectReference Include="../SunriseStudio.Tags/SunriseStudio.Tags.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Import/world-import-bundle.v1-draft.schema.json" LogicalName="world-import-bundle.v1-draft.schema.json" />
+  </ItemGroup>
 </Project>

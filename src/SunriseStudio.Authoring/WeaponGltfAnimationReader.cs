@@ -49,9 +49,35 @@ public static class WeaponGltfAnimationReader
     /** Skin deltas of the named joints in weapon space, one row per frame, in the order given. */
     internal sealed record SkinSamples(float SourceDuration, Matrix4x4[][] Skins);
 
-    /** The one skin must hold exactly the named joints; their parents may also animate. */
+    /** The named actions of a GLB and their lengths in seconds, in file order. */
+    internal static IReadOnlyList<(string Name, float Seconds)> Actions(string path)
+    {
+        using var file = new Document(path);
+        var result = new List<(string, float)>();
+        if (!file.Root.TryGetProperty("animations", out var animations)) return result;
+        foreach (var animation in animations.EnumerateArray())
+        {
+            if (!animation.TryGetProperty("name", out var name) || name.GetString() is not { Length: > 0 } text) continue;
+            var samplers = animation.GetProperty("samplers");
+            float start = float.MaxValue, end = float.MinValue;
+            foreach (var sampler in samplers.EnumerateArray())
+            {
+                var times = file.Values(sampler.GetProperty("input").GetInt32(), 1);
+                if (times.Length == 0) continue;
+                start = MathF.Min(start, times[0][0]); end = MathF.Max(end, times[^1][0]);
+            }
+            result.Add((text, end > start ? end - start : 0));
+        }
+        return result;
+    }
+
+    /**
+     * The one skin must hold exactly the named joints; their parents may also animate.
+     * @param space Scene space to model space; null gives weapon space at `metresPerUnit`.
+     * @param meanScale Reads a non-uniform scale key as the mean of its axes; off refuses it.
+     */
     internal static SkinSamples ReadSkins(string path, string action, IReadOnlyList<string> joints,
-        int frames, float metresPerUnit)
+        int frames, float metresPerUnit, Matrix4x4? space = null, bool meanScale = false)
     {
         if (frames is < 2 or > short.MaxValue || !float.IsFinite(metresPerUnit) || metresPerUnit <= 0)
             throw new InvalidDataException("Weapon animation needs a finite scale and a positive frame range.");
@@ -133,7 +159,7 @@ public static class WeaponGltfAnimationReader
             throw new InvalidDataException("Weapon action channels are empty or duplicated.");
         float start = channels.Min(channel => channel.Times[0]);
         float duration = channels.Max(channel => channel.Times[^1]) - start;
-        var conversion = Conversion(metresPerUnit);
+        var conversion = space ?? Conversion(metresPerUnit);
         Matrix4x4.Invert(conversion, out var inverseConversion);
         var output = new Matrix4x4[frames][];
         for (int frame = 0; frame < frames; frame++)
@@ -150,6 +176,8 @@ public static class WeaponGltfAnimationReader
                     "translation" => pose with { Translation = new(value[0], value[1], value[2]) },
                     "scale" when Math.Abs(value[0] - value[1]) < UniformScale && Math.Abs(value[0] - value[2]) < UniformScale
                         => pose with { Scale = value[0] },
+                    // A bone takes one scale; a creature's squash and stretch keeps its average size.
+                    "scale" when meanScale => pose with { Scale = (value[0] + value[1] + value[2]) / 3 },
                     _ => throw new NotSupportedException("Weapon joint animation needs uniform scale.")
                 };
             }

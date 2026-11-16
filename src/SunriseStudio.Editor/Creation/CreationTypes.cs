@@ -44,6 +44,16 @@ public static partial class CreationTypes
         "The free-roam activity and destination rows a new destination needs to launch.", "",
         workspace => new ActivityWorkflow(workspace));
 
+    /** A destination's planet in the Director and its map with landing zones; the All other assets menu lists it. */
+    public static CreationType Director { get; } = new("Director entry",
+        "A planet on the Director's top page and a destination map with landing zones.", "",
+        workspace => new DirectorWorkflow(workspace));
+
+    /** A skinned glb as a device a mission script moves; the All other assets menu lists it. */
+    public static CreationType Door { get; } = new("Door from model",
+        "A skinned glb as a device: a mission script opens and closes it through a device slot.", "",
+        workspace => new EntityWorkflow(workspace, clone: false, door: true));
+
     /** Types with no key: nothing in Studio writes them. */
     public static IReadOnlyList<CreationType> Blocked { get; } = [new("Animation", "", AnimationBlocker)];
 

@@ -32,6 +32,74 @@
       "description": "Optional. Named places the player can arrive at.",
       "type": "array",
       "items": { "$ref": "#/$defs/spawn_point" }
+    },
+    "lights": {
+      "description": "Optional. Local lights, each a copy of a stock light at a new place.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/light" }
+    },
+    "entities": {
+      "description": "Optional. Animated entities, each built from a skinned glb.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/entity" }
+    },
+    "volumes": {
+      "description": "Optional. Trigger volumes of the source activity, moved into the bubble. A mission script hears the player enter one through its player trigger.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["trigger", "position"],
+        "additionalProperties": false,
+        "properties": {
+          "trigger": {
+            "description": "A player trigger of the source activity that has a volume, by its name there, such as pt_left_town. The script arms and hears this trigger.",
+            "$ref": "#/$defs/name"
+          },
+          "position": {
+            "description": "Where the middle of the volume's floor goes.",
+            "$ref": "#/$defs/vec3"
+          },
+          "size": {
+            "description": "Optional. Makes the volume a box: width along X, depth along Y and height, in metres. Absent, the trigger's own volume moves and keeps its shape, size and direction. With a size, the trigger's volume must have a four-cornered floor.",
+            "type": "array",
+            "items": { "type": "number", "exclusiveMinimum": 0 },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "corners": {
+            "description": "Optional, in place of size. Makes the volume a prism over a convex floor: 3 to 15 corners as x, y offsets from position, in order around the floor. Needs height. The trigger's volume must have a four-cornered floor.",
+            "type": "array",
+            "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+            "minItems": 3,
+            "maxItems": 15
+          },
+          "height": {
+            "description": "With corners. How far the volume reaches up from the floor, in metres.",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "yaw": {
+            "description": "Optional, with size or corners. Turns the floor about position, in degrees about +Z.",
+            "type": "number"
+          }
+        }
+      }
+    },
+    "nav": {
+      "description": "Optional. True bakes a nav mesh for the bubble from the same triangles as its collision, so enemies can find paths over it.",
+      "type": "boolean"
+    },
+    "permissions": {
+      "description": "Optional. A movement grid: a PNG of square cells, image row 0 at the +Y edge. A cell with red at 128 or more is blocked, and each edge it shares with an open cell becomes an invisible wall.",
+      "type": "object",
+      "required": ["png", "origin", "cell", "height"],
+      "additionalProperties": false,
+      "properties": {
+        "png": { "type": "string" },
+        "origin": { "description": "The grid's -X, -Y corner and the walls' base height.", "$ref": "#/$defs/vec3" },
+        "cell": { "description": "Cell size in metres.", "type": "number", "exclusiveMinimum": 0 },
+        "height": { "description": "Wall height in metres.", "type": "number", "exclusiveMinimum": 0 }
+      }
     }
   },
   "$defs": {
@@ -73,17 +141,169 @@
           "$ref": "#/$defs/name",
           "description": "Optional. Unique within the bubble."
         },
-        "glb": {
-          "description": "Path to a .glb, relative to the bubble folder, with forward slashes. It may not leave the folder.",
-          "type": "string",
-          "pattern": "^(?!.*\\.\\.)(?!/)[A-Za-z0-9_][A-Za-z0-9_./-]*\\.glb$"
-        },
+        "glb": { "$ref": "#/$defs/glb" },
         "position": { "$ref": "#/$defs/vec3" },
         "rotation": { "$ref": "#/$defs/quaternion" },
         "scale": {
           "description": "Uniform scale.",
           "type": "number",
           "exclusiveMinimum": 0
+        },
+        "lods": {
+          "description": "Optional. Coarser copies of the glb, nearest first; at most two. With one, the glb draws near and the copy far.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/glb" },
+          "maxItems": 2
+        },
+        "lod_distances": {
+          "description": "Optional. Metres where each further level takes over, at the default field of view. One per lods entry at most.",
+          "type": "array",
+          "items": { "type": "number", "exclusiveMinimum": 0 },
+          "maxItems": 2
+        },
+        "draw_distance": {
+          "description": "Optional. Metres past which the static does not draw, at the default field of view.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "collision": {
+          "description": "Optional. A glb whose triangles collide at the static's transform, or false for none. Absent, the static's own glb collides.",
+          "oneOf": [{ "type": "string" }, { "const": false }]
+        },
+        "occluder": {
+          "description": "Optional, default true. Each closed mesh of the static's glb hides what is behind it from the bubble's occlusion; false leaves the occlusion as it is.",
+          "type": "boolean"
+        },
+        "surface": {
+          "description": "Optional. A collision surface material tag in hex, for every collision triangle of the static. Absent, each triangle takes the material of the nearest stock triangle.",
+          "type": "string",
+          "pattern": "^(0x)?[0-9A-Fa-f]{8}$"
+        }
+      }
+    },
+    "glb": {
+      "description": "Path to a .glb, relative to the folder of the file naming it, with forward slashes. It may not leave the folder.",
+      "type": "string",
+      "pattern": "^(?!.*\\.\\.)(?!/)[A-Za-z0-9_][A-Za-z0-9_./-]*\\.glb$"
+    },
+    "entity": {
+      "description": "One skinned mesh with its armature and named actions. Joint names are unique, each vertex has up to four weights, and at most 256 joints. Each action becomes a clip of its name, sampled at 30 frames a second.",
+      "type": "object",
+      "required": ["name", "glb", "position", "rotation", "scale"],
+      "oneOf": [{ "required": ["plays"] }, { "required": ["device"] }],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name",
+          "description": "Unique within the bubble."
+        },
+        "glb": { "$ref": "#/$defs/glb" },
+        "position": { "$ref": "#/$defs/vec3" },
+        "rotation": { "$ref": "#/$defs/quaternion" },
+        "scale": {
+          "description": "Uniform scale.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "plays": {
+          "description": "The action the entity plays by itself, looping. Not with device.",
+          "$ref": "#/$defs/name"
+        },
+        "device": {
+          "description": "Makes the entity a device a mission script drives, such as a door. Not with plays.",
+          "type": "object",
+          "required": ["slot", "position"],
+          "additionalProperties": false,
+          "properties": {
+            "slot": {
+              "description": "A device slot of the source activity, by its name there. The script sets this slot's channels.",
+              "$ref": "#/$defs/name"
+            },
+            "position": {
+              "description": "The action the position channel scrubs: value 0 shows its first frame, 1 its last. A change takes 10 seconds for the full range.",
+              "$ref": "#/$defs/name"
+            }
+          }
+        },
+        "material": {
+          "description": "Optional. An installed skin material tag in hex that reads no object channel. Absent, a stock default.",
+          "type": "string",
+          "pattern": "^(0x)?[0-9A-Fa-f]{8}$"
+        },
+        "events": {
+          "description": "Optional. Sounds and effects an action fires on a frame as it plays.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/entity_event" }
+        }
+      }
+    },
+    "entity_event": {
+      "type": "object",
+      "required": ["action", "frame"],
+      "oneOf": [{ "required": ["sound"] }, { "required": ["effect"] }],
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "The action that fires the event.",
+          "$ref": "#/$defs/name"
+        },
+        "frame": {
+          "description": "Frame of the action, from 0, at 30 frames a second.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "sound": {
+          "description": "The name of one of the bundle's sounds, or an installed sound event tag in hex. A name is tried first. Not with effect.",
+          "type": "string",
+          "pattern": "^([a-z0-9_]{1,64}|0x[0-9A-Fa-f]{8})$"
+        },
+        "effect": {
+          "description": "An installed effect entity tag in hex, spawned on the frame. Not with sound.",
+          "type": "string",
+          "pattern": "^(0x)?[0-9A-Fa-f]{8}$"
+        },
+        "detached": {
+          "description": "Optional. True spawns the effect as its own object, which stays where it was spawned. Absent, it is part of the entity.",
+          "type": "boolean"
+        }
+      }
+    },
+    "light": {
+      "type": "object",
+      "required": ["name", "position"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name",
+          "description": "Unique within the bubble."
+        },
+        "position": { "$ref": "#/$defs/vec3" }
+      }
+    },
+    "far": {
+      "description": "A far tile: geometry that stands in for some bubbles, drawn in every outdoor bubble that does not stream them.",
+      "type": "object",
+      "required": ["name", "glb", "covers"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "glb": { "$ref": "#/$defs/glb" },
+        "covers": {
+          "description": "The bubbles the tile stands in for. Its triangles outside their bounds, grown by the margin on X and Y, are dropped.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/name" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "margin": {
+          "description": "Optional. Metres the covered area grows by on X and Y. Default 2.",
+          "type": "number",
+          "minimum": 0
+        },
+        "sink": {
+          "description": "Optional. Metres the tile drops, so it sits under the near geometry where both draw. Default 0.5.",
+          "type": "number",
+          "minimum": 0
         }
       }
     },
@@ -114,10 +334,70 @@
         "schema_version": { "const": 0 },
         "name": { "$ref": "#/$defs/name" },
         "bubbles": {
+          "description": "In order: bubble i lands in the destination's i-th bubble with states.",
           "type": "array",
           "items": { "$ref": "#/$defs/name" },
           "minItems": 1,
           "uniqueItems": true
+        },
+        "far": {
+          "description": "Optional. Far tiles; each glb path is relative to the bundle folder.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/far" }
+        },
+        "sounds": {
+          "description": "Optional. New sounds an entity event can name. Each is a wav played the way an installed sound event plays.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "wav", "like"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/name",
+                "description": "Unique within the bundle. An entity event's sound field names it."
+              },
+              "wav": {
+                "description": "A PCM wav, relative to the bundle folder.",
+                "type": "string",
+                "pattern": "^(?!.*\\.\\.)(?!/)[A-Za-z0-9_][A-Za-z0-9_./-]*\\.wav$"
+              },
+              "like": {
+                "description": "An installed sound event tag in hex. The new sound keeps its volume, distance falloff and containers; every sound it holds plays the wav.",
+                "type": "string",
+                "pattern": "^(0x)?[0-9A-Fa-f]{8}$"
+              },
+              "variations": {
+                "description": "Optional. More PCM wavs. With the wav they go round the sounds of each random or sequence container of the like event, so the sound varies. Refused when the like event has no such container with two sounds.",
+                "type": "array",
+                "items": { "type": "string", "pattern": "^(?!.*\\.\\.)(?!/)[A-Za-z0-9_][A-Za-z0-9_./-]*\\.wav$" },
+                "minItems": 1
+              },
+              "switches": {
+                "description": "Optional. Switch value name to the PCM wav its branch plays, for a like event with a switch container, such as one that picks a footstep by surface. Refused when no branch has a given name.",
+                "type": "object",
+                "additionalProperties": { "type": "string", "pattern": "^(?!.*\\.\\.)(?!/)[A-Za-z0-9_][A-Za-z0-9_./-]*\\.wav$" }
+              },
+              "max_distance": {
+                "description": "Optional. How far the sound carries, in metres: every distance curve of the like event is stretched to end there. Refused when the like event's bank holds no distance curve.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          }
+        },
+        "sky": {
+          "description": "Optional. A dome sky in the first bubble.",
+          "type": "object",
+          "required": ["panorama"],
+          "additionalProperties": false,
+          "properties": {
+            "panorama": {
+              "description": "A PNG, relative to the bundle folder, that wraps the dome by the stock dome's UVs.",
+              "type": "string",
+              "pattern": "^(?!.*\\.\\.)(?!/)[A-Za-z0-9_][A-Za-z0-9_./-]*\\.png$"
+            }
+          }
         }
       }
     }

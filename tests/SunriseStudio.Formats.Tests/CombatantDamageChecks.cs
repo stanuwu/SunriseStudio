@@ -21,6 +21,9 @@ internal static class CombatantDamageChecks
         OnlyChanged(bytes, CombatantDamage.SetPartScale(Config, bytes, 0, 2.5f), PartRow + 0xE4, 2.5f);
         OnlyChanged(bytes, CombatantDamage.SetTypeScale(Config, bytes, 0, 0, 0.5f), TypeRow + 0x24, 0.5f);
         OnlyChanged(bytes, CombatantDamage.SetPoolFraction(Config, bytes, 0, 0.25f), PoolRow + 24, 0.25f);
+        OnlyChanged(bytes, CombatantDamage.SetBaseHitPoints(Config, bytes, 750), Payload + 0x1A8, 750);
+        Check(CombatantDamage.Read(Config, CombatantDamage.SetBaseHitPoints(Config, bytes, 750))!.BaseHitPoints == 750, "The base hit points did not read back.");
+        Reject(() => CombatantDamage.SetBaseHitPoints(Config, bytes, 0));
         Reject(() => CombatantDamage.SetPartScale(Config, bytes, 1, 1));
         Reject(() => CombatantDamage.SetTypeScale(Config, bytes, 0, 1, 1));
         Reject(() => CombatantDamage.SetPoolFraction(Config, bytes, 0, float.NaN));

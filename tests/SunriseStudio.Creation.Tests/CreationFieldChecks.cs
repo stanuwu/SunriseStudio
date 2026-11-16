@@ -61,6 +61,11 @@ internal static class CreationFieldChecks
             "Perk route failed.");
         Check(CreationTypes.RouteFor(Document(0x80800000, 32)) == CreationTypes.EditRoute.None, "A texture without pixels routed.");
         Check(CreationTypes.Blocked.All(type => !type.Available && type.Blocker.Length != 0), "A blocked type has no reason.");
+        // Entities are placed, so both entity actions run; a squad spawns an enemy copy, but a new enemy stays blocked.
+        foreach (var mode in Enum.GetValues<CreationMode>())
+            Check(CreationTypes.For(StudioCategories.EntityCategory, mode) is { Available: true, Factory: not null }, $"Entity {mode} is blocked.");
+        Check(CreationTypes.For(StudioCategories.EnemiesCategory, CreationMode.Clone) is { Available: true, Factory: not null }
+            && !CreationTypes.For(StudioCategories.EnemiesCategory, CreationMode.New).Available, "Enemy Clone is blocked, or Enemy New is not.");
         string[] keys = [.. StudioCategories.All.Select(category => category.Name),
             CreationTypes.TextureKey, CreationTypes.MaterialKey, CreationTypes.StaticPropKey, CreationTypes.OtherKey];
         foreach (string key in keys)

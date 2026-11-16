@@ -37,11 +37,18 @@ public static class CanonicalTagWriter
             int body = TagView.BodyAfter(output.Length, ClassAlign(schema, SInlineString.Class));
             int start = body + Unsafe.SizeOf<SInlineString>(), cursor = start;
             output.U32(body - TagView.ClassWordSize, SInlineString.Class);
+            // Equal texts are stored once; later pointers name the first copy.
+            var stored = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (var (pointer, text, _) in strings.OrderBy(x => x.Level))
             {
-                output.Put(cursor, text);
-                output.I64(pointer, cursor - pointer);
-                cursor += text.Length;
+                string key = Convert.ToHexString(text);
+                if (!stored.TryGetValue(key, out int at))
+                {
+                    stored.Add(key, at = cursor);
+                    output.Put(cursor, text);
+                    cursor += text.Length;
+                }
+                output.I64(pointer, at - pointer);
             }
             output.Edit<SInlineString>(body).ByteLength = (ulong)(cursor - start);
         }

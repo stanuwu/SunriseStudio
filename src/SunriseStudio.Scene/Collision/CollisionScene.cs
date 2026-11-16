@@ -26,7 +26,9 @@ public enum CollisionRole
     /** A 0x808092A4 trigger shape, or layer 9. */
     Trigger,
     /** Query-only static instances and phantoms off layer 9. */
-    Other
+    Other,
+    /** A nav mesh layer. It is not collision; the layer draws it the same way. */
+    Nav
 }
 
 /** Damage region names of hitbox rows; the row stores their FNV-1 hash. */
@@ -146,6 +148,7 @@ public sealed class CollisionScene
         CollisionShapes.Sphere => "Sphere",
         CollisionShapes.Capsule => "Capsule",
         CollisionShapes.Cylinder => "Cylinder",
+        CollisionSceneLoader.NavLayerClass => "Nav",
         _ => shapeClass
     };
 

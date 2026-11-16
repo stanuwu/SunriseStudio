@@ -42,7 +42,90 @@ internal static class SoundBankChecks
         byte[] cut = Template(truncate: true);
         Reject(() => WwiseSoundBank.Build(AudioCatalog.ReadBank(4, cut), Start, Stop, "test/cut", wave));
         Reject(() => WwiseSoundBank.Build(template, 99, Stop, "test/missing", wave));
-        Console.WriteLine("audio sound_bank=synthetic nodes=renamed leaves=pcm release=paired rate_of_fire=period");
+
+        // A variation: the loop's two shots play two waves, and the tail still plays the release.
+        var other = Wave(3);
+        var varied = AudioCatalog.ReadBank(5, WwiseSoundBank.Build(template, Start, Stop, "test/vary", wave, release,
+            new(Variations: [other])).Bytes);
+        var variedNodes = WwiseSoundBank.Nodes(varied);
+        var variedLoop = variedNodes.Single(node => node.Type == 5);
+        var variedMedia = varied.EmbeddedMedia.ToDictionary(item => item.Id);
+        var played = variedLoop.Children.Select(id => variedMedia[variedNodes.Single(node => node.Id == id).SourceId].Embedded!).ToList();
+        Check(varied.EmbeddedMedia.Count == 3 && played.Count == 2 && played[0].SequenceEqual(WwiseSoundBank.PcmWem(wave))
+            && played[1].SequenceEqual(WwiseSoundBank.PcmWem(other))
+            && variedMedia[variedNodes.Single(node => node.Type == 2 && node.Parent == Mixer).SourceId].Embedded!.SequenceEqual(WwiseSoundBank.PcmWem(release)),
+            "A variation did not go round the loop's sounds.");
+        // The template has no switch container and no attenuation, so those choices are refused.
+        Reject(() => WwiseSoundBank.Build(template, Start, Stop, "test/switch", wave, null, new(Switches: new Dictionary<uint, PcmWave> { [7] = other })));
+        Reject(() => WwiseSoundBank.Build(template, Start, Stop, "test/far", wave, null, new(MaxDistance: 30)));
+        Console.WriteLine("audio sound_bank=synthetic nodes=renamed leaves=pcm release=paired rate_of_fire=period variation=round no_switch=refused no_attenuation=refused");
+    }
+
+    /** Options on installed banks: variations and a farther distance on a door sound, and one switch branch. */
+    public static void OwnedOptions(PackageCatalog catalog)
+    {
+        const uint doorEvent = 0x80F5D86D;
+        byte[] header = catalog.Read(doorEvent);
+        var template = AudioCatalog.ReadBank(U32(header, 20), catalog.Read(U32(header, 20)));
+        PcmWave first = Wave(1), second = Wave(2), third = Wave(3);
+        float before = WwiseSoundBank.Attenuations(template).Max(item => item.MaxDistance);
+        var built = WwiseSoundBank.Build(template, U32(header, 8), U32(header, 12), "test/door", first, null,
+            new(Variations: [second, third], MaxDistance: before / 2));
+        var bank = AudioCatalog.ReadBank(0, built.Bytes);
+        var nodes = WwiseSoundBank.Nodes(bank);
+        var byId = nodes.ToDictionary(node => node.Id);
+        var randoms = nodes.Where(node => node.Type == 5 && node.Children.Count == 3).ToList();
+        Check(randoms.Count == 2 && bank.EmbeddedMedia.Count == 3
+            && randoms.All(node => node.Children.Select(id => byId[id].SourceId).Distinct().Count() == 3),
+            "The door's random containers do not play three waves each.");
+        var oldIds = WwiseSoundBank.Attenuations(template).Select(item => item.Id).ToHashSet();
+        var stretched = WwiseSoundBank.Attenuations(bank).Where(item => !oldIds.Contains(item.Id)).ToList();
+        var kept = WwiseSoundBank.Attenuations(bank).Where(item => oldIds.Contains(item.Id)).ToList();
+        // The door's top nodes took the mixer's positioning; each now names the stretched copy itself.
+        var positioned = nodes.Where(node => node.Attenuation != 0).ToList();
+        Check(stretched.Count == 1 && Math.Abs(stretched[0].MaxDistance - before / 2) < 0.001f
+            && kept.Count == oldIds.Count && kept.Max(item => item.MaxDistance) == before
+            && positioned.Count > 0 && positioned.All(node => node.Attenuation == stretched[0].Id)
+            && positioned.All(node => !byId.ContainsKey(node.Parent)),
+            "The door's distance curve was not stretched in a copy its top nodes name.");
+
+        // Every installed attenuation and node of a sample of banks reads to its last byte.
+        int banks = 0, attenuations = 0, index = 0;
+        AudioBank? branched = null;
+        WwiseNode? container = null;
+        uint value = 0;
+        foreach (var entry in catalog.Entries.Where(entry => entry is { Type: 26, SubType: 5 } && catalog.ContainsInstalledPackage(entry.PackageId)))
+        {
+            if (index++ % 40 != 0 && branched is not null) continue;
+            var sample = AudioCatalog.ReadBank(entry.TagHash, catalog.ReadOriginal(entry.TagHash));
+            if (index % 40 == 1) { banks++; attenuations += WwiseSoundBank.Attenuations(sample).Count; }
+            if (branched is not null || !sample.Objects.Any(item => item.Type == 4) || !sample.Objects.Any(item => item.Type == 6)) continue;
+            // The first bank with a switch branch that ends in a sound, and that the builder can copy.
+            var source = WwiseSoundBank.Nodes(sample);
+            bool Leaf(uint id) => source.Any(leaf => leaf.Id == id && leaf.Type == 2 && (leaf.SourcePlugin & 0xF) == 1);
+            if (source.FirstOrDefault(node => node.SwitchValues.Count >= 2 && node.SwitchValues.Keys.Any(Leaf)) is not { } found) continue;
+            uint branch = found.SwitchValues[found.SwitchValues.Keys.First(Leaf)];
+            try
+            {
+                branched = AudioCatalog.ReadBank(0, WwiseSoundBank.Build(sample, sample.Objects.First(item => item.Type == 4).Id, StringHash.Empty,
+                    "test/switched", first, null, new(Switches: new Dictionary<uint, PcmWave> { [branch] = second })).Bytes);
+                (container, value) = (found, branch);
+            }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException) { }
+        }
+        Check(banks > 100 && attenuations > 100, "No installed attenuations were read.");
+        if (branched is null || container is null) throw new InvalidDataException("No installed switch container took a branch wave.");
+        var branchedNodes = WwiseSoundBank.Nodes(branched);
+        var branchedContainer = branchedNodes.Single(node => node.SwitchGroup == container.SwitchGroup && node.Children.Count == container.Children.Count
+            && node.SwitchValues.Count == container.SwitchValues.Count && node.Parent == container.Parent);
+        var branchMedia = branched.EmbeddedMedia.ToDictionary(item => item.Id);
+        var onBranch = branchedContainer.SwitchValues.Where(pair => pair.Value == value).Select(pair => branchedNodes.Single(node => node.Id == pair.Key))
+            .Where(node => node.Type == 2).ToList();
+        Check(branched.EmbeddedMedia.Count == 2 && onBranch.Count > 0
+            && onBranch.All(node => branchMedia[node.SourceId].Embedded!.SequenceEqual(WwiseSoundBank.PcmWem(second))),
+            "The switch branch does not play its own wave.");
+        Console.WriteLine($"audio sound_options door_randoms={randoms.Count} waves=3 distance={before:0.#}->{before / 2:0.#} positioned={positioned.Count} "
+            + $"sampled_banks={banks} attenuations={attenuations} switch_group={container.SwitchGroup:X8} branch={value:X8} leaves={onBranch.Count}");
     }
 
     /** Tommy's Matchbook's fire event: 144 leaves, a stop tail and three trigger-rate loops. */

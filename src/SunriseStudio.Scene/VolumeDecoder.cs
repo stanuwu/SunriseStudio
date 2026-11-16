@@ -48,12 +48,13 @@ public sealed partial class AssetSceneLoader
                 var box = TriggerBox(in row);
                 var name = $"{label} trigger {row.SlotOrdinal}";
                 var rotation = row.SpawnEntry.Rotation;
+                // The client adds the placement's position to the shape; a turned placement is not decoded.
                 var position = row.SpawnEntry.Position;
-                if (position.LengthSquared() > 1e-10f || MathF.Abs(rotation.W - 1) > 1e-5f
+                if (!Finite(position) || MathF.Abs(rotation.W - 1) > 1e-5f
                     || new Vector3(rotation.X, rotation.Y, rotation.Z).LengthSquared() > 1e-10f)
                 {
                     scene.UnsupportedCount++;
-                    AddDiagnostic($"Trigger {name} has an unsupported non-identity placement.");
+                    AddDiagnostic($"Trigger {name} has an unsupported turned placement.");
                     continue;
                 }
                 var objectPlacement = new SceneObjectPlacement(configTag, rowOffset, Matrix4x4.Identity);
@@ -76,7 +77,7 @@ public sealed partial class AssetSceneLoader
                 var triangles = TagView.Rows(config, in row.Sector.Triangles, TriggerVolumeTriangle.Class);
                 var vertices = new SceneVertex[points.Length];
                 for (int i = 0; i < points.Length; i++)
-                    vertices[i] = new SceneVertex(points[i].Position, Vector3.UnitZ, Vector2.Zero, new Vector4(0.8f, 0.3f, 1, 0.35f));
+                    vertices[i] = new SceneVertex(points[i].Position + position, Vector3.UnitZ, Vector2.Zero, new Vector4(0.8f, 0.3f, 1, 0.35f));
                 var corners = new List<uint>();
                 foreach (ref readonly var triangle in triangles)
                     foreach (byte corner in (ReadOnlySpan<byte>)triangle.Indices) corners.Add(corner);
@@ -100,7 +101,7 @@ public sealed partial class AssetSceneLoader
     }
 
     /**
-     * Trigger bounds are an ordered min and max.
+     * Trigger bounds are an ordered min and max, moved by the row's placement position.
      * @return The marker's center and half size.
      */
     internal static (Vector3 Position, Vector3 Extents) TriggerBox(in STriggerVolumeRow row)
@@ -109,7 +110,7 @@ public sealed partial class AssetSceneLoader
         var max = row.Sector.BoundsMax;
         if (!Finite(min) || !Finite(max) || min.X > max.X || min.Y > max.Y || min.Z > max.Z)
             throw new InvalidDataException("Trigger bounds are invalid.");
-        return ((min + max) * 0.5f, (max - min) * 0.5f);
+        return ((min + max) * 0.5f + row.SpawnEntry.Position, (max - min) * 0.5f);
     }
 
     /** Each boundary edge joins the authored base to its Z-extruded cap. */

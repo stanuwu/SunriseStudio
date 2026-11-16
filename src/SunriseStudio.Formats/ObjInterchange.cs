@@ -9,6 +9,8 @@ public sealed record InterchangeMesh(string Name, Vector3[] Positions, Vector3[]
     Vector2[] TexCoords, uint[] Indices)
 {
     public int? MaterialIndex { get; init; }
+    /** Linear RGBA per vertex, from glTF COLOR_0; null when the primitive has none. */
+    public Vector4[]? Colors { get; init; }
 }
 
 /** OBJ coordinates remain in package space so exported meshes can return without axis loss. */

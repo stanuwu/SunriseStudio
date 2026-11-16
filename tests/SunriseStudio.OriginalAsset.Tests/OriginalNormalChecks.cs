@@ -24,8 +24,9 @@ internal static class OriginalNormalChecks
         foreach (float scale in new[] { .5f, 2f, -1f })
         {
             Write(pixels, scale);
-            OriginalAssetImporter.Import(project, catalog, new(path, package, "normal" + scale, null, false));
+            OriginalAssetImporter.Import(project, catalog, new(path, package, "normal" + scale, null, false) { CompressTextures = false });
             var payload = project.AddedAssets.Last(asset => asset.Name.EndsWith(".normal.pixels", StringComparison.Ordinal));
+            // Uncompressed level 0 leads the payload; the smaller mips follow it.
             byte[] actual = project.ReadAddedAsset(payload.Id, catalog);
             for (int index = 0; index < pixels.Length; index += 4)
             {

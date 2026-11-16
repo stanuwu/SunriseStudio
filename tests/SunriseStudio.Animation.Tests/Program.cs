@@ -44,6 +44,7 @@ if (game >= 0)
     using var catalog = PackageCatalog.Open(args[game + 1]);
     ClipNameChecks.Owned(catalog);
     RetargetChecks.Owned(catalog);
+    SkeletonWriterChecks.Owned(catalog);
     foreach (uint tag in new uint[] { 0x80BAB778, 0x80C0FA98, 0x80B82FE3 }) PoseLayerChecks.Owned(catalog, tag);
     foreach (uint tag in new uint[] { 0x80B82FE3, 0x80C0FA98 }) CheckOwnedRig(catalog, tag);
     foreach (uint tag in new uint[] { 0x80FB960D, 0x80C4A807 }) CheckPreviewClips(catalog, tag);

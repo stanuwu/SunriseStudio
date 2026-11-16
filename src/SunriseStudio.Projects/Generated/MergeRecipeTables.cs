@@ -17,6 +17,8 @@ internal static partial class TableMergeRecipes
     public const uint ActivityRowLimit = 4095;
     /** An activity names its destination row with one byte. */
     public const uint DestinationRowLimit = 256;
+    /** The client keeps runtime rows for this many graphs. */
+    public const uint GraphRowLimit = 64;
 
     public const uint ItemIndex = 0x81327CCB; // item_index_table
     public const uint ItemDisplayIndex = 0x81613CF1; // c_80805cdb
@@ -48,6 +50,14 @@ internal static partial class TableMergeRecipes
     public const uint ActivityTexts = 0x81327D35; // activity_client_table
     public const uint Destinations = 0x81327CDA; // c_80807768
     public const uint DestinationTexts = 0x81327D6B; // c_80805b27
+    public const uint GraphIndex = 0x81327D62; // c_80805e73
+    public const uint GraphDefinitions = 0x81327D04; // c_808075ca
+    public const uint DirectorTop = 0x81327D50; // c_80805e79
+    public const uint MapNodes = 0x81327CD8; // c_80807a30
+    public const uint MapNodeTexts = 0x81327D6C; // c_80805aff
+    public const uint MapPlacements = 0x81327CD9; // c_808075a8
+    public const uint DirectorArt = 0x80BC62C1; // c_808047b7
+    public const uint DirectorHeaderArt = 0x80BC63B5; // c_808047b7
 
     public const uint ItemClass = Views.ItemDefinition.Class;
     public const uint ItemDisplayClass = Views.ItemDisplayStrings.Class;
@@ -56,6 +66,10 @@ internal static partial class TableMergeRecipes
     public const uint ActivityRecordClass = Views.ActivityDefinition.Class;
     /** A client activity record's first pointer names a text block of string references. */
     public const uint ActivityTextClass = Views.ActivityTextRecord.Class;
+    /** A display graph: a destination's map page. */
+    public const uint GraphClass = Views.C80805e79.Class;
+    /** A definition graph: the activities a map page lists. */
+    public const uint GraphDefinitionClass = Views.C80807512.Class;
 
     private static readonly MergeShape StatRow = new MergeShape(24 /* s_stat_group_row */,
     [
@@ -119,6 +133,12 @@ internal static partial class TableMergeRecipes
         [
             new MergeField(8 /* h_01709271 */, MergeFieldKind.OwnedArray) { ElementStride = 4 },
         ]) },
+    ]);
+
+    // One graph or node a tile or an activity opens.
+    private static readonly MergeShape LinkedGraphShape = new MergeShape(24 /* c_808076d8 */,
+    [
+        new MergeField(8 /* h_90b11fae.expression_steps */, MergeFieldKind.OwnedArray),
     ]);
 
     private static readonly MergeShape DestinationTextShape = new MergeShape(56 /* destination_text_row */,
@@ -332,6 +352,81 @@ internal static partial class TableMergeRecipes
             new MergeArray("rows", 8 /* table */, MergeOpKind.Append, DestinationTextShape)
             { PairGroup = "destination", Limit = DestinationRowLimit, KeyOffset = 0 /* destination_hash */, Unique = true },
         ]),
+        new(GraphIndex, "graph index",
+        [
+            new MergeArray("rows", 8 /* table */, MergeOpKind.Append, new MergeShape(24 /* c_80805e77 */,
+            [
+                new MergeField(8 /* unk_8 */, MergeFieldKind.ObjectPointer),
+            ]))
+            { PairGroup = "graph", Limit = GraphRowLimit, KeyOffset = 0 /* graph_hash */, Unique = true },
+        ]),
+        new(GraphDefinitions, "graph definitions",
+        [
+            new MergeArray("rows", 8 /* table */, MergeOpKind.Append, new MergeShape(24 /* c_80807510 */,
+            [
+                new MergeField(8 /* unk_8 */, MergeFieldKind.ObjectPointer),
+            ]))
+            { PairGroup = "graph", Limit = GraphRowLimit, KeyOffset = 0 /* graph_hash */, Unique = true },
+        ]),
+        new(DirectorTop, "Director planet tiles",
+        [
+            new MergeArray("rows", 64 /* linked_graphs */, MergeOpKind.Append, new MergeShape(64 /* c_80805e84 */,
+            [
+                new MergeField(8 /* linked_activity_graphs */, MergeFieldKind.OwnedArray) { ElementStride = 24, Element = LinkedGraphShape },
+                new MergeField(24 /* display_unlock_expression.expression_steps */, MergeFieldKind.OwnedArray),
+            ]))
+            { Limit = EditorRowLimit, KeyOffset = 0 /* row_hash */, Unique = true },
+        ]),
+        new(MapNodes, "map nodes",
+        [
+            new MergeArray("rows", 8 /* table */, MergeOpKind.Append, new MergeShape(72 /* c_80807a35 */,
+            [
+                new MergeField(8 /* unk_8 */, MergeFieldKind.ObjectPointer),
+                new MergeField(24 /* h_e2c95be2 */, MergeFieldKind.OwnedArray),
+                new MergeField(40 /* h_ec27f4f4.expression_steps */, MergeFieldKind.OwnedArray),
+                new MergeField(56 /* h_8e00af4d */, MergeFieldKind.OwnedArray) { ElementStride = 80, Element = new MergeShape(80 /* c_80807a3a */,
+                [
+                    new MergeField(0 /* h_373d2eff.expression_steps */, MergeFieldKind.OwnedArray),
+                ]) },
+            ]))
+            { PairGroup = "map node", Limit = ShortRowLimit, KeyOffset = 0 /* map_node_hash */, Unique = true },
+        ]),
+        new(MapNodeTexts, "map node texts",
+        [
+            new MergeArray("rows", 8 /* table */, MergeOpKind.Append, new MergeShape(24 /* c_80805b03 */,
+            [
+                new MergeField(8 /* h_8e00af4d */, MergeFieldKind.OwnedArray) { ElementStride = 28 },
+            ]))
+            { PairGroup = "map node", Limit = ShortRowLimit, KeyOffset = 0 /* map_node_hash */, Unique = true },
+        ]),
+        new(MapPlacements, "map placements",
+        [
+            new MergeArray("rows", 8 /* constants.h_d0034236 */, MergeOpKind.Append, new MergeShape(40 /* c_80807459 */,
+            [
+                new MergeField(8 /* h_373d2eff.expression_steps */, MergeFieldKind.OwnedArray),
+            ]))
+            { Limit = EditorRowLimit },
+        ]),
+        new(DirectorArt, "Director art library",
+        [
+            new MergeArray("rows", 16 /* h_89303e88 */, MergeOpKind.Append, new MergeShape(24 /* c_808047cb */,
+            [
+                new MergeField(8 /* entries */, MergeFieldKind.OwnedArray) { ElementStride = 8 },
+            ]))
+            { Limit = EditorRowLimit, KeyOffset = 0 /* art_key */, Unique = true, OrderedWhenStockAscending = true },
+            new MergeArray("strings", 32 /* localized_strings */, MergeOpKind.Append, new MergeShape(8 /* c_808047c6 */, []))
+            { Limit = EditorRowLimit, KeyOffset = 0 /* unk_0 */, Unique = true },
+        ]),
+        new(DirectorHeaderArt, "Director header art library",
+        [
+            new MergeArray("rows", 16 /* h_89303e88 */, MergeOpKind.Append, new MergeShape(24 /* c_808047cb */,
+            [
+                new MergeField(8 /* entries */, MergeFieldKind.OwnedArray) { ElementStride = 8 },
+            ]))
+            { Limit = EditorRowLimit, KeyOffset = 0 /* art_key */, Unique = true, OrderedWhenStockAscending = true },
+            new MergeArray("strings", 32 /* localized_strings */, MergeOpKind.Append, new MergeShape(8 /* c_808047c6 */, []))
+            { Limit = EditorRowLimit, KeyOffset = 0 /* unk_0 */, Unique = true },
+        ]),
     }.ToDictionary(recipe => recipe.Tag);
 
     /** Site rules for single-record entries, by entry class. */
@@ -406,6 +501,22 @@ internal static partial class TableMergeRecipes
                     64 /* display_properties.name_bank */, 2, false, StringBankIndex, 8),
                 new MergeSiteRule("subtitle bank", [],
                     72 /* display_properties.subtitle_bank */, 2, false, StringBankIndex, 8),
+            ],
+            [GraphClass] =
+            [
+                new MergeSiteRule("name bank", [],
+                    12 /* name_bank */, 2, false, StringBankIndex, 8),
+                new MergeSiteRule("subtitle bank", [],
+                    20 /* subtitle_bank */, 2, false, StringBankIndex, 8),
+            ],
+            [GraphDefinitionClass] =
+            [
+                new MergeSiteRule("activity",
+                [
+                    new MergeStep(MergeStepKind.Array, 8 /* nodes */) { Stride = 40 },
+                    new MergeStep(MergeStepKind.Array, 8 /* activities */) { Stride = 24 },
+                ],
+                    4 /* activity_index */, 4, false, ActivityDefinitions, 8),
             ],
         };
 
@@ -502,6 +613,13 @@ internal static partial class TableMergeRecipes
                     new MergeStep(MergeStepKind.Pointer, 0 /* text_block */),
                 ],
                     20 /* expansion_bank */, 2, false, StringBankIndex, 8),
+                new MergeSiteRule("graph",
+                [
+                    new MergeStep(MergeStepKind.Array, 8 /* table */) { Stride = 16 },
+                    new MergeStep(MergeStepKind.Pointer, 8 /* activity_pointer */) { Marker = Views.ActivityTextRecord.Class },
+                    new MergeStep(MergeStepKind.Array, 24 /* h_1c2a8c12 */) { Stride = 24 },
+                ],
+                    0 /* graph_index */, 1, false, GraphIndex, 8),
             ],
             [DestinationTexts] =
             [
@@ -509,6 +627,58 @@ internal static partial class TableMergeRecipes
                     4 /* name_bank */, 2, false, StringBankIndex, 8),
                 new MergeSiteRule("subtitle bank", [new MergeStep(MergeStepKind.Array, 8 /* table */) { Stride = 56 }],
                     12 /* subtitle_bank */, 2, false, StringBankIndex, 8),
+                new MergeSiteRule("graph",
+                [
+                    new MergeStep(MergeStepKind.Array, 8 /* table */) { Stride = 56 },
+                    new MergeStep(MergeStepKind.Array, 24 /* h_1c2a8c12 */) { Stride = 24 },
+                ],
+                    0 /* graph_index */, 1, false, GraphIndex, 8),
+            ],
+            [DirectorTop] =
+            [
+                new MergeSiteRule("graph",
+                [
+                    new MergeStep(MergeStepKind.Array, 64 /* linked_graphs */) { Stride = 64 },
+                    new MergeStep(MergeStepKind.Array, 8 /* linked_activity_graphs */) { Stride = 24 },
+                ],
+                    0 /* graph_index */, 1, false, GraphIndex, 8),
+                new MergeSiteRule("name bank", [new MergeStep(MergeStepKind.Array, 64 /* linked_graphs */) { Stride = 64 }],
+                    40 /* name_bank */, 4, false, StringBankIndex, 8),
+                new MergeSiteRule("description bank", [new MergeStep(MergeStepKind.Array, 64 /* linked_graphs */) { Stride = 64 }],
+                    48 /* description_bank */, 4, false, StringBankIndex, 8),
+                new MergeSiteRule("short name bank", [new MergeStep(MergeStepKind.Array, 64 /* linked_graphs */) { Stride = 64 }],
+                    56 /* short_name_bank */, 4, false, StringBankIndex, 8),
+            ],
+            [MapNodes] =
+            [
+                new MergeSiteRule("destination",
+                [
+                    new MergeStep(MergeStepKind.Array, 8 /* table */) { Stride = 72 },
+                    new MergeStep(MergeStepKind.Array, 56 /* h_8e00af4d */) { Stride = 80 },
+                ],
+                    16 /* destination_index */, 1, false, Destinations, 8),
+            ],
+            [MapNodeTexts] =
+            [
+                new MergeSiteRule("name bank",
+                [
+                    new MergeStep(MergeStepKind.Array, 8 /* table */) { Stride = 24 },
+                    new MergeStep(MergeStepKind.Array, 8 /* h_8e00af4d */) { Stride = 28 },
+                ],
+                    4 /* name_bank */, 4, false, StringBankIndex, 8),
+                new MergeSiteRule("action bank",
+                [
+                    new MergeStep(MergeStepKind.Array, 8 /* table */) { Stride = 24 },
+                    new MergeStep(MergeStepKind.Array, 8 /* h_8e00af4d */) { Stride = 28 },
+                ],
+                    12 /* action_bank */, 4, false, StringBankIndex, 8),
+            ],
+            [MapPlacements] =
+            [
+                new MergeSiteRule("map node", [new MergeStep(MergeStepKind.Array, 8 /* constants.h_d0034236 */) { Stride = 40 }],
+                    0 /* map_node_index */, 4, false, MapNodes, 8),
+                new MergeSiteRule("activity", [new MergeStep(MergeStepKind.Array, 8 /* constants.h_d0034236 */) { Stride = 40 }],
+                    32 /* activity_index */, 4, false, ActivityDefinitions, 8),
             ],
             [ItemArt] =
             [

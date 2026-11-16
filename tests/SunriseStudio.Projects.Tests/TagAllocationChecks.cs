@@ -27,7 +27,7 @@ static class TagAllocationChecks
         // A full package spills into the next probe id.
         var allocator = new TagAllocator([first]);
         allocator.Grow = () => allocator.NextPackage("dev.example.alpha", Installed);
-        for (int index = 0; index < TagHashes.EntriesPerPackage; index++) allocator.Allocate("t" + index);
+        for (int index = 0; index < TagAllocator.TagEntries; index++) allocator.Allocate("t" + index);
         uint spilled = allocator.Allocate("overflow");
         Require(allocator.Packages.Count == 2 && TagHashes.Split(spilled) == (forced, 0),
             "A full package did not spill to the next id of the probe.");

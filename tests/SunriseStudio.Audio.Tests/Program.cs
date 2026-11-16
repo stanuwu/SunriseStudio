@@ -7,10 +7,20 @@ string temporary = Path.Combine(Path.GetTempPath(), "sunrise-audio-tests-" + Gui
 Directory.CreateDirectory(temporary);
 try
 {
+    // --music-only <game root> runs the music authoring checks alone.
+    int musicOnly = Array.IndexOf(args, "--music-only");
+    if (musicOnly >= 0)
+    {
+        MusicAuthoringChecks.Synthetic(temporary);
+        using var musicGame = PackageCatalog.Open(args[musicOnly + 1]);
+        MusicAuthoringChecks.Owned(musicGame, temporary);
+        return;
+    }
     DecoderChecks.Synthetic();
     HierarchyChecks.Synthetic();
     ComposerChecks.Synthetic(temporary);
     MusicChecks.Synthetic(temporary);
+    MusicAuthoringChecks.Synthetic(temporary);
     CueChecks.Synthetic(temporary);
     DestinationChecks.Synthetic(temporary);
     PlaylistChecks.Synthetic(temporary);
@@ -90,7 +100,9 @@ try
         int playlistOutput = Array.IndexOf(args, "--playlist-output");
         await PlaylistChecks.Owned(owned, temporary, playlistOutput >= 0 ? args[playlistOutput + 1] : null);
         await ParityChecks.Owned(owned, temporary);
+        MusicAuthoringChecks.Owned(owned, temporary);
         SoundBankChecks.Owned(owned);
+        SoundBankChecks.OwnedOptions(owned);
         string directory, eventComposition;
         uint bankTag;
         using (var session = new AudioSession(owned, 0x80B4EEDC, cacheDirectory: Path.Combine(temporary, "cache")))

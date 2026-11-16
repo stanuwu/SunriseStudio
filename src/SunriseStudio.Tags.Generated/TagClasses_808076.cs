@@ -1895,6 +1895,8 @@ public struct C808076d8
     public const uint Class = 0x808076D8;
     public const int Align = 8;
 
+    [FieldOffset(0)] public byte GraphIndex;
+    [FieldOffset(2)] public ushort NodeIndex;
     [FieldOffset(8)] public RewardCondition H90b11fae;
 }
 

@@ -14839,6 +14839,51 @@
       "source": "verified"
     },
     {
+      "class": "0x808047CB",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "art_key",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        }
+      ],
+      "kind": "element",
+      "name": "c_808047cb",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
+      "class": "0x808047CD",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "variant",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "hierarchy",
+          "offset": 4,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 23
+        }
+      ],
+      "kind": "element",
+      "name": "c_808047cd",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
       "category": "CUI / Resource",
       "class": "0x80804825",
       "fields": [
@@ -18271,6 +18316,78 @@
       "source": "inferred"
     },
     {
+      "class": "0x80805B03",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "map_node_hash",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        }
+      ],
+      "kind": "element",
+      "name": "c_80805b03",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
+      "class": "0x80805B05",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "name_bank",
+          "offset": 4,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 4
+        },
+        {
+          "confidence": "verified",
+          "name": "name_hash",
+          "offset": 8,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "action_bank",
+          "offset": 12,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 4
+        },
+        {
+          "confidence": "verified",
+          "name": "action_hash",
+          "offset": 16,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "spawn_set_hash",
+          "offset": 20,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        }
+      ],
+      "kind": "element",
+      "name": "c_80805b05",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
       "category": "Investment / Table",
       "class": "0x80805B0F",
       "fields": [],
@@ -19882,6 +19999,168 @@
       "source": "inferred"
     },
     {
+      "class": "0x80805E77",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "graph_hash",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "graph",
+          "offset": 16,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 23
+        }
+      ],
+      "kind": "element",
+      "name": "c_80805e77",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
+      "class": "0x80805E79",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "art_key",
+          "offset": 8,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "name_bank",
+          "offset": 12,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 2
+        },
+        {
+          "confidence": "verified",
+          "name": "subtitle_bank",
+          "offset": 20,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 2
+        },
+        {
+          "confidence": "verified",
+          "name": "map_transform",
+          "offset": 144,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 23
+        }
+      ],
+      "kind": "element",
+      "name": "c_80805e79",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
+      "class": "0x80805E84",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "row_hash",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "name_bank",
+          "offset": 40,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 4
+        },
+        {
+          "confidence": "verified",
+          "name": "name_hash",
+          "offset": 44,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "description_bank",
+          "offset": 48,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 4
+        },
+        {
+          "confidence": "verified",
+          "name": "description_hash",
+          "offset": 52,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "short_name_bank",
+          "offset": 56,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 4
+        },
+        {
+          "confidence": "verified",
+          "name": "short_name_hash",
+          "offset": 60,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        }
+      ],
+      "kind": "element",
+      "name": "c_80805e84",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
+      "class": "0x80805E88",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "node_hash",
+          "offset": 32,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        }
+      ],
+      "kind": "element",
+      "name": "c_80805e88",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
       "category": "Investment / Table",
       "class": "0x80805EA9",
       "fields": [],
@@ -20546,6 +20825,28 @@
       "name_source": "manual",
       "notes": "Native component of an actor behavior config: the SEntity.components row whose config default_instance has this class word (917 of 7,806 RSAT actors, never two). Construct handler 0x7FF742CF5DA0.",
       "source": "verified"
+    },
+    {
+      "class": "0x80806A65",
+      "fields": [
+        {
+          "confidence": "inferred",
+          "name": "frame",
+          "offset": 0,
+          "type": 3
+        },
+        {
+          "confidence": "inferred",
+          "name": "event_kind",
+          "offset": 2,
+          "type": 0
+        }
+      ],
+      "kind": "resource",
+      "name": "animation_event_kind6",
+      "name_source": "manual",
+      "notes": "Clip event payload; every installed one has event_kind 6. Meaning of the kind unknown.",
+      "source": "inferred"
     },
     {
       "class": "0x80806B02",
@@ -22342,6 +22643,33 @@
             "0x80806F9B"
           ],
           "type": 23
+        },
+        {
+          "confidence": "verified",
+          "name": "light_shaft_pass",
+          "offset": 108,
+          "refs": [
+            "RE/95_renderer_data_and_tfx.md"
+          ],
+          "type": 0
+        },
+        {
+          "confidence": "verified",
+          "name": "light_shaft_pass_alt",
+          "offset": 109,
+          "refs": [
+            "RE/95_renderer_data_and_tfx.md"
+          ],
+          "type": 0
+        },
+        {
+          "confidence": "verified",
+          "name": "hidden_in_transparents",
+          "offset": 110,
+          "refs": [
+            "RE/95_renderer_data_and_tfx.md"
+          ],
+          "type": 0
         }
       ],
       "kind": "element",
@@ -26967,6 +27295,42 @@
       "stride": 2
     },
     {
+      "class": "0x80807459",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "map_node_index",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 4
+        },
+        {
+          "confidence": "verified",
+          "name": "kind_hash",
+          "offset": 24,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "activity_index",
+          "offset": 32,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 4
+        }
+      ],
+      "kind": "element",
+      "name": "c_80807459",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
       "class": "0x80807484",
       "fields": [
         {
@@ -27283,6 +27647,78 @@
       "stride": 32
     },
     {
+      "class": "0x80807510",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "graph_hash",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "graph",
+          "offset": 16,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 23
+        }
+      ],
+      "kind": "element",
+      "name": "c_80807510",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
+      "class": "0x80807514",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "node_hash",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        }
+      ],
+      "kind": "element",
+      "name": "c_80807514",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
+      "class": "0x80807519",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "node_hash",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "activity_index",
+          "offset": 4,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 5
+        }
+      ],
+      "kind": "element",
+      "name": "c_80807519",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
       "category": "Investment / Table",
       "class": "0x80807533",
       "fields": [],
@@ -27581,6 +28017,33 @@
       "kind": "tag",
       "name": "c_808076d5",
       "source": "inferred"
+    },
+    {
+      "class": "0x808076D8",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "graph_index",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 0
+        },
+        {
+          "confidence": "verified",
+          "name": "node_index",
+          "offset": 2,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 2
+        }
+      ],
+      "kind": "element",
+      "name": "c_808076d8",
+      "name_source": "manual",
+      "source": "verified"
     },
     {
       "category": "Investment / Table",
@@ -29264,6 +29727,60 @@
       "kind": "tag",
       "name": "c_80807a30",
       "source": "inferred"
+    },
+    {
+      "class": "0x80807A35",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "map_node_hash",
+          "offset": 0,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        }
+      ],
+      "kind": "element",
+      "name": "c_80807a35",
+      "name_source": "manual",
+      "source": "verified"
+    },
+    {
+      "class": "0x80807A3A",
+      "fields": [
+        {
+          "confidence": "verified",
+          "name": "destination_index",
+          "offset": 16,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 0
+        },
+        {
+          "confidence": "verified",
+          "name": "map_name_hash",
+          "offset": 48,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        },
+        {
+          "confidence": "verified",
+          "name": "bubble_hash",
+          "offset": 52,
+          "refs": [
+            "RE/27_investment_content_tables.md"
+          ],
+          "type": 25
+        }
+      ],
+      "kind": "element",
+      "name": "c_80807a3a",
+      "name_source": "manual",
+      "source": "verified"
     },
     {
       "category": "Investment / Table",
@@ -35232,6 +35749,50 @@
       "source": "inferred"
     },
     {
+      "class": "0x80809031",
+      "fields": [
+        {
+          "confidence": "inferred",
+          "name": "frame",
+          "offset": 0,
+          "type": 3
+        },
+        {
+          "confidence": "inferred",
+          "name": "event_kind",
+          "offset": 2,
+          "type": 0
+        }
+      ],
+      "kind": "resource",
+      "name": "animation_event_kind5",
+      "name_source": "manual",
+      "notes": "Clip event payload; every installed one has event_kind 5. Meaning of the kind unknown.",
+      "source": "inferred"
+    },
+    {
+      "class": "0x80809032",
+      "fields": [
+        {
+          "confidence": "inferred",
+          "name": "frame",
+          "offset": 0,
+          "type": 3
+        },
+        {
+          "confidence": "inferred",
+          "name": "event_kind",
+          "offset": 2,
+          "type": 0
+        }
+      ],
+      "kind": "resource",
+      "name": "animation_event_kind4",
+      "name_source": "manual",
+      "notes": "Clip event payload; every installed one has event_kind 4. Meaning of the kind unknown.",
+      "source": "inferred"
+    },
+    {
       "class": "0x80809033",
       "fields": [
         {
@@ -35260,6 +35821,24 @@
           "refs": [
             "St/SunriseStudio.Animation/AnimationClipNames.cs:78",
             "St/SunriseStudio.Viewport/WeaponEffectPreviewSource.cs:28"
+          ],
+          "type": 0
+        },
+        {
+          "confidence": "inferred",
+          "name": "view_filter",
+          "offset": 4,
+          "refs": [
+            "RE/98 \"Particle triggers on weapon clips\""
+          ],
+          "type": 0
+        },
+        {
+          "confidence": "inferred",
+          "name": "detached_spawn",
+          "offset": 5,
+          "refs": [
+            "RE/98 \"Particle triggers on weapon clips\""
           ],
           "type": 0
         },
@@ -35305,6 +35884,28 @@
         "unknown_clip_particle_event"
       ],
       "source": "verified"
+    },
+    {
+      "class": "0x8080903A",
+      "fields": [
+        {
+          "confidence": "inferred",
+          "name": "frame",
+          "offset": 0,
+          "type": 3
+        },
+        {
+          "confidence": "inferred",
+          "name": "event_kind",
+          "offset": 2,
+          "type": 0
+        }
+      ],
+      "kind": "resource",
+      "name": "animation_event_kind2",
+      "name_source": "manual",
+      "notes": "Clip event payload; every installed one has event_kind 2. Meaning of the kind unknown.",
+      "source": "inferred"
     },
     {
       "class": "0x80809071",

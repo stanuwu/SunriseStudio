@@ -115,6 +115,14 @@ public sealed partial class ComponentSlotCatalog
     public static ComponentSlotCatalog Build(PackageCatalog catalog, CancellationToken token = default) =>
         new ComponentSlotBuilder(catalog).Build(token);
 
+    /** @return The slots of one installed authored object that reach a config; an incomplete walk throws. */
+    public static ImmutableArray<ComponentSlotEvidence> OwnerSlots(PackageCatalog catalog, uint ownerTag, CancellationToken token = default)
+    {
+        var read = new Dictionary<uint, ComponentSlotNode>();
+        var owner = Analyze(ownerTag, tag => read.TryGetValue(tag, out var node) ? node : read[tag] = ReadNode(catalog, tag), token);
+        return owner.Error is null ? owner.Evidence : throw new InvalidDataException($"Owner 0x{ownerTag:X8}: {owner.Error}");
+    }
+
     /** Changed nodes invalidate only owners that depended on them; missing links remain dependencies. */
     public ComponentSlotCatalog Refresh(PackageCatalog catalog, IEnumerable<uint> changedTags,
         out IReadOnlySet<uint> affectedClasses,

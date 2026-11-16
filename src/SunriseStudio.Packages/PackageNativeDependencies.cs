@@ -13,6 +13,8 @@ public static class PackageNativeDependencies
     private const uint SoundEventClass = SWwiseEvent.Class;
     private const uint ConfigClass = SEntityConfig.Class, ConfigSchemaClass = SReplicationSchema.Class;
     private const uint EntityClass = SEntity.Class;
+    // Clip definition, clip, named query table, 0x80808EE1 (a selector's second table) and retarget table.
+    private static readonly HashSet<uint> AnimationAssets = [0x808036F6, 0x80808F49, 0x80803465, 0x80808EE1, 0x80809071];
     private static readonly (int Offset, int Subtype)[] Stages =
     [
         (TagView.FieldOffset<STechnique>(nameof(STechnique.VertexShader)), 1), (TagView.FieldOffset<STechnique>(nameof(STechnique.HAb56cff8)), -1),
@@ -70,6 +72,14 @@ public static class PackageNativeDependencies
                 throw new InvalidDataException($"Asset {tag:X8} has an invalid {role} dependency {target:X8}.");
             if (target != tag && IsResident(entry.TypeInfo)) result.Add(target);
         }
+        // Layouts differ per component and asset, so every aligned word that names a resident tag is taken.
+        void LinkNamed()
+        {
+            for (int at = 0; at + sizeof(uint) <= data.Length; at += sizeof(uint))
+                if (TagRead.U32(data.Span, at) is var target and >= TagHashes.Base && target != tag
+                    && Entry(target) is { Type: 8 or 16 } named && IsResident(named.TypeInfo))
+                    result.Add(target);
+        }
 
         if (type is 32 or 33 or 34)
             Link(reference, entry => entry.Type == type + 8 && entry.SubType == subtype, "payload");
@@ -116,6 +126,12 @@ public static class PackageNativeDependencies
                     Link(TagRead.U32(data.Span, frame), entry => entry.Type == 32 && entry.SubType is >= 1 and <= 3,
                         "bitmap texture");
         }
+        // An interface draws the bitmaps its handle values name, so they load with it.
+        if (type is 8 or 16 && reference == CuiResource.Class)
+            foreach (int row in Rows(data, TagView.FieldOffset<CuiResource>("ValuePool.HandleValues"), C80804690.Class,
+                         Unsafe.SizeOf<C80804690>()))
+                if (TagRead.U32(data.Span, row) is var target && Entry(target) is { Reference: SIconBitmap.Class })
+                    Link(target, _ => true, "interface bitmap");
         // A Wwise event plays only when its bank (type 26, subtype 5) is loaded with it.
         if (type is 8 or 16 && reference == SoundEventClass)
         {
@@ -130,6 +146,9 @@ public static class PackageNativeDependencies
                          Unsafe.SizeOf<SPatternComponent>()))
                 Link(TagRead.U32(data.Span, row + TagView.FieldOffset<SPatternComponent>(nameof(SPatternComponent.Config))),
                     entry => entry.Reference == ConfigClass, "entity config");
+        // An entity's class record names the entity back; a copied entity needs its own copy loaded.
+        if (type is 8 or 16 && reference == EntityClass && TagView.FitsThrough<SEntity>(data.Span, 0, nameof(SEntity.ClassRecordGameplayRoot)))
+            Link(TagRead.U32(data.Span, TagView.FieldOffset<SEntity>(nameof(SEntity.ClassRecordGameplayRoot))), entry => entry.Reference == SNetworkClassRecord.Class, "class record");
         // A config's schema is resident wherever the config is.
         if (type is 8 or 16 && reference == ConfigClass)
         {
@@ -137,7 +156,18 @@ public static class PackageNativeDependencies
                 throw new InvalidDataException($"Config {tag:X8} is truncated.");
             Link(TagRead.U32(data.Span, TagView.FieldOffset<SEntityConfig>(nameof(SEntityConfig.ConfigSchema))), entry => entry.Reference == ConfigSchemaClass,
                 "config schema");
+            LinkNamed();
         }
+        // An animation asset resolves the tags it names (clips, query tables, events) by handle while
+        // it plays; a missing one is a null handle.
+        if (type is 8 or 16 && AnimationAssets.Contains(reference)) LinkNamed();
+        // A placement list's rows build their entities, so the entities load with it.
+        if (type is 8 or 16 && reference == SMapPlacements.Class)
+            foreach (int row in Rows(data, TagView.FieldOffset<SMapPlacements>(nameof(SMapPlacements.Placements)), AuthoredPlacementEntry.Class,
+                         Unsafe.SizeOf<AuthoredPlacementEntry>()))
+                if (TagRead.U32(data.Span, row + TagView.FieldOffset<AuthoredPlacementEntry>(nameof(AuthoredPlacementEntry.ClassTag))) is var placed
+                    && Entry(placed) is { Reference: EntityClass })
+                    Link(placed, _ => true, "placed entity");
         if (type is 8 or 16 && reference == ParticleSystemClass)
         {
             if (!TagView.FitsThrough<SParticleSystem>(data.Span, 0, nameof(SParticleSystem.Material4)))

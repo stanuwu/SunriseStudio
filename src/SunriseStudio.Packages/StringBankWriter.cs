@@ -124,6 +124,8 @@ public sealed class StringBankTemplate
         {
             int row = combinations.Data + i * CombinationStride;
             long first = row + FirstPart + TagRead.I64(data, row + FirstPart), count = TagRead.I64(data, row + PartCount);
+            // An empty string has no parts; installed banks point its first part at the row itself.
+            if (count == 0) continue;
             if (count < 0 || first < parts.Data || (first - parts.Data) % PartStride != 0 || first > partsEnd
                 || count > (partsEnd - first) / PartStride)
                 throw Fail($"combination {i} points outside the part array");
@@ -219,14 +221,15 @@ public static class StringBankWriter
      * Builds a complete bank from a template and the full string list.
      * @param dataTag Tag the new English data entry gets; every language slot names it.
      * @param strings Every string of the bank, including ones it already held.
+     * @param empty Hashes that name an empty string, written as rows with no part, as installed banks hold them.
      * @return Container and data payloads; unknown bytes are the template's.
      */
     public static (byte[] Container, byte[] Data) Write(StringBankTemplate template, uint dataTag,
-        IReadOnlyList<StringBankText> strings)
+        IReadOnlyList<StringBankText> strings, IReadOnlyCollection<uint>? empty = null)
     {
         ArgumentNullException.ThrowIfNull(template);
-        var rows = Prepare(template, strings);
-        int count = rows.Count;
+        var rows = Prepare(template, strings, empty ?? []);
+        int count = rows.Count, partRows = rows.Count(row => row.Bytes is not null);
         const int marker = TagView.ClassWordSize, header = TagArray.HeaderSize;
         int containerHeader = Align(template.ContainerPrefix.Length + marker);
         byte[] container = new byte[checked(containerHeader + header + count * StringBankTemplate.HashStride)];
@@ -238,15 +241,15 @@ public static class StringBankWriter
         if (template.ContainerSized) Q(container, StringBankTemplate.TagSize, container.Length);
 
         int terminator = template.Terminated ? 1 : 0;
-        int textBytes = rows.Sum(row => row.Bytes.Length + terminator);
+        int textBytes = rows.Sum(row => row.Bytes is null ? 0 : row.Bytes.Length + terminator);
         int partHeader = Align(StringBankTemplate.DataFixed + marker), partStart = partHeader + header;
-        int partEnd = partStart + count * StringBankTemplate.PartStride;
+        int partEnd = partStart + partRows * StringBankTemplate.PartStride;
         bool wide = template.HasWide;
         int wideHeader = Align(partEnd + marker);
         int textHeader = Align((wide ? wideHeader + header + StringBankTemplate.WideStride : partEnd) + marker), textStart = textHeader + header;
         int combinationHeader = Align(textStart + textBytes + marker), combinationStart = combinationHeader + header;
         byte[] data = new byte[checked(combinationStart + count * StringBankTemplate.CombinationStride)];
-        Descriptor(data, StringBankTemplate.PartArray, count, partHeader);
+        Descriptor(data, StringBankTemplate.PartArray, partRows, partHeader);
         if (wide)
         {
             // One zero wide character, as the template holds; the new array is zeroed already.
@@ -255,22 +258,24 @@ public static class StringBankWriter
         }
         Descriptor(data, StringBankTemplate.TextArray, textBytes, textHeader);
         Descriptor(data, StringBankTemplate.CombinationArray, count, combinationHeader);
-        Header(data, partHeader, count, template.PartRowType);
+        Header(data, partHeader, partRows, template.PartRowType);
         Header(data, textHeader, textBytes, template.TextRowType);
         Header(data, combinationHeader, count, template.CombinationRowType);
-        int cursor = textStart;
+        int cursor = textStart, next = 0;
         for (int i = 0; i < count; i++)
         {
-            int part = partStart + i * StringBankTemplate.PartStride;
+            int combination = combinationStart + i * StringBankTemplate.CombinationStride;
+            // An empty row keeps its zeroed link to itself and a count of 0.
+            if (rows[i].Bytes is not { } text) continue;
+            int part = partStart + next++ * StringBankTemplate.PartStride;
             template.PartPrototype.CopyTo(data, part);
             Q(data, part + StringBankTemplate.PartText, cursor - part - StringBankTemplate.PartText);
             U(data, part + StringBankTemplate.PartVariable, StringHash.Empty);
-            S(data, part + StringBankTemplate.PartBytes, (ushort)rows[i].Bytes.Length);
+            S(data, part + StringBankTemplate.PartBytes, (ushort)text.Length);
             S(data, part + StringBankTemplate.PartCharacters, (ushort)rows[i].Characters);
             S(data, part + StringBankTemplate.PartShift, 0);
-            rows[i].Bytes.CopyTo(data, cursor);
-            cursor += rows[i].Bytes.Length + terminator;
-            int combination = combinationStart + i * StringBankTemplate.CombinationStride;
+            text.CopyTo(data, cursor);
+            cursor += text.Length + terminator;
             Q(data, combination + StringBankTemplate.FirstPart, part - combination - StringBankTemplate.FirstPart);
             Q(data, combination + StringBankTemplate.PartCount, 1);
         }
@@ -355,13 +360,17 @@ public static class StringBankWriter
         bool IsData(uint value) => catalog.TryGetEntry(value, out var data) && data.Reference == DataClass;
     }
 
-    private sealed record Row(uint Hash, byte[] Bytes, int Characters);
+    // Bytes is null for an empty string, which has no part.
+    private sealed record Row(uint Hash, byte[]? Bytes, int Characters);
 
     /** Rejects what the layout cannot hold and orders rows the way the template orders them. */
-    private static List<Row> Prepare(StringBankTemplate template, IReadOnlyList<StringBankText> strings)
+    private static List<Row> Prepare(StringBankTemplate template, IReadOnlyList<StringBankText> strings,
+        IReadOnlyCollection<uint>? empty = null)
     {
         ArgumentNullException.ThrowIfNull(strings);
-        if (strings.Count is 0 or > MaximumStrings) throw new InvalidDataException($"A bank holds 1 to {MaximumStrings} strings.");
+        empty ??= [];
+        if (strings.Count is 0 || strings.Count + empty.Count > MaximumStrings)
+            throw new InvalidDataException($"A bank holds 1 to {MaximumStrings} strings.");
         var rows = new List<Row>(strings.Count);
         var seen = new HashSet<uint>();
         foreach (var value in strings)
@@ -375,6 +384,12 @@ public static class StringBankWriter
                 ?? throw new InvalidDataException("The template bank does not show whether its length field counts bytes or characters. Use ASCII text.");
             if (characters > ushort.MaxValue) throw new InvalidDataException("A bank string is too long.");
             rows.Add(new(value.Hash, bytes, characters));
+        }
+        foreach (uint hash in empty)
+        {
+            if (hash == StringHash.Empty) throw new InvalidDataException("0x811C9DC5 cannot name a bank row.");
+            if (!seen.Add(hash)) throw new InvalidDataException($"String hash 0x{hash:X8} appears twice.");
+            rows.Add(new(hash, null, 0));
         }
         if (template.Sorted) rows.Sort((left, right) => left.Hash.CompareTo(right.Hash));
         return rows;

@@ -12,13 +12,17 @@ public sealed partial class StudioProject
     public const string ProjectFileName = "sunrise.project.json";
     // The newest manifest version this build reads and writes.
     public const int ManifestVersion = 7;
-    private const int MaximumManifestBytes = 16 * 1024 * 1024;
+    // A whole ported region lists about 76,000 assets, about 50 MB of manifest.
+    private const int MaximumManifestBytes = 128 * 1024 * 1024;
     private ProjectManifest manifest;
     public string DirectoryPath { get; }
     public string ManifestPath => Path.Combine(DirectoryPath, ProjectFileName);
     public string Name => manifest.Name;
     public IReadOnlyList<ProjectAssetChange> Changes => manifest.Changes;
     public IReadOnlyList<AddedProjectAsset> AddedAssets => manifest.AddedAssets;
+    /** The first free entry of a package: one past the highest entry an added asset holds in it. */
+    public int NextEntry(ushort packageId) => AddedAssets.Where(asset => asset.Native?.PackageId == packageId)
+        .Select(asset => asset.Native!.EntryIndex ?? -1).DefaultIfEmpty(-1).Max() + 1;
     public ModMetadata? Mod => manifest.Mod;
     public IReadOnlyList<ProjectObjectName> ObjectNames => manifest.ObjectNames ?? [];
     /** Counts saved manifest changes; a failed save leaves it unchanged. */

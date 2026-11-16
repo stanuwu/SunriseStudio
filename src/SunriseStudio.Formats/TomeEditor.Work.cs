@@ -233,10 +233,14 @@ public static partial class TomeEditor
             var (ix, iy, iz) = (SlabIndex(point, 0), SlabIndex(point, 1), SlabIndex(point, 2));
             if ((ix, iy, iz) == (1, 1, 1)) throw new InvalidOperationException("A slab point lies inside the closed box.");
             if (Slabs.TryGetValue((cell, ix, iy, iz), out int id)) return id;
-            // Once every slab exists, a point past the cell's box belongs to the nearest one.
+            // Once every slab exists, a point past the cell's box belongs to the nearest one. A cell whose
+            // stored box lies inside the closed box's planes got no slab and keeps its own number.
             if (SlabsCreated)
-                return Slabs.Where(pair => pair.Key.Cell == cell)
-                    .MinBy(pair => Math.Abs(pair.Key.X - ix) + Math.Abs(pair.Key.Y - iy) + Math.Abs(pair.Key.Z - iz)).Value;
+            {
+                var own = Slabs.Where(pair => pair.Key.Cell == cell).ToList();
+                return own.Count == 0 ? cell
+                    : own.MinBy(pair => Math.Abs(pair.Key.X - ix) + Math.Abs(pair.Key.Y - iy) + Math.Abs(pair.Key.Z - iz)).Value;
+            }
             var parent = Tile.Cells[cell];
             var (lo, hi) = SplitBounds[cell];
             for (int axis = 0; axis < 3; axis++)

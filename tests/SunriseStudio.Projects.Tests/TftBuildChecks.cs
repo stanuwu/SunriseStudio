@@ -24,11 +24,11 @@ static class TftBuildChecks
         var schema = Schema();
 
         var project = StudioProject.Create(Path.Combine(parent, "tft-project"), "Loose tags");
-        Put(project, Tag(schema, "hoenn/a.holder", "hoenn/b.holder", "first", wide: "hoenn/b.holder", gameName: "map:hoenn:root"));
-        Put(project, Tag(schema, "hoenn/b.holder", "#0x80A00000", "second"));
+        Put(project, Tag(schema, "demo/a.holder", "demo/b.holder", "first", wide: "demo/b.holder", gameName: "map:demo:root"));
+        Put(project, Tag(schema, "demo/b.holder", "#0x80A00000", "second"));
         var build = project.Build(catalog, tagSchema: schema);
         var allocator = TagAllocator.Parse(File.ReadAllBytes(Path.Combine(project.DirectoryPath, StudioProject.AllocationFileName)));
-        uint a = allocator.Tags["hoenn/a.holder"], b = allocator.Tags["hoenn/b.holder"];
+        uint a = allocator.Tags["demo/a.holder"], b = allocator.Tags["demo/b.holder"];
         Require(build.TagFiles.Count == 2 && b == a + 1 && !catalog.ContainsInstalledPackage(TagHashes.Split(a).PackageId),
             "The build did not compile both files into one new package.");
 
@@ -45,7 +45,8 @@ static class TftBuildChecks
                 && TagDocument.Parse(first, Holder, schema).Problems.Count == 0, "A built reference does not name its target.");
             Require(built.Resolve64(BinaryPrimitives.ReadUInt64LittleEndian(first.AsSpan(WideField))) == b,
                 "A wide reference to a project tag does not resolve through the built alias.");
-            Require(built.GetName(a) == "map:hoenn:root" && built.GetName(b) == "hoenn/b.holder", "The built package names are wrong.");
+            // A tag without a game name stays unnamed in the package.
+            Require(built.GetName(a) == "map:demo:root" && built.GetName(b) is null or "", "The built package names are wrong.");
         }
 
         // A second build keeps every hash, and the allocation table does not change.

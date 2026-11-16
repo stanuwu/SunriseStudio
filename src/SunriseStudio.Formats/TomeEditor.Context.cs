@@ -159,7 +159,7 @@ public static partial class TomeEditor
     }
 
     /** A portal from a tile's cell; z rounds to the nearest grid step and the rectangle rounds outward. */
-    private static TomePortal Make(TomeTile tile, int face, uint toSlot, int toCell, Vector3 min, Vector3 max, bool hierarchy)
+    internal static TomePortal Make(TomeTile tile, int face, uint toSlot, int toCell, Vector3 min, Vector3 max, bool hierarchy)
     {
         int axis = face >> 1, xa = (1 << axis) & 3, ya = (1 << xa) & 3;
         var g0 = ToGrid(tile, min);
@@ -170,7 +170,7 @@ public static partial class TomeEditor
     }
 
     /** The world box a portal covers, flat on its axis. */
-    private static (Vector3 Min, Vector3 Max) PortalBox(TomeTile tile, TomePortal portal)
+    internal static (Vector3 Min, Vector3 Max) PortalBox(TomeTile tile, TomePortal portal)
     {
         int axis = portal.Axis, xa = (1 << axis) & 3, ya = (1 << xa) & 3;
         var g0 = new float[3]; var g1 = new float[3];

@@ -152,6 +152,41 @@ public static class CollisionCompoundWriter
         return builder.BuildLike(file);
     }
 
+    /**
+     * Writes a new compound from a template's header and root object: only these rows, each naming
+     * an import, and no in-file child objects.
+     * @param childKeyBits The new +0x30.
+     */
+    public static byte[] WriteNew(StaticCompoundShape template, IReadOnlyList<CompoundInstanceRow> rows, byte[] nodes,
+        Vector3 domainMin, Vector3 domainMax, sbyte childKeyBits)
+    {
+        var file = template.File;
+        int root = file.RootOffset;
+        if (rows.Count == 0) throw new ArgumentException("A compound needs at least one instance.", nameof(rows));
+        if (rows.Any(row => row.Import is null)) throw new NotSupportedException("A new compound names every child by import.");
+        if (nodes.Length != (2 * rows.Count - 1) * CompoundTree.NodeSize) throw new ArgumentException("The tree needs 2n - 1 nodes.", nameof(nodes));
+        if (file.I32(root + ExtraInfos + 8) != 0 || file.I32(root + DisabledKeys + 8) != 0)
+            throw new NotSupportedException("The template compound has extra infos or disabled keys.");
+        var builder = new HavokPackfileBuilder();
+        var shape = file.Bytes.AsSpan(file.Absolute(root), ObjectSize).ToArray();
+        foreach (int field in new[] { Instances, ExtraInfos, Tree }) shape.AsSpan(field, 8).Clear();
+        shape[KeyBits] = (byte)childKeyBits;
+        WriteFloats(shape, Tree + 0x10, domainMin.X, domainMin.Y, domainMin.Z);
+        WriteFloats(shape, Tree + 0x20, domainMax.X, domainMax.Y, domainMax.Z);
+        if (builder.PlaceObject(shape, StaticCompoundShape.ClassName) != root)
+            throw new NotSupportedException("The template compound is not the first object of its packfile.");
+        var instances = new byte[StaticCompoundShape.InstanceSize * rows.Count];
+        for (int i = 0; i < rows.Count; i++)
+        {
+            rows[i].Bytes.CopyTo(instances, StaticCompoundShape.InstanceSize * i);
+            instances.AsSpan(StaticCompoundShape.InstanceSize * i + 0x30, 8).Clear();
+        }
+        builder.Array(root + Instances, instances, rows.Count);
+        builder.Array(root + Tree, nodes, nodes.Length / CompoundTree.NodeSize);
+        for (int i = 0; i < rows.Count; i++) builder.Import(root + ObjectSize + StaticCompoundShape.InstanceSize * i + 0x30, rows[i].Import!);
+        return builder.BuildLike(file);
+    }
+
     /** Every object other than the root, with its bytes up to the next object or the data end. */
     private static IEnumerable<(int Offset, int Size)> ChildObjects(HavokPackfile file)
     {

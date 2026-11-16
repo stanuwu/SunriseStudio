@@ -11,8 +11,29 @@ public static partial class CompatibleSkinnedMesh
         CompatibleSkinReplacementOptions options, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+        return Prepare(catalog, ReadGltf(catalog, path, options.EntityTag).Input, options, token);
+    }
+
+    /**
+     * A new model from a glb skinned to an installed entity's skeleton, for a copy of that entity.
+     * The file's joints must match the entity's bind pose; the model is added, not replaced.
+     * @param entityTag The installed entity whose skeleton the file was exported with.
+     * @param options The mesh template, as PrepareNewRig takes it.
+     */
+    public static PreparedCompatibleSkin PrepareNewRigGltf(PackageCatalog catalog, string path, uint entityTag,
+        CompatibleSkinReplacementOptions options, NewRigPart? part = null, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        var (input, rig) = ReadGltf(catalog, path, entityTag);
+        ValidateBones(input.Bones, rig);
+        return PrepareNewRig(catalog, input.Geometry, input.Influences, rig.Bones.Count, options, token: token, part: part);
+    }
+
+    /** Reads a skinned glb and puts its joints and influences in the entity's package bone order. */
+    private static (CompatibleSkinnedMeshInput Input, SkeletonRig Rig) ReadGltf(PackageCatalog catalog, string path, uint entityTag)
+    {
         var file = GltfInterchange.ReadSkinned(path);
-        var rig = new SkeletonReader(catalog).Read(options.EntityTag);
+        var rig = new SkeletonReader(catalog).Read(entityTag);
         if (file.Joints.Count != rig.Bones.Count)
             throw new InvalidDataException("Export every joint of the selected entity's skeleton.");
         var mapping = new int[file.Joints.Count];
@@ -20,10 +41,10 @@ public static partial class CompatibleSkinnedMesh
         for (int index = 0; index < file.Joints.Count; index++)
         {
             var joint = file.Joints[index];
-            if (joint.SourceEntityTag is uint owner && owner != options.EntityTag)
+            if (joint.SourceEntityTag is uint owner && owner != entityTag)
                 throw new InvalidDataException("The file's bone properties name a different entity.");
             int mapped;
-            if (joint.SourceBoneIndex is int ordinal && joint.SourceEntityTag == options.EntityTag)
+            if (joint.SourceBoneIndex is int ordinal && joint.SourceEntityTag == entityTag)
                 mapped = ordinal;
             else
             {
@@ -48,6 +69,6 @@ public static partial class CompatibleSkinnedMesh
         }
         var influences = file.Influences.Select(value => new VertexSkinWeights(mapping[value.Bone0],
             mapping[value.Bone1], mapping[value.Bone2], mapping[value.Bone3], value.Weights)).ToArray();
-        return Prepare(catalog, new(file.Geometry, bones, influences), options, token);
+        return (new(file.Geometry, bones, influences), rig);
     }
 }

@@ -8,7 +8,32 @@ public sealed record AuthoredSoundBank(byte[] Bytes, uint BankId, uint EventId, 
 
 /** One sound or container of a version-113 bank: its links, its source and its fire-rate transition curves. */
 public sealed record WwiseNode(byte Type, uint Id, uint Parent, IReadOnlyList<uint> Children, uint SourcePlugin,
-    uint SourceId, byte TransitionMode, IReadOnlyList<IReadOnlyList<(float X, float Y)>> RateOfFireTransitions);
+    uint SourceId, byte TransitionMode, IReadOnlyList<IReadOnlyList<(float X, float Y)>> RateOfFireTransitions)
+{
+    /** A switch container's group ID; zero for another node. */
+    public uint SwitchGroup { get; init; }
+    /** A switch container's children, each with the switch value that plays it. */
+    public IReadOnlyDictionary<uint, uint> SwitchValues { get; init; } = new Dictionary<uint, uint>();
+    /** The attenuation this node sets for itself and its children; zero when it takes its parent's. */
+    public uint Attenuation { get; init; }
+}
+
+/** One attenuation share set: its curves as distance and value pairs, in stored order. */
+public sealed record WwiseAttenuation(uint Id, IReadOnlyList<IReadOnlyList<(float Distance, float Value)>> Curves)
+{
+    /** The farthest distance any curve reaches. */
+    public float MaxDistance => Curves.SelectMany(curve => curve).Select(point => point.Distance).DefaultIfEmpty(0).Max();
+}
+
+/**
+ * Choices beyond one wave for every sound.
+ * @param Variations More waves for the sounds of each random or sequence container; with the main
+ * wave they go round the container's sounds in order.
+ * @param Switches Switch value ID to the wave every sound of that switch branch plays.
+ * @param MaxDistance The farthest distance of the sound's distance curves; each curve is stretched to it.
+ */
+public sealed record WwiseSoundOptions(IReadOnlyList<PcmWave>? Variations = null,
+    IReadOnlyDictionary<uint, PcmWave>? Switches = null, float? MaxDistance = null);
 
 /**
  * A version-113 bank that keeps a template event's whole hierarchy and plays in-memory PCM from every
@@ -17,7 +42,7 @@ public sealed record WwiseNode(byte Type, uint Id, uint Parent, IReadOnlyList<ui
 public static class WwiseSoundBank
 {
     // HIRC object types.
-    private const byte Sound = 2, Action = 3, Event = 4, RandomSequence = 5, Switch = 6, Layer = 9;
+    private const byte Sound = 2, Action = 3, Event = 4, RandomSequence = 5, Switch = 6, ActorMixer = 7, Layer = 9, Attenuation = 14;
     // The runtime decodes plug-in 0x00010001 (PCM) itself; stream type 0 keeps the media in the bank.
     private const uint PcmPlugin = 0x00010001;
     // The rate_of_fire game parameter, in rounds per second.
@@ -46,10 +71,12 @@ public static class WwiseSoundBank
      * Copies a template bank with new IDs; each codec leaf plays the wave, or the release wave when
      * only the paired event plays it. Trigger-rate containers follow rate_of_fire, one shot per round.
      * @param name Unique lower-case name; the bank and event IDs derive from it.
+     * @param options Variations, switch branches and the farthest distance; a choice the template cannot take is refused.
      */
     public static AuthoredSoundBank Build(AudioBank template, uint templateEventId, uint templateRelatedId,
-        string name, PcmWave wave, PcmWave? release = null)
+        string name, PcmWave wave, PcmWave? release = null, WwiseSoundOptions? options = null)
     {
+        options ??= new();
         RequireLayout(template);
         var objects = template.Objects.ToDictionary(item => item.Id);
         if (!objects.TryGetValue(templateEventId, out var mainEvent) || mainEvent.Type != Event)
@@ -83,25 +110,131 @@ public static class WwiseSoundBank
         var releaseLeaves = objects.TryGetValue(templateRelatedId, out var relatedEvent) && relatedEvent.Type == Event
             ? Reach(PlayTargets(relatedEvent, objects), layouts).Except(mainLeaves).ToHashSet() : [];
         bool useRelease = release is not null && releaseLeaves.Any(id => layouts[id].Codec);
-        uint mediaId = ObjectId(name + "/media"), releaseId = ObjectId(name + "/release");
-        var media = new List<(uint Id, byte[] Data)> { (mediaId, PcmWem(wave)) };
-        if (useRelease) media.Add((releaseId, PcmWem(release!)));
+        bool Released(uint id) => useRelease && releaseLeaves.Contains(id);
+        var chosen = ChooseWaves(template, layouts, wave, options, Released);
+        // One media per wave; the main wave keeps the plain media name.
+        var waves = new List<PcmWave> { wave };
+        foreach (var picked in chosen.Values)
+            if (!waves.Any(known => ReferenceEquals(known, picked))) waves.Add(picked);
+        var media = waves.Select((item, index) => (Id: ObjectId(index == 0 ? name + "/media" : $"{name}/media/{index}"), Data: PcmWem(item))).ToList();
+        int releaseMedia = -1;
+        if (useRelease) { releaseMedia = media.Count; media.Add((ObjectId(name + "/release"), PcmWem(release!))); }
+        if (media.Select(item => item.Id).Distinct().Count() != media.Count)
+            throw new InvalidDataException("A new media ID collides; choose another name.");
+        (uint Id, byte[] Data) MediaOf(uint leaf) => Released(leaf) ? media[releaseMedia]
+            : media[waves.FindIndex(known => ReferenceEquals(known, chosen.GetValueOrDefault(leaf, wave)))];
 
+        var (attenuationIds, inherited) = options.MaxDistance is { } farthest
+            ? PlanAttenuations(template, objects, layouts, name, farthest) : ([], []);
         var hirc = new List<(byte Type, uint Id, byte[] Data)>();
         foreach (var item in template.Objects)
         {
             if (layouts.TryGetValue(item.Id, out var layout))
             {
-                var source = useRelease && releaseLeaves.Contains(item.Id) ? media[1] : media[0];
-                hirc.Add((item.Type, ids[item.Id], Rewrite(item.Data, layout, ids, layerIds, source.Id, source.Data.Length)));
+                var source = MediaOf(item.Id);
+                hirc.Add((item.Type, ids[item.Id], Rewrite(item.Data, layout, ids, layerIds, source.Id, source.Data.Length,
+                    attenuationIds, inherited.GetValueOrDefault(item.Id))));
             }
             else if (item.Type == Action) hirc.Add((Action, ids[item.Id], RewriteAction(item.Data, objects, ids, template.Id, bankId)));
             else if (item.Type == Event) hirc.Add((Event, ids[item.Id], RewriteEvent(item.Data, ids)));
-            else hirc.Add((item.Type, item.Id, item.Data));
+            else
+            {
+                hirc.Add((item.Type, item.Id, item.Data));
+                // The stretched copy follows its share set, so it is loaded before any node names it.
+                if (item.Type == Attenuation && attenuationIds.TryGetValue(item.Id, out uint stretched))
+                    hirc.Add((Attenuation, stretched, StretchAttenuation(item, options.MaxDistance!.Value)));
+            }
         }
         uint related = templateRelatedId != StringHash.Empty && ids.TryGetValue(templateRelatedId, out uint mappedRelated)
             ? mappedRelated : StringHash.Empty;
         return new(Write(template, bankId, media, hirc), bankId, eventId, related);
+    }
+
+    /**
+     * Picks the wave of each sound that does not play the main wave.
+     * @param released True for a sound that plays the release wave; it takes no other.
+     * @return Sound ID to its wave.
+     */
+    private static Dictionary<uint, PcmWave> ChooseWaves(AudioBank template, IReadOnlyDictionary<uint, Layout> layouts, PcmWave wave,
+        WwiseSoundOptions options, Func<uint, bool> released)
+    {
+        var chosen = new Dictionary<uint, PcmWave>();
+        if (options.Switches is { Count: > 0 } switches)
+        {
+            int matched = 0;
+            foreach (var layout in layouts.Values)
+                foreach (var (child, value) in layout.SwitchOf)
+                {
+                    if (!switches.TryGetValue(value, out var branch)) continue;
+                    matched++;
+                    foreach (uint leaf in Reach([child], layouts).Where(leaf => layouts[leaf].Codec && !released(leaf))) chosen[leaf] = branch;
+                }
+            if (matched == 0) throw new InvalidDataException("The template bank has no switch branch for the given switch values.");
+        }
+        if (options.Variations is { Count: > 0 } variations)
+        {
+            PcmWave[] round = [wave, .. variations];
+            bool varied = false;
+            foreach (var container in template.Objects.Where(item => item.Type == RandomSequence))
+            {
+                var leaves = layouts[container.Id].ChildIds
+                    .Where(child => layouts.TryGetValue(child, out var layout) && layout.Codec && !chosen.ContainsKey(child) && !released(child))
+                    .ToList();
+                if (leaves.Count < 2) continue;
+                varied = true;
+                for (int index = 0; index < leaves.Count; index++) chosen[leaves[index]] = round[index % round.Length];
+            }
+            if (!varied) throw new InvalidDataException("The template bank has no random or sequence container with two sounds to vary.");
+        }
+        return chosen;
+    }
+
+    /**
+     * Finds the attenuations the rewritten nodes use. A node that sets its own keeps its block. A
+     * top node that takes a kept actor-mixer's positioning gets a copy of that block, since the
+     * mixer is shared with the installed bank and cannot change.
+     * @return Old attenuation ID to its stretched copy's ID, and node ID to the block it gains with
+     * the attenuation ID's offset in it.
+     */
+    private static (Dictionary<uint, uint> Ids, Dictionary<uint, (byte[] Block, int Attenuation)> Inherited) PlanAttenuations(
+        AudioBank template, IReadOnlyDictionary<uint, AudioBankObject> objects, IReadOnlyDictionary<uint, Layout> layouts,
+        string name, float maxDistance)
+    {
+        if (!(maxDistance > 0) || !float.IsFinite(maxDistance)) throw new InvalidDataException("The farthest distance must be above zero.");
+        var shareSets = template.Objects.Where(item => item.Type == Attenuation).Select(item => item.Id).ToHashSet();
+        var ids = new Dictionary<uint, uint>();
+        var inherited = new Dictionary<uint, (byte[], int)>();
+        void Stretch(uint attenuation) => ids.TryAdd(attenuation, ObjectId($"{name}/attenuation/{attenuation:X8}"));
+        foreach (var (id, layout) in layouts)
+        {
+            byte[] data = objects[id].Data;
+            if (layout.Attenuation >= 0)
+            {
+                if (shareSets.Contains(U32(data, layout.Attenuation))) Stretch(U32(data, layout.Attenuation));
+                continue;
+            }
+            // A node under another rewritten node takes that node's positioning.
+            uint parent = U32(data, layout.Parent);
+            if (layouts.ContainsKey(parent)) continue;
+            for (int depth = 0; depth < 64 && objects.TryGetValue(parent, out var mixer) && mixer.Type == ActorMixer; depth++)
+            {
+                var above = Parse(mixer);
+                if (above.Attenuation >= 0)
+                {
+                    uint attenuation = U32(mixer.Data, above.Attenuation);
+                    if (!shareSets.Contains(attenuation)) break;
+                    Stretch(attenuation);
+                    inherited[id] = (mixer.Data.AsSpan(above.Positioning.Start, above.Positioning.Length).ToArray(),
+                        above.Attenuation - above.Positioning.Start);
+                    break;
+                }
+                parent = U32(mixer.Data, above.Parent);
+            }
+        }
+        if (ids.Count == 0) throw new InvalidDataException("The template bank has no distance curve of its own to change.");
+        if (ids.Values.Distinct().Count() != ids.Count || ids.Values.Any(objects.ContainsKey))
+            throw new InvalidDataException("A new attenuation ID collides; choose another name.");
+        return (ids, inherited);
     }
 
     /** Lists a version-113 bank's sounds and containers in bank order. */
@@ -116,8 +249,60 @@ public static class WwiseSoundBank
                     .Select(index => (F32(item.Data, curve.Points + index * 12), F32(item.Data, curve.Points + index * 12 + 4))).ToArray())
                 .ToArray();
             return new WwiseNode(item.Type, item.Id, U32(item.Data, layout.Parent), layout.Children.Select(at => U32(item.Data, at)).ToArray(),
-                item.Type == Sound ? U32(item.Data, 0) : 0, item.Type == Sound ? U32(item.Data, 5) : 0, layout.TransitionMode, curves);
+                item.Type == Sound ? U32(item.Data, 0) : 0, item.Type == Sound ? U32(item.Data, 5) : 0, layout.TransitionMode, curves)
+            {
+                SwitchGroup = layout.SwitchGroup, SwitchValues = layout.SwitchOf,
+                Attenuation = layout.Attenuation >= 0 ? U32(item.Data, layout.Attenuation) : 0,
+            };
         }).ToArray();
+    }
+
+    /** Lists a version-113 bank's attenuation share sets. */
+    public static IReadOnlyList<WwiseAttenuation> Attenuations(AudioBank bank)
+    {
+        RequireLayout(bank);
+        return bank.Objects.Where(item => item.Type == Attenuation).Select(item => new WwiseAttenuation(item.Id,
+            AttenuationCurves(item).Select(curve => (IReadOnlyList<(float, float)>)Enumerable.Range(0, curve.Count)
+                .Select(index => (F32(item.Data, curve.Points + index * 12), F32(item.Data, curve.Points + index * 12 + 4))).ToArray())
+            .ToArray())).ToArray();
+    }
+
+    /**
+     * Walks a version-113 attenuation: cone, the curve each use takes, the curves, then RTPC curves.
+     * @return Each curve's first point and point count; each point is distance, value and interpolation.
+     */
+    private static List<(int Points, int Count)> AttenuationCurves(AudioBankObject item)
+    {
+        var read = new Reader(item.Data);
+        // A cone adds inside and outside angles, outside volume, and low-pass and high-pass values.
+        if (read.U8() != 0) read.Skip(5 * 4);
+        read.Skip(7);
+        int count = read.U8();
+        var curves = new List<(int, int)>(count);
+        for (int index = 0; index < count; index++)
+        {
+            read.Skip(1);
+            int points = read.U16();
+            curves.Add((read.At, points));
+            read.Skip(points * 12);
+        }
+        Rtpc(read, []);
+        if (read.At != item.Data.Length) throw new InvalidDataException($"Attenuation {item.Id} has an unknown layout.");
+        return curves;
+    }
+
+    /** The attenuation with every curve's distances stretched so the farthest point sits at `maxDistance`. */
+    private static byte[] StretchAttenuation(AudioBankObject item, float maxDistance)
+    {
+        byte[] data = item.Data.ToArray();
+        var curves = AttenuationCurves(item);
+        float farthest = curves.SelectMany(curve => Enumerable.Range(0, curve.Count).Select(index => F32(data, curve.Points + index * 12)))
+            .DefaultIfEmpty(0).Max();
+        if (!(farthest > 0)) throw new InvalidDataException($"Attenuation {item.Id} has no distance to stretch.");
+        foreach (var (points, count) in curves)
+            for (int index = 0; index < count; index++)
+                BinaryPrimitives.WriteSingleLittleEndian(data.AsSpan(points + index * 12), F32(data, points + index * 12) * maxDistance / farthest);
+        return data;
     }
 
     private static bool IsNode(AudioBankObject item) => item.Type is Sound or RandomSequence or Switch or Layer;
@@ -132,7 +317,16 @@ public static class WwiseSoundBank
 
     /** Where a node's IDs, source and curves sit; offsets are into the node's data. */
     private sealed record Layout(bool Codec, int SourceLength, int Parent, List<int> Children, List<uint> ChildIds,
-        List<int> Links, List<int> Layers, int Transition, byte TransitionMode, List<Curve> Curves);
+        List<int> Links, List<int> Layers, int Transition, byte TransitionMode, List<Curve> Curves)
+    {
+        /** The positioning byte and the block behind it. */
+        public (int Start, int Length) Positioning { get; init; }
+        /** Where the node's own attenuation ID sits, or -1 when it takes its parent's positioning. */
+        public int Attenuation { get; init; } = -1;
+        public uint SwitchGroup { get; init; }
+        /** A switch container's child IDs, each with its switch value. */
+        public Dictionary<uint, uint> SwitchOf { get; init; } = [];
+    }
 
     /** One RTPC curve: its point count sits at Points - 2. */
     private sealed record Curve(uint Id, byte Parameter, int Points, int Count);
@@ -151,8 +345,10 @@ public static class WwiseSoundBank
             codec = (plugin & 0xF) == 1;
             sourceLength = read.At;
         }
-        int parent = NodeBase(read, curves);
-        if (node.Type == RandomSequence)
+        int parent = NodeBase(read, curves, out var positioning, out int attenuation);
+        uint switchGroup = 0; var switchOf = new Dictionary<uint, uint>();
+        if (node.Type == ActorMixer) ChildList(read, children);
+        else if (node.Type == RandomSequence)
         {
             read.Skip(6);
             transition = read.At;
@@ -165,14 +361,21 @@ public static class WwiseSoundBank
         }
         else if (node.Type == Switch)
         {
-            read.Skip(1 + 4 + 4 + 1);
+            // Group type, group ID, default switch value, continuous validation.
+            read.Skip(1);
+            switchGroup = read.U32();
+            read.Skip(4 + 1);
             ChildList(read, children);
             uint groups = read.U32();
             for (int group = 0; group < groups; group++)
             {
-                read.Skip(4);
+                uint value = read.U32();
                 uint count = read.U32();
-                for (int index = 0; index < count; index++) { links.Add(read.At); read.Skip(4); }
+                for (int index = 0; index < count; index++)
+                {
+                    links.Add(read.At);
+                    switchOf.TryAdd(read.U32(), value);
+                }
             }
             uint parameters = read.U32();
             for (int index = 0; index < parameters; index++) { links.Add(read.At); read.Skip(4 + 1 + 1 + 4 + 4); }
@@ -196,12 +399,21 @@ public static class WwiseSoundBank
         }
         if (read.At != node.Data.Length) throw new InvalidDataException($"Template node {node.Id} has an unknown layout.");
         return new(codec, sourceLength, parent, children, children.Select(at => U32(node.Data, at)).ToList(), links, layers,
-            transition, transitionMode, curves);
+            transition, transitionMode, curves)
+        {
+            Positioning = positioning, Attenuation = attenuation, SwitchGroup = switchGroup, SwitchOf = switchOf,
+        };
     }
 
-    /** Reads the shared node parameters and returns the parent ID's offset. */
-    private static int NodeBase(Reader read, List<Curve> curves)
+    /**
+     * Reads the shared node parameters.
+     * @param positioning Receives where the positioning byte and its block sit.
+     * @param attenuation Receives where the node's own attenuation ID sits, or -1.
+     * @return The parent ID's offset.
+     */
+    private static int NodeBase(Reader read, List<Curve> curves, out (int Start, int Length) positioning, out int attenuation)
     {
+        attenuation = -1;
         read.Skip(1);
         int effects = read.U8();
         // Bypass bits, then index, share-set ID and two flags per effect.
@@ -211,11 +423,14 @@ public static class WwiseSoundBank
         read.Skip(4 + 1);
         int props = read.U8(); read.Skip(props * 5);
         int ranged = read.U8(); read.Skip(ranged * 9);
-        byte positioning = read.U8();
+        int positioningStart = read.At;
+        byte flags = read.U8();
         // Bit 0 overrides the parent's positioning and bit 3 adds 3D parameters.
-        if ((positioning & 1) != 0 && (positioning & 8) != 0)
+        if ((flags & 1) != 0 && (flags & 8) != 0)
         {
-            byte bits = read.U8(); read.Skip(4);
+            byte bits = read.U8();
+            attenuation = read.At;
+            read.Skip(4);
             if ((bits & 3) != 1)
             {
                 read.Skip(1 + 4);
@@ -224,6 +439,7 @@ public static class WwiseSoundBank
                 read.Skip(checked(items * (8 + 12)));
             }
         }
+        positioning = (positioningStart, read.At - positioningStart);
         // Bit 3 adds four auxiliary bus IDs.
         if ((read.U8() & 8) != 0) read.Skip(16);
         read.Skip(6);
@@ -254,13 +470,23 @@ public static class WwiseSoundBank
 
     /** Renames a node's links, points a codec leaf at the authored media and sets fire-rate curves. */
     private static byte[] Rewrite(byte[] original, Layout layout, IReadOnlyDictionary<uint, uint> ids,
-        IReadOnlyDictionary<uint, uint> layerIds, uint mediaId, int mediaLength)
+        IReadOnlyDictionary<uint, uint> layerIds, uint mediaId, int mediaLength,
+        IReadOnlyDictionary<uint, uint> attenuationIds, (byte[] Block, int Attenuation) inherited)
     {
         byte[] data = original.ToArray();
         foreach (int at in layout.Children.Concat(layout.Links).Append(layout.Parent))
             Put(data, at, ids.GetValueOrDefault(U32(data, at), U32(data, at)));
         foreach (int at in layout.Layers) Put(data, at, layerIds[U32(data, at)]);
+        if (layout.Attenuation >= 0 && attenuationIds.TryGetValue(U32(data, layout.Attenuation), out uint own))
+            Put(data, layout.Attenuation, own);
         var splices = new List<(int At, int Length, byte[] Bytes)>();
+        if (inherited.Block is { } block)
+        {
+            // The node's one positioning byte becomes the mixer's whole block, with the stretched attenuation.
+            byte[] positioning = block.ToArray();
+            Put(positioning, inherited.Attenuation, attenuationIds[U32(positioning, inherited.Attenuation)]);
+            splices.Add((layout.Positioning.Start, layout.Positioning.Length, positioning));
+        }
         if (layout.TransitionMode == TriggerRate)
         {
             var rates = layout.Curves.Where(curve => curve.Id == RateOfFire && curve.Parameter == TransitionParameter).ToList();

@@ -65,6 +65,16 @@ public sealed class ActivitySdkPack : IDisposable
         return rows;
     }
 
+    /** Copies one section as 32-bit words, for rows this code moves without naming every field. */
+    public (uint[] Words, int RowWords) Words(SdkSection section)
+    {
+        var (offset, count, stride) = sections[(int)section];
+        if (stride % sizeof(uint) != 0) throw new InvalidDataException($"SDK section {section} has stride {stride}, not whole words.");
+        var words = new uint[count * (stride / sizeof(uint))];
+        view.ReadArray(offset, words, 0, words.Length);
+        return (words, stride / sizeof(uint));
+    }
+
     /** The UTF-8 text a string reference names; an empty reference is the empty string. */
     public string Text(SdkStringRef value)
     {

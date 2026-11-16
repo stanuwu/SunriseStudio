@@ -980,13 +980,15 @@ public struct C80806a64
     [FieldOffset(8)] public uint Unk8;
 }
 
-/** `c_80806a65`, class 0x80806A65. */
+/** `animation_event_kind6`, class 0x80806A65. */
 [StructLayout(LayoutKind.Explicit, Size = 32)]
-public struct C80806a65
+public struct AnimationEventKind6
 {
     public const uint Class = 0x80806A65;
     public const int Align = 8;
 
+    [FieldOffset(0)] public short Frame;
+    [FieldOffset(2)] public byte EventKind;
     [FieldOffset(8)] public RelativePointer<byte> Unk8;
     [FieldOffset(16)] public uint Unk10;
 }

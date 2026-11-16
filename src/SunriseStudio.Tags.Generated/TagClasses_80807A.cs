@@ -480,7 +480,7 @@ public struct C80807a35
     public const uint Class = 0x80807A35;
     public const int Align = 8;
 
-    [FieldOffset(0)] public uint Unk0;
+    [FieldOffset(0)] public uint MapNodeHash;
     [FieldOffset(8)] public RelativePointer<byte> Unk8;
     [FieldOffset(24)] public TagArray<Unknown> HE2c95be2;
     [FieldOffset(40)] public RewardCondition HEc27f4f4;
@@ -533,12 +533,13 @@ public struct C80807a3a
     public const int Align = 16;
 
     [FieldOffset(0)] public RewardCondition H373d2eff;
+    [FieldOffset(16)] public byte DestinationIndex;
     [FieldOffset(24)] public uint Unk18;
     [FieldOffset(32)] public float Unk20;
     [FieldOffset(36)] public float Unk24;
     [FieldOffset(40)] public float Unk28;
-    [FieldOffset(48)] public uint Unk30;
-    [FieldOffset(52)] public uint Unk34;
+    [FieldOffset(48)] public uint MapNameHash;
+    [FieldOffset(52)] public uint BubbleHash;
     [FieldOffset(56)] public uint Unk38;
     [FieldOffset(60)] public uint Unk3c;
 }

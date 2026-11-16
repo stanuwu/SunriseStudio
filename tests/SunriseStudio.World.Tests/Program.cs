@@ -83,10 +83,26 @@ try
     Throws<NotSupportedException>(() => SceneEdits.CreateTransformEdit(catalog, spawn, Vector3.Zero, Quaternion.Identity, 2, selected));
     var volume = selected.Scene.Markers.Single(x => x.Layer == SceneLayer.Volumes);
     var bounds = SceneEdits.Describe(catalog, volume, selected);
-    Check(bounds.CanBounds && !bounds.CanTransform, "Trigger edit contract is wrong.");
+    Check(bounds.CanBounds && bounds.CanTransform && !bounds.CanScale, "Trigger edit contract is wrong.");
     project.RecordObjectEdit(SceneEdits.CreateBoundsEdit(catalog, volume, new(-4), new(4), selected)!, catalog);
     var updated = loader.LoadMission(WorldFixture.Base, WorldFixture.Base + 4);
     Check(updated.Scene.Markers.Single(x => x.Layer == SceneLayer.Volumes).Extents == new Vector3(4), "Bounds object edit did not reach trigger decoding.");
+    // A trigger volume moves by its placement position; its marker follows, and it cannot turn or scale.
+    var resized = updated.Scene.Markers.Single(x => x.Layer == SceneLayer.Volumes);
+    Vector3 centre = SceneEdits.Describe(catalog, resized, updated).Position, volumeShift = new(30, -20, 5);
+    Check(SceneEdits.CreateTransformEdit(catalog, resized, centre, Quaternion.Identity, 1, updated) is null, "An unmoved trigger volume gave an edit.");
+    Throws<NotSupportedException>(() => SceneEdits.CreateTransformEdit(catalog, resized, centre, Quaternion.Identity, 2, updated));
+    Throws<NotSupportedException>(() => SceneEdits.CreateTransformEdit(catalog, resized, centre,
+        Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 1), 1, updated));
+    project.RecordObjectEdit(SceneEdits.CreateTransformEdit(catalog, resized, centre + volumeShift, Quaternion.Identity, 1, updated)!, catalog);
+    var volumeMoved = loader.LoadMission(WorldFixture.Base, WorldFixture.Base + 4);
+    var shiftedMarker = volumeMoved.Scene.Markers.Single(x => x.Layer == SceneLayer.Volumes);
+    Check(shiftedMarker.Position == centre + volumeShift && shiftedMarker.Extents == new Vector3(4)
+        && SceneEdits.Describe(catalog, shiftedMarker, volumeMoved).Position == centre + volumeShift,
+        "A trigger volume move did not reach trigger decoding.");
+    project.RecordObjectEdit(SceneEdits.CreateTransformEdit(catalog, shiftedMarker, centre, Quaternion.Identity, 1, volumeMoved)!, catalog);
+    Check(loader.LoadMission(WorldFixture.Base, WorldFixture.Base + 4).Scene.Markers.Single(x => x.Layer == SceneLayer.Volumes).Position == centre,
+        "Moving a trigger volume back did not restore it.");
     var light = (WorldLight)map.Objects.Single(x => x.Kind == WorldObjectKind.Light).Source;
     var lightInfo = SceneEdits.Describe(catalog, light, map);
     Check(lightInfo.CanTransform && lightInfo.CoordinateSpace == "World", "Light world transform contract is wrong.");

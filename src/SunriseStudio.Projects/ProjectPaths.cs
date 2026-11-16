@@ -27,8 +27,11 @@ internal static class ProjectPaths
                 throw new IOException(message);
     }
 
-    /** The previous file survives a failed write or flush. */
-    internal static void AtomicWrite(string path, ReadOnlySpan<byte> bytes)
+    /**
+     * The previous file survives a failed write or flush.
+     * @param durable False skips the disk flush; only for files a later read verifies, such as hash-named payloads.
+     */
+    internal static void AtomicWrite(string path, ReadOnlySpan<byte> bytes, bool durable = true)
     {
         RejectLinks(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -38,7 +41,7 @@ internal static class ProjectPaths
             using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
                 stream.Write(bytes);
-                stream.Flush(true);
+                stream.Flush(durable);
             }
             File.Move(temporary, path, true);
         }

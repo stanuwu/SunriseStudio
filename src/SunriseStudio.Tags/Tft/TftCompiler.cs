@@ -11,7 +11,7 @@ public sealed record TftCompiledTag(string Name, uint TagHash, uint ClassId, uin
     public ulong WideHash { get; init; }
     /** The name the game finds the tag by; null keeps the project name. */
     public string? GameName { get; init; }
-    /** The installed tag this one was cloned from; a root takes its dependency manifest from it. */
+    /** The installed tag this one was cloned or copied from; a root takes its dependency manifest from it. */
     public uint? SourceTag { get; init; }
 }
 
@@ -86,10 +86,15 @@ public sealed class TftCompiler(string contentDirectory, TagAllocator allocator,
         return changes;
     }
 
-    /** New names take hashes in name order, so a set of new files allocates the same way every time. */
+    // The server finds a spawn set only in the package that holds the map, the project's first.
+    private const string MapPackageType = ".spawn_points";
+
+    /** New names take hashes in name order, spawn points first, so a set of new files allocates the same way every time. */
     private void Allocate(IEnumerable<string> names)
     {
-        foreach (string name in names) allocator.Allocate(name);
+        var ordered = names.ToList();
+        static bool First(string name) => name.EndsWith(MapPackageType, StringComparison.Ordinal);
+        foreach (string name in ordered.Where(First).Concat(ordered.Where(name => !First(name)))) allocator.Allocate(name);
     }
 
     private TftCompiledTag Compile(string name, string path, IReadOnlyDictionary<string, string> files)
@@ -134,7 +139,7 @@ public sealed class TftCompiler(string contentDirectory, TagAllocator allocator,
             }
         }
         Validate(file.Name, data, file.ClassId, schema);
-        return new(file.Name, tagHash, file.ClassId, file.TypeInfo, data) { GameName = file.GameName, SourceTag = file.SourceTag };
+        return new(file.Name, tagHash, file.ClassId, file.TypeInfo, data) { GameName = file.GameName, SourceTag = file.SourceTag ?? file.CopyOf };
     }
 
     /**

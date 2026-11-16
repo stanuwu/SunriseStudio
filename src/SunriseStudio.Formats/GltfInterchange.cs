@@ -75,6 +75,9 @@ public static partial class GltfInterchange
             int positions = FloatAccessor(mesh.Positions.SelectMany(x => new[] { x.X, x.Y, x.Z }).ToArray(), "VEC3", 3, true);
             int normals = FloatAccessor(mesh.Normals.SelectMany(x => new[] { x.X, x.Y, x.Z }).ToArray(), "VEC3", 3);
             int uv = FloatAccessor(mesh.TexCoords.SelectMany(x => new[] { x.X, 1 - x.Y }).ToArray(), "VEC2", 2);
+            var attributes = new Dictionary<string, int> { ["POSITION"] = positions, ["NORMAL"] = normals, ["TEXCOORD_0"] = uv };
+            if (mesh.Colors is { } colors)
+                attributes["COLOR_0"] = FloatAccessor(colors.SelectMany(x => new[] { x.X, x.Y, x.Z, x.W }).ToArray(), "VEC4", 4);
             int offset = checked((int)data.Position), indexView = views.Count;
             foreach (uint index in mesh.Indices) binary.Write(index);
             views.Add(new { buffer = 0, byteOffset = offset, byteLength = mesh.Indices.Length * 4, target = 34963 });
@@ -84,7 +87,7 @@ public static partial class GltfInterchange
             outputMeshes.Add(new
             {
                 name = mesh.Name,
-                primitives = new[] { new { attributes = new { POSITION = positions, NORMAL = normals, TEXCOORD_0 = uv }, indices = indexAccessor, mode = 4 } }
+                primitives = new[] { new { attributes, indices = indexAccessor, mode = 4 } }
             });
             nodes.Add(new { name = mesh.Name, mesh = meshIndex });
         }
@@ -199,7 +202,16 @@ public static partial class GltfInterchange
                     if (material is int selectedMaterial && (selectedMaterial < 0
                         || !document.TryGetProperty("materials", out var materialList) || selectedMaterial >= materialList.GetArrayLength()))
                         throw new InvalidDataException("glTF primitive references an invalid material.");
-                    var output = new InterchangeMesh(name, positions, normals, uvs, indices) { MaterialIndex = material };
+                    Vector4[]? colors = null;
+                    if (attributes.TryGetProperty("COLOR_0", out var colorAccessor))
+                    {
+                        int width = data.Width(colorAccessor.GetInt32());
+                        float[] c = data.Floats(colorAccessor.GetInt32(), width);
+                        if (c.Length != positions.Length * width) throw new InvalidDataException("glTF color count differs from positions.");
+                        colors = Enumerable.Range(0, positions.Length).Select(i => new Vector4(c[i * width], c[i * width + 1],
+                            c[i * width + 2], width == 4 ? c[i * width + 3] : 1)).ToArray();
+                    }
+                    var output = new InterchangeMesh(name, positions, normals, uvs, indices) { MaterialIndex = material, Colors = colors };
                     ObjInterchange.ToMesh(output);
                     result.Add(output);
                 }

@@ -27,10 +27,9 @@ public sealed record ActivityResult(IReadOnlyDictionary<uint, byte[]> Edits, int
     uint ActivityHash, uint DestinationHash);
 
 /**
- * Adds an activity and its destination to the installed catalogues: a row in both halves of the
- * activity catalogue and a row in both halves of the destination catalogue. A new record copies
- * its template's fixed part and keeps pointing at the template's targets; the merge sidecar names
- * those pointers, so the runtime rewrites them when it moves the record.
+ * Adds an activity and its destination as a row in both halves of each installed catalogue. A new
+ * record copies its template's fixed part and pointers; the merge sidecar names those pointers, so
+ * the runtime rewrites them when it moves the record.
  */
 public static class ActivityRows
 {
@@ -253,6 +252,33 @@ public static class ActivityRows
         bank = text.Bank <= ushort.MaxValue ? (ushort)text.Bank
             : throw new ArgumentOutOfRangeException(nameof(text), "A string bank index is 16 bits.");
         hash = text.Hash;
+    }
+
+    /** The offset of activity `index`'s client record. */
+    public static int TextRecordOffset(ReadOnlySpan<byte> table, int index)
+    {
+        var (count, data) = Array(table, TextIndex);
+        if (index < 0 || index >= count) throw new InvalidDataException($"Activity {index} has no client row.");
+        ref readonly var row = ref TagView.At<ActivityClientIndexRow>(table, data + index * Unsafe.SizeOf<ActivityClientIndexRow>());
+        return TagView.TargetOffset(table, in row.ActivityPointer) ?? throw new InvalidDataException($"Activity {index} has no client record.");
+    }
+
+    /** The offset of destination `index`'s client row. */
+    public static int DestinationTextRowOffset(ReadOnlySpan<byte> table, int index)
+    {
+        var (count, data) = Array(table, DestinationTextIndex);
+        if (index < 0 || index >= count) throw new InvalidDataException($"Destination {index} has no client row.");
+        return data + index * Unsafe.SizeOf<DestinationTextRow>();
+    }
+
+    /** The destination row activity `index` names. */
+    public static int DestinationOf(ReadOnlySpan<byte> table, int index)
+    {
+        var (count, data) = Array(table, ActivityIndex);
+        if (index < 0 || index >= count) throw new InvalidDataException($"Activity {index} has no row.");
+        ref readonly var row = ref TagView.At<ActivityRecord>(table, data + index * Unsafe.SizeOf<ActivityRecord>());
+        int record = TagView.TargetOffset(table, in row.ActivityPointer) ?? throw new InvalidDataException($"Activity {index} has no record.");
+        return table[record + TagView.FieldOffset<ActivityDefinition>(nameof(ActivityDefinition.Destination))];
     }
 
     /** The `member` hash of each T row; only the member has to fit. */

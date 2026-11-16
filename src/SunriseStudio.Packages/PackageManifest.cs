@@ -159,17 +159,68 @@ public sealed class PackageManifest
         var group = manifest.Groups[index];
         int[] combined = group.Entries.Concat(requested).Distinct().Order().ToArray();
         if (combined.Length == group.Entries.Count) return data.ToArray();
+        return WriteGroup(data, index, combined);
+    }
+
+    /**
+     * Takes entries out of one package's group. A group left with none loses its row: the client
+     * reads a group's list without checking for a null pointer.
+     * @return The new manifest bytes, or a copy when the group lists none of them.
+     */
+    public static byte[] RemoveEntries(byte[] data, ushort packageId, IEnumerable<int> entries)
+    {
+        var manifest = Read(data);
+        int index = manifest.Groups.ToList().FindIndex(group => group.PackageId == packageId);
+        if (index < 0) return data.ToArray();
+        var drop = entries.ToHashSet();
+        int[] kept = manifest.Groups[index].Entries.Where(entry => !drop.Contains(entry)).Order().ToArray();
+        if (kept.Length == manifest.Groups[index].Entries.Count) return data.ToArray();
+        return kept.Length == 0 ? RemoveGroup(data, index) : WriteGroup(data, index, kept);
+    }
+
+    /** Cuts one group row out and moves every offset that crosses it; the row's own lists stay as unused bytes. */
+    private static byte[] RemoveGroup(byte[] data, int index)
+    {
+        long count = TagRead.I64(data, GroupCountField);
+        if (count <= 1) throw new NotSupportedException("A manifest cannot lose its last group.");
+        int array = Target(data, GroupArrayField, TagArray.HeaderSize);
+        int cut = array + TagArray.HeaderSize + index * GroupSize;
+        var fields = new List<(int Field, int Target)> { (GroupArrayField, array) };
+        if (TagRead.I64(data, KeyCountField) != 0 && TagRead.I64(data, KeyArrayField) != 0)
+            fields.Add((KeyArrayField, KeyArrayField + (int)TagRead.I64(data, KeyArrayField)));
+        for (int g = 0; g < count; g++)
+        {
+            if (g == index) continue;
+            int row = array + TagArray.HeaderSize + g * GroupSize;
+            foreach (int field in new[] { row + BitmapField, row + ListField })
+                if (TagRead.I64(data, field) != 0) fields.Add((field, field + (int)TagRead.I64(data, field)));
+        }
+        int Shift(int offset) => offset >= cut + GroupSize ? offset - GroupSize : offset;
+        byte[] result = new byte[data.Length - GroupSize];
+        data.AsSpan(0, cut).CopyTo(result);
+        data.AsSpan(cut + GroupSize).CopyTo(result.AsSpan(cut));
+        foreach (var (field, target) in fields)
+            WriteI64(result, Shift(field), Shift(target) - Shift(field));
+        WriteI64(result, GroupCountField, count - 1);
+        WriteI64(result, array, count - 1);
+        WriteI64(result, TagSizeField, result.Length);
+        return result;
+    }
+
+    /** Replaces one group's bitmap and list by one typed list at the end of the data. */
+    private static byte[] WriteGroup(byte[] data, int index, int[] entries)
+    {
         int row = Target(data, GroupArrayField, TagArray.HeaderSize) + TagArray.HeaderSize + index * GroupSize;
         int header = Align(checked(data.Length + TagView.ClassWordSize));
-        byte[] result = new byte[checked(header + TagArray.HeaderSize + combined.Length * EntrySize)];
+        byte[] result = new byte[checked(header + TagArray.HeaderSize + entries.Length * EntrySize)];
         data.CopyTo(result, 0);
         WriteI64(result, row + BitmapCountField, 0);
         WriteI64(result, row + BitmapField, 0);
-        WriteI64(result, row + ListCountField, combined.Length);
+        WriteI64(result, row + ListCountField, entries.Length);
         WriteI64(result, row + ListField, header - row - ListField);
-        TagArray.WriteHeader(result, header, combined.Length, SU16Element.Class);
-        for (int i = 0; i < combined.Length; i++)
-            BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(header + TagArray.HeaderSize + i * EntrySize), checked((ushort)combined[i]));
+        TagArray.WriteHeader(result, header, entries.Length, SU16Element.Class);
+        for (int i = 0; i < entries.Length; i++)
+            BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(header + TagArray.HeaderSize + i * EntrySize), checked((ushort)entries[i]));
         WriteI64(result, TagSizeField, result.Length);
         return result;
     }

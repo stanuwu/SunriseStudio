@@ -70,13 +70,14 @@ public sealed partial class AssetViewport
     /** The collision shape under the pointer, as a tooltip text. */
     public string? HoveredCollision { get; private set; }
 
-    /** True when the scene can hold collision: a map, bubble, static model, owner or Havok packfile. */
+    /** True when the scene can hold collision: a map, bubble, static model, owner, Havok packfile or nav mesh. */
     public bool CollisionPossible(SceneDocument scene)
     {
         if (Catalog is not { } catalog) return false;
         if (ReferenceEquals(possibleScene, scene) && ReferenceEquals(possibleCatalog, catalog)) return possible;
         possible = catalog.TryGetEntry(scene.TagHash, out var entry)
-            && (entry is { Type: 26, SubType: 7 } || entry.Reference is StaticCollisionReader.OwnerClass or SStaticMesh.Class or SEntity.Class)
+            && (entry is { Type: 26, SubType: 7 } || entry.Reference is StaticCollisionReader.OwnerClass or SStaticMesh.Class or SEntity.Class
+                || CollisionSceneLoader.IsNav(entry.Reference))
             || scene.ReadTags.Any(tag => catalog.TryGetEntry(tag, out var list) && list.Reference == StaticCollisionReader.ObjectListClass);
         (possibleScene, possibleCatalog) = (scene, catalog);
         return possible;
@@ -323,12 +324,13 @@ public sealed partial class AssetViewport
         return Matrix4x4.CreateScale(Vector3.Max(size, new Vector3(1e-3f))) * Matrix4x4.CreateTranslation(min);
     }
 
-    /** World collision by kind: mesh orange, convex cyan, box green. Triggers violet, hitboxes red, other grey. */
+    /** World collision by kind: mesh orange, convex cyan, box green. Triggers violet, hitboxes red, nav yellow, other grey. */
     private static Vector4 Tint(string kind, CollisionRole role) => role switch
     {
         CollisionRole.Trigger => new(.75f, .45f, 1, .3f),
         CollisionRole.Hitbox => new(1, .25f, .25f, .4f),
         CollisionRole.Other => new(.7f, .7f, .7f, .3f),
+        CollisionRole.Nav => new(.95f, .9f, .2f, .35f),
         _ => kind switch
         {
             "Mesh" => new(1, .55f, .15f, .35f),

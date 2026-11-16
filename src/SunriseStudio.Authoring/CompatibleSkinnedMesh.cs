@@ -61,16 +61,67 @@ public static partial class CompatibleSkinnedMesh
 
     /** Input bones and vertices use package order and Z-up object space; no bone retargeting occurs. */
     public static PreparedCompatibleSkin Prepare(PackageCatalog catalog, CompatibleSkinnedMeshInput input,
-        CompatibleSkinReplacementOptions options, CancellationToken token = default)
+        CompatibleSkinReplacementOptions options, CancellationToken token = default) => Prepare(catalog, input, options, null, token);
+
+    /**
+     * A new model for a new skeleton, in the template part's four-weight profile. The model is an
+     * added asset at entry FirstEntryIndex + 6, after its six buffer entries.
+     * @param boneCount Bones of the new skeleton, at most 256; influences index them.
+     * @param options The installed template entity, model and part; Name and the package place the output.
+     * @param material Draws the model; it must use the matrix skinning shader. A material that reads an
+     * object channel crashes the game unless the entity's model config supplies the channels.
+     * @param shadowMaterial Draws the shadow pass; it must use the shadow skinning shader.
+     */
+    public static PreparedCompatibleSkin PrepareNewRig(PackageCatalog catalog, InterchangeMesh geometry,
+        IReadOnlyList<VertexSkinWeights> influences, int boneCount, CompatibleSkinReplacementOptions options,
+        uint material = NewRigMaterial, uint shadowMaterial = NewRigShadowMaterial, CancellationToken token = default,
+        NewRigPart? part = null)
     {
+        if (boneCount is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(boneCount), "This skin profile addresses at most 256 bones.");
+        return Prepare(catalog, new(geometry, [], influences), options, new NewRig(boneCount, material, shadowMaterial) { Part = part ?? new() }, token);
+    }
+
+    /**
+     * Where a new model's parts point into the config of the entity that takes the model.
+     * @param VisibilityIndex Null gives each part its own index.
+     * @param VisibilityBits Size of the model's part visibility mask; null gives the smallest that holds the parts.
+     */
+    public sealed record NewRigPart(short LogicalPart = 0, byte LodCategory = 0, ushort? VisibilityIndex = null, uint? VisibilityBits = null);
+
+    /** The indices the first drawn LOD0 part of an installed entity's model carries, for a model that stands in for it. */
+    public static NewRigPart InstalledPart(PackageCatalog catalog, uint entityTag, CancellationToken token = default)
+    {
+        var scene = new AssetSceneLoader(catalog).Load(entityTag, token);
+        var mesh = scene.Instances.Where(instance => instance.InitiallyVisible != false).Select(instance => instance.Mesh)
+            .FirstOrDefault(value => value.LodLevel == 0 && value.Native is { Kind: NativeMeshKind.Entity, RenderStage: 0 })
+            ?? throw new InvalidDataException($"0x{entityTag:X8} draws no LOD0 model part in its initial state.");
+        byte[] model = catalog.Read(mesh.TagHash);
+        var row = TagView.At<SEntityModelPart>(model, mesh.PartIndex);
+        return new(row.LogicalPartIndex, row.LodCategory, row.VisibilityIndex, TagView.At<SEntityModel>(model).PartVisibilityMaskBitsMultipleOf32);
+    }
+
+    // Installed skin materials whose programs read no object channel; the first draws a brown leather.
+    public const uint NewRigMaterial = 0x80FC0FBB, NewRigShadowMaterial = 0x80B9E803;
+
+    private sealed record NewRig(int Bones, uint Material, uint ShadowMaterial)
+    {
+        public NewRigPart Part { get; init; } = new();
+    }
+
+    /** @param fresh Null replaces the template's model; otherwise a new model is written for that rig. */
+    private static PreparedCompatibleSkin Prepare(PackageCatalog catalog, CompatibleSkinnedMeshInput input,
+        CompatibleSkinReplacementOptions options, NewRig? fresh, CancellationToken token)
+    {
+        int? newBones = fresh?.Bones;
         ArgumentNullException.ThrowIfNull(input); ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(input.Geometry); ArgumentNullException.ThrowIfNull(input.Bones);
         ArgumentNullException.ThrowIfNull(input.Influences);
         long sourceRevision = catalog.OverlayRevision;
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Name);
+        int entries = EntryCount + (newBones is null ? 0 : 1);
         if (!PackageWriter.IsNewPackageId(options.PackageId) || catalog.ContainsInstalledPackage(options.PackageId)
-            || options.FirstEntryIndex < 0 || options.FirstEntryIndex > TagHashes.EntriesPerPackage - EntryCount)
-            throw new InvalidDataException("Skin buffers need six unused entries in a new package.");
+            || options.FirstEntryIndex < 0 || options.FirstEntryIndex > TagHashes.EntriesPerPackage - entries)
+            throw new InvalidDataException($"Skin buffers need {entries} unused entries in a new package.");
         using var originals = PackageCatalog.Open(catalog.GameRoot);
         originals.ReadOverride = catalog.ReadOriginal;
         var modelEntry = Require(originals, options.ModelTag);
@@ -79,11 +130,11 @@ public static partial class CompatibleSkinnedMesh
         var rig = new SkeletonReader(originals).Read(options.EntityTag);
         if (!rig.ModelTags.Contains(options.ModelTag))
             throw new NotSupportedException("The model must use this entity's non-cloth skeleton.");
-        ValidateBones(input.Bones, rig);
+        if (newBones is null) ValidateBones(input.Bones, rig);
         var activeRig = new SkeletonReader(catalog).Read(options.EntityTag);
         if (!activeRig.ModelTags.Contains(options.ModelTag) || activeRig.ResourceTag != rig.ResourceTag)
             throw new NotSupportedException("The entity no longer links this installed model and rig.");
-        ValidateBones(input.Bones, activeRig);
+        if (newBones is null) ValidateBones(input.Bones, activeRig);
         if (input.Influences.Count != input.Geometry.Positions.Length)
             throw new InvalidDataException("Each imported vertex needs four package-order skin influences.");
         token.ThrowIfCancellationRequested();
@@ -118,13 +169,15 @@ public static partial class CompatibleSkinnedMesh
         int consumedBones = ConsumedBoneCount(activeConfig, model, options.ModelTag);
         if (consumedBones > rig.Bones.Count)
             throw new InvalidDataException("The model consumes more bones than its entity skeleton supplies.");
+        if (newBones is { } count) consumedBones = count;
         var weights = EncodeInfluences(input.Influences, consumedBones);
         var geometry = MeshAssetImporter.EncodeGeometry(input.Geometry, token);
         var positions = VertexStreamCodec.SkinPositions(geometry.Positions, weights, input.Geometry.Positions.Length);
         var sourcePositions = scene.Instances.Where(instance => instance.Mesh.TagHash == options.ModelTag)
             .SelectMany(instance => instance.Mesh.Vertices.Select(vertex => vertex.Position)).ToArray();
         var minimum = sourcePositions.Aggregate(Vector3.Min); var maximum = sourcePositions.Aggregate(Vector3.Max);
-        if (input.Geometry.Positions.Any(position => position.X < minimum.X || position.Y < minimum.Y || position.Z < minimum.Z
+        // A replacement keeps the template's bounds; a new model carries its own.
+        if (newBones is null && input.Geometry.Positions.Any(position => position.X < minimum.X || position.Y < minimum.Y || position.Z < minimum.Z
             || position.X > maximum.X || position.Y > maximum.Y || position.Z > maximum.Z))
             throw new NotSupportedException("Replacement vertices must stay within the source model's bind bounds.");
         int[] meshRows = Rows(model, in TagView.At<SEntityModel>(model).Meshes, SEntityModelMesh.Class);
@@ -151,7 +204,7 @@ public static partial class CompatibleSkinnedMesh
             || retained.Any(value => PartAt(value.Part).VisibilityIndex >= visibilityCount))
             throw new InvalidDataException("The template part visibility indices leave their original mask.");
         uint[] selectedMaterials = [];
-        if (retained.Any(value => PartAt(value.Part).ExternalMaterialGroup1Direct != -1))
+        if (fresh is null && retained.Any(value => PartAt(value.Part).ExternalMaterialGroup1Direct != -1))
         {
             var stateReads = new HashSet<uint>();
             var initial = new EntityInitialStateReader(catalog) { Reads = stateReads }
@@ -165,10 +218,18 @@ public static partial class CompatibleSkinnedMesh
         }
         var checkedMaterials = new HashSet<(uint Tag, int Stage)>();
         uint materialTag = 0;
+        uint NewMaterial(int stage) => stage switch { 0 => fresh!.Material, 3 => fresh!.ShadowMaterial,
+            _ => throw new NotSupportedException("A retained render pass has no checked skinning profile.") };
         foreach (var part in retained)
         {
             if (TagView.At<SEntityModelMesh>(model, sourceMesh).StageVertexDeclaration[part.Stage] != native.NativeDeclarationId)
                 throw new NotSupportedException("A retained render pass uses a different vertex declaration.");
+            if (fresh is not null)
+            {
+                ValidateMaterial(catalog, NewMaterial(part.Stage), part.Stage == 0 ? MatrixShaderHash : ShadowShaderHash, Active);
+                if (part.Part == sourcePart) materialTag = fresh.Material;
+                continue;
+            }
             uint[] materials = PartMaterials(model, part.Part, activeConfig);
             if (part.Part == sourcePart)
             {
@@ -195,6 +256,12 @@ public static partial class CompatibleSkinnedMesh
             ref var copy = ref TagView.Edit<SEntityModelPart>(partBytes, index * partSize);
             copy.PrimitiveType3Written = 3; copy.IndexStart = 0;
             copy.IndexCount = checked((uint)input.Geometry.Indices.Length);
+            // A new model serves a copied config whose material groups may change; name the material directly.
+            if (newBones is null) continue;
+            copy.Material = NewMaterial(retained[index].Stage); copy.ExternalMaterialGroup1Direct = -1;
+            // The template's logical part, visibility bit and LOD category index its own config, not the new entity's.
+            copy.LogicalPartIndex = fresh!.Part.LogicalPart; copy.VisibilityIndex = fresh.Part.VisibilityIndex ?? checked((ushort)index);
+            copy.LodCategory = fresh.Part.LodCategory;
         }
         byte[] mesh = model.AsSpan(sourceMesh, meshSize).ToArray();
         ref var meshRow = ref TagView.Edit<SEntityModelMesh>(mesh);
@@ -213,16 +280,30 @@ public static partial class CompatibleSkinnedMesh
         modelHeader.PositionScaleW = geometry.PositionScale;
         modelHeader.UvScaleU = geometry.UvScale; modelHeader.UvScaleV = geometry.UvScale;
         modelHeader.UvOffsetU = geometry.UvOffset.X; modelHeader.UvOffsetV = geometry.UvOffset.Y;
+        if (newBones is { } authored)
+        {
+            modelHeader.AuthoredBoneCount = authored;
+            modelHeader.PartVisibilityMaskBitsMultipleOf32 = fresh!.Part.VisibilityBits ?? checked((uint)((retained.Length + 31) & ~31));
+        }
         var additions = new List<ProjectAssetAddition>();
+        var replacements = new Dictionary<uint, byte[]>();
+        uint newModel = options.ModelTag;
+        if (newBones is null) replacements[options.ModelTag] = model;
+        else
+        {
+            newModel = Tag(EntryCount);
+            additions.Add(new(options.Name + ".model", model,
+                new(options.PackageId, modelEntry.Reference, modelEntry.TypeInfo, options.Name, options.FirstEntryIndex + EntryCount), options.ModelTag));
+        }
         BufferPair(native.VertexStreams[0].HeaderTag, positions, 0, "positions", false);
         BufferPair(native.VertexStreams[1].HeaderTag, geometry.Attributes, 2, "attributes", false);
         BufferPair(native.IndexHeaderTag, geometry.Indices, 4, "indices", true);
         token.ThrowIfCancellationRequested();
         if (catalog.OverlayRevision != sourceRevision)
             throw new InvalidDataException("Project sources changed while the skin replacement was being prepared.");
-        return new(options.EntityTag, options.ModelTag, rig.ResourceTag, materialTag,
+        return new(options.EntityTag, newModel, rig.ResourceTag, materialTag,
             input.Geometry.Positions.Length, input.Geometry.Indices.Length / 3, retained.Select(value => value.Part).ToArray(),
-            originalPartCount - retained.Length, additions.AsReadOnly(), new Dictionary<uint, byte[]> { [options.ModelTag] = model }, hashes)
+            originalPartCount - retained.Length, additions.AsReadOnly(), replacements, hashes)
         { ConsumedBones = consumedBones };
 
         void BufferPair(uint headerTag, byte[] data, int index, string suffix, bool indices)

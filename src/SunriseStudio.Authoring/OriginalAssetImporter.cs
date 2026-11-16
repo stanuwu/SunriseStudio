@@ -11,7 +11,13 @@ public sealed record OriginalAssetInspection(string Path, IReadOnlyList<Original
     public bool CanImportAll => Surfaces.All(surface => !surface.Present || surface.Supported);
 }
 public sealed record OriginalAssetImportOptions(string Path, ushort PackageId, string Name,
-    uint? TemplateTag, bool SkipUnsupported);
+    uint? TemplateTag, bool SkipUnsupported)
+{
+    /** False writes RGBA8 textures, which keep every texel; true writes BC7 and BC4, as stock statics use. */
+    public bool CompressTextures { get; init; } = true;
+    /** Materials shared across the files of one import; null prepares every material. */
+    public MaterialShare? Share { get; init; }
+}
 public sealed record PreparedOriginalAsset(uint ModelTag, IReadOnlyList<ProjectAssetAddition> Assets, string Summary);
 
 /** Static primitive materials compile through one checked opaque native shader profile. */
@@ -58,47 +64,94 @@ public static class OriginalAssetImporter
         int first, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(catalog);
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.Name);
-        var inspection = Inspect(options.Path);
-        var refused = inspection.Surfaces.Where(surface => surface.Present && !surface.Supported).ToList();
-        if (refused.Count > 0 && !options.SkipUnsupported)
-            throw new NotSupportedException($"{refused[0].Name}: {refused[0].Detail}");
-        if (!inspection.Surfaces.First(surface => surface.Name == MeshGeometry).Present)
-            throw new InvalidDataException("The scene has no mesh.");
+        using var scene = OriginalScene.Read(options, cancellationToken);
+        var profiles = scene.Profiles();
+        var materials = scene.PrepareMaterials(catalog, options, checked(first + 2 + 6 * profiles.Values.Distinct().Count()), cancellationToken);
+        var model = MeshAssetImporter.PrepareStatic(catalog, scene.Parts(materials, StaticLodCategory.All), options.Name, options.PackageId,
+            first, null, options.TemplateTag, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        // glTF image UVs go straight to D3D; geometry-only interchange flips V for its own round trip.
-        var meshes = GltfInterchange.Read(inspection.Path, options.SkipUnsupported)
-            .Select(mesh => mesh with { TexCoords = mesh.TexCoords.Select(uv => new System.Numerics.Vector2(uv.X, 1 - uv.Y)).ToArray() }).ToArray();
-        using var document = GltfInterchange.ReadJson(inspection.Path);
-        var images = new Dictionary<int, RgbaImage>();
-        foreach (var image in GltfInterchange.ReadImages(inspection.Path).Where(entry => entry.MimeType == Png))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var decoded = PngInterchange.Read(image.Bytes); decoded.Validate(); images.Add(image.Index, decoded);
-        }
-        int cursor = checked(first + 8);
-        var materialTags = new Dictionary<int, uint>();
-        var materials = new List<ProjectAssetAddition>();
-        foreach (int index in meshes.Select(mesh => mesh.MaterialIndex ?? -1).Distinct())
-        {
-            var material = OriginalAssetMaterials.Prepare(catalog, document.RootElement, index < 0 ? null : index,
-                images, options.Name + ".material" + materialTags.Count, options.PackageId, cursor,
-                options.SkipUnsupported, cancellationToken);
-            materialTags.Add(index, material.MaterialTag); materials.AddRange(material.Assets);
-            cursor = checked(cursor + material.Assets.Count);
-        }
-        var model = MeshAssetImporter.PrepareParts(catalog, meshes,
-            meshes.Select(mesh => materialTags[mesh.MaterialIndex ?? -1]).ToArray(), options.Name,
-            options.PackageId, first, options.TemplateTag, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        var skippedNames = refused.Select(surface => surface.Name).Distinct().ToArray();
-        string skipped = skippedNames.Length == 0 ? "" : $" Skipped: {string.Join(", ", skippedNames)}.";
         string summary = $"Added {options.Name} as model {model.ModelTag:X8} ({Plural(model.VertexCount, "vertex", "vertices")}, "
-            + $"{Plural(model.TriangleCount, "triangle", "triangles")}, {Plural(meshes.Length, "part", "parts")}) with "
-            + $"{Plural(materialTags.Count, "opaque material", "opaque materials")} and bound textures.{skipped}";
-        return new(model.ModelTag, model.Assets.Concat(materials).ToArray(), summary);
+            + $"{Plural(model.TriangleCount, "triangle", "triangles")}, {Plural(scene.Meshes.Count, "part", "parts")}) with "
+            + $"{Plural(materials.Tags.Count, "material", "materials")} ({string.Join(", ", materials.Tags.Values.Select(x => x.Profile).Distinct())}) and bound textures.{scene.Skipped}";
+        return new(model.ModelTag, model.Assets.Concat(materials.Assets).ToArray(), summary);
     }
+
+    /** The meshes, JSON and PNG images of one checked glTF scene, read once for its materials and parts. */
+    internal sealed class OriginalScene : IDisposable
+    {
+        private readonly JsonDocument document;
+        private OriginalScene(IReadOnlyList<InterchangeMesh> meshes, JsonDocument document, IReadOnlyDictionary<int, RgbaImage> images, string skipped)
+        { Meshes = meshes; this.document = document; Images = images; Skipped = skipped; }
+
+        public IReadOnlyList<InterchangeMesh> Meshes { get; }
+        public IReadOnlyDictionary<int, RgbaImage> Images { get; }
+        /** " Skipped: ..." naming the refused surfaces, or empty. */
+        public string Skipped { get; }
+        public JsonElement Root => document.RootElement;
+
+        /** Refuses an unsupported surface unless the options skip it; V flips back to image order. */
+        public static OriginalScene Read(OriginalAssetImportOptions options, CancellationToken token)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            ArgumentException.ThrowIfNullOrWhiteSpace(options.Name);
+            var inspection = Inspect(options.Path);
+            var refused = inspection.Surfaces.Where(surface => surface.Present && !surface.Supported).ToList();
+            if (refused.Count > 0 && !options.SkipUnsupported)
+                throw new NotSupportedException($"{refused[0].Name}: {refused[0].Detail}");
+            if (!inspection.Surfaces.First(surface => surface.Name == MeshGeometry).Present)
+                throw new InvalidDataException("The scene has no mesh.");
+            token.ThrowIfCancellationRequested();
+            // glTF image UVs go straight to D3D; geometry-only interchange flips V for its own round trip.
+            var meshes = GltfInterchange.Read(inspection.Path, options.SkipUnsupported)
+                .Select(mesh => mesh with { TexCoords = mesh.TexCoords.Select(uv => new System.Numerics.Vector2(uv.X, 1 - uv.Y)).ToArray() }).ToArray();
+            var document = GltfInterchange.ReadJson(inspection.Path);
+            var images = new Dictionary<int, RgbaImage>();
+            foreach (var image in GltfInterchange.ReadImages(inspection.Path).Where(entry => entry.MimeType == Png))
+            {
+                token.ThrowIfCancellationRequested();
+                var decoded = PngInterchange.Read(image.Bytes); decoded.Validate(); images.Add(image.Index, decoded);
+            }
+            var skippedNames = refused.Select(surface => surface.Name).Distinct().ToArray();
+            return new(meshes, document, images, skippedNames.Length == 0 ? "" : $" Skipped: {string.Join(", ", skippedNames)}.");
+        }
+
+        /** Each mesh's material key: a material used with and without vertex colours compiles twice. */
+        private (int Material, bool Colors) Key(InterchangeMesh mesh) => (mesh.MaterialIndex ?? -1, mesh.Colors is not null);
+
+        /** The profile of each distinct material key, in first-use order. */
+        public Dictionary<(int Material, bool Colors), StaticProfile> Profiles() => Meshes.Select(Key).Distinct().ToDictionary(key => key,
+            key => OriginalAssetMaterials.ProfileOf(Root, key.Material < 0 ? null : key.Material, key.Colors));
+
+        /** Every material of the scene, from entry `first` on. */
+        public PreparedMaterials PrepareMaterials(PackageCatalog catalog, OriginalAssetImportOptions options, int first, CancellationToken token)
+        {
+            int cursor = first;
+            var tags = new Dictionary<(int Material, bool Colors), (uint Material, uint Shadow, StaticProfile Profile)>();
+            var assets = new List<ProjectAssetAddition>();
+            foreach (var (key, profile) in Profiles())
+            {
+                var material = OriginalAssetMaterials.Prepare(catalog, Root, key.Material < 0 ? null : key.Material,
+                    profile, Images, options.Name + ".material" + tags.Count, options.PackageId, cursor,
+                    options.SkipUnsupported, options.CompressTextures, token, options.Share);
+                tags.Add(key, (material.MaterialTag, material.ShadowTag, material.Profile)); assets.AddRange(material.Assets);
+                cursor = checked(cursor + material.Assets.Count);
+            }
+            return new(tags, assets, cursor);
+        }
+
+        /** One part per mesh, drawing with its material at the LOD levels of `category`. */
+        public StaticPart[] Parts(PreparedMaterials materials, byte category) => Meshes.Select(mesh =>
+        {
+            var (material, shadow, profile) = materials.Tags[Key(mesh)];
+            return new StaticPart(mesh, material, profile, shadow, category);
+        }).ToArray();
+
+        public void Dispose() => document.Dispose();
+    }
+
+    /** The materials of one scene: the technique tags of each key, their entries, and the next free entry. */
+    internal sealed record PreparedMaterials(IReadOnlyDictionary<(int Material, bool Colors), (uint Material, uint Shadow, StaticProfile Profile)> Tags,
+        IReadOnlyList<ProjectAssetAddition> Assets, int NextEntry);
 
     /** Surface order decides which refusal Import names first. */
     private static List<OriginalAssetSurface> Describe(JsonElement document, int? particleSystems)
@@ -149,12 +202,12 @@ public static class OriginalAssetImporter
                 counts.Normals > 0 && counts.Normals < counts.Triangles ? "Missing normals are generated." : null,
                 counts.Tangents > 0 ? "Authored tangent streams have no import path; skipping regenerates them." : null));
 
-        Add("Vertex colors", counts.Colors > 0, false, counts.Colors == 0 ? "None."
-            : $"Found on {Plural(counts.Colors, "primitive", "primitives")}. The static profile has no color stream.");
+        Add("Vertex colors", counts.Colors > 0, counts.Colors > 0, counts.Colors == 0 ? "None."
+            : $"Found on {Plural(counts.Colors, "primitive", "primitives")}. They multiply the base colour; an alpha-masked material drops them.");
 
         Add("Textures", imageTypes.Count > 0, png == imageTypes.Count && textureExtensions.Count == 0,
             imageTypes.Count == 0 ? "No images." : Join(
-                png > 0 ? $"Imports {Plural(png, "PNG image", "PNG images")} through referenced material slots as RGBA8 2D textures with one mip."
+                png > 0 ? $"Imports {Plural(png, "PNG image", "PNG images")} through referenced material slots as BC7 or BC4 2D textures with full mip chains."
                     : null,
                 otherImages.Count > 0 ? $"No reader for these images: {string.Join(", ", otherImages)}." : null,
                 textureExtensions.Count > 0
@@ -163,7 +216,7 @@ public static class OriginalAssetImporter
         var materialIssues = OriginalAssetMaterials.Unsupported(document);
         Add("Materials", materials > 0, materialIssues.Count == 0, materials == 0
             ? "Uses the glTF default opaque material."
-            : Join("Opaque base color, metallic, roughness and normal maps use a checked native shader.",
+            : Join("Base color, metallic, roughness, normal and emissive maps, alpha masks and vertex colours use checked native shaders.",
                 materialIssues.Count == 0 ? null : "No encoder for " + string.Join(", ", materialIssues) + "."));
 
         bool skinned = counts.Weights > 0 || counts.SkinnedNodes > 0;

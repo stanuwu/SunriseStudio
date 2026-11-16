@@ -169,7 +169,7 @@ internal static class ObjectRows
             Field<ObjectSlotDefinitionType4, ushort>(bytes, descriptor, nameof(ObjectSlotDefinitionType4.SlotType)),
             Field<ObjectSlotDefinitionType4, ushort>(bytes, descriptor, nameof(ObjectSlotDefinitionType4.SlotIndex)));
 
-    /** The trigger row must belong to its config and keep the decoded identity placement. */
+    /** The trigger row must belong to its config and keep an unturned placement. */
     private static void RequireTriggerRow(byte[] bytes, uint tag, int offset)
     {
         foreach (ref readonly var component in Rows<SEntityConfig, PlacedConfigComponentRow>(bytes, 0,
@@ -186,9 +186,9 @@ internal static class ObjectRows
             Vector3 translation = Field<STriggerVolumeRow, Vector3>(bytes, offset, "SpawnEntry.Position");
             if (!float.IsFinite(translation.X) || !float.IsFinite(translation.Y) || !float.IsFinite(translation.Z)
                 || !float.IsFinite(rotation.X) || !float.IsFinite(rotation.Y) || !float.IsFinite(rotation.Z) || !float.IsFinite(rotation.W)
-                || translation.LengthSquared() > 1e-10f || Math.Abs(rotation.W - 1) > 1e-5f
+                || Math.Abs(rotation.W - 1) > 1e-5f
                 || new Vector3(rotation.X, rotation.Y, rotation.Z).LengthSquared() > 1e-10f)
-                throw new NotSupportedException("Trigger bounds require the decoded identity placement.");
+                throw new NotSupportedException("A trigger row with a turned placement is not editable.");
             return;
         }
         throw new InvalidDataException("The trigger row is not owned by its config.");

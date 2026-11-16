@@ -208,27 +208,8 @@ public static class WeaponSoundAuthoring
         }
 
         // Builds a template event's new bank, and the event bytes that name it at bankTag.
-        (byte[] Event, AuthoredSoundBank Bank, uint BankSource, PackageEntry BankEntry, PackageEntry EventEntry) Author(
-            uint source, PcmWave wave, PcmWave? release, uint bankTag)
-        {
-            byte[] template = catalog.Read(source);
-            if (!catalog.TryGetEntry(source, out var eventEntry) || eventEntry.Reference != AudioCatalog.EventClass
-                || !TagView.FitsThrough<SWwiseEvent>(template, 0, nameof(SWwiseEvent.StreamHandles))
-                || EventField<ulong>(template, nameof(SWwiseEvent.TagByteLength)) != (ulong)template.Length)
-                throw new InvalidDataException($"{source:X8} is not an audio event.");
-            uint bankSource = EventField<uint>(template, nameof(SWwiseEvent.SoundBank));
-            if (!catalog.TryGetEntry(bankSource, out var bankEntry)) throw new InvalidDataException("The event's bank is missing.");
-            var bank = AudioCatalog.ReadBank(bankSource, catalog.Read(bankSource));
-            var built = WwiseSoundBank.Build(bank, EventField<uint>(template, nameof(SWwiseEvent.WwiseEventId)),
-                EventField<uint>(template, nameof(SWwiseEvent.RelatedEventId)), $"{name}/{source:x8}", wave, release);
-            byte[] authored = template.ToArray();
-            EditEventField<uint>(authored, nameof(SWwiseEvent.WwiseEventId)) = built.EventId;
-            EditEventField<uint>(authored, nameof(SWwiseEvent.RelatedEventId)) = built.RelatedEventId;
-            EditEventField<uint>(authored, nameof(SWwiseEvent.SoundBank)) = bankTag;
-            // The new media sits inside the bank, so the event lists no streamed media.
-            EditEventField<TagArray<TagReferenceElement>>(authored, nameof(SWwiseEvent.StreamHandles)) = default;
-            return (authored, built, bankSource, bankEntry, eventEntry);
-        }
+        AuthoredSoundEvent Author(uint source, PcmWave wave, PcmWave? release, uint bankTag) =>
+            EntitySoundAuthoring.Author(catalog, source, $"{name}/{source:x8}", wave, release, bankTag);
 
         // An event this weapon already replaced is rebuilt in place from its template; records keep naming it.
         var replaced = project.AddedAssets.Where(asset => asset.Native?.Reference == AudioCatalog.EventClass && asset.BaseTagHash is not null).ToList();
@@ -251,7 +232,7 @@ public static class WeaponSoundAuthoring
                 continue;
             }
             uint bankTag = Next(), eventTag = Next();
-            var (authored, built, bankSource, bankEntry, eventEntry) = Author(source, wave, release, bankTag);
+            (byte[] authored, var built, uint bankSource, var bankEntry, var eventEntry) = Author(source, wave, release, bankTag);
             assets.Add(new($"{name}.{source:X8}.bank", built.Bytes,
                 new(packageId, built.BankId, bankEntry.TypeInfo, null, Entry(bankTag)), bankSource));
             assets.Add(new($"{name}.{source:X8}.event", authored,

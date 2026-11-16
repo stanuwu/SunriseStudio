@@ -26,6 +26,9 @@ public sealed record CombatantDamage(uint ConfigTag, int Payload, IReadOnlyList<
 {
     public const uint PayloadClass = SCombatantDamagePayload.Class;
 
+    /** Hit points of a rank-minor enemy's full pool; a rank row of the payload can replace it. */
+    public float BaseHitPoints { get; init; }
+
     /**
      * Reads the damage payload of one config.
      * @return Null when the config is not a damage config or any array does not match its class.
@@ -71,7 +74,7 @@ public sealed record CombatantDamage(uint ConfigTag, int Payload, IReadOnlyList<
                 partRows[index] = new(index, row, part.RegionNameHash, part.Health,
                     (sbyte)part.Kind, pool, part.DamageScale, typeRows);
             }
-            return new(configTag, payload, partRows, poolRows);
+            return new(configTag, payload, partRows, poolRows) { BaseHitPoints = TagView.At<SCombatantDamagePayload>(tag, payload).Unk1a8 };
         }
         catch (Exception error) when (error is InvalidDataException or OverflowException
             or ArgumentOutOfRangeException or IndexOutOfRangeException)
@@ -101,6 +104,11 @@ public sealed record CombatantDamage(uint ConfigTag, int Payload, IReadOnlyList<
     public static byte[] SetTypeScale(uint configTag, ReadOnlyMemory<byte> config, int part, int row, float value) =>
         Write(config, value, Require(configTag, config).Parts.ElementAtOrDefault(part)?.TypeScales
             .Where(scale => scale.Index == row).Select(scale => (int?)scale.Offset).FirstOrDefault());
+
+    /** Sets the hit points of a rank-minor enemy's full pool. */
+    public static byte[] SetBaseHitPoints(uint configTag, ReadOnlyMemory<byte> config, float value) =>
+        Write(config, value > 0 ? value : float.NaN, TagView.OffsetOf(config.Span,
+            in TagView.At<SCombatantDamagePayload>(config.Span, Require(configTag, config).Payload).Unk1a8));
 
     /** Sets a pool's initial fraction. */
     public static byte[] SetPoolFraction(uint configTag, ReadOnlyMemory<byte> config, int pool, float value) =>

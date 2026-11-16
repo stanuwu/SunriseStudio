@@ -69,6 +69,15 @@ try
     Throws<InvalidDataException>(() => TextureAssetImporter.ImportPng(project, catalog, png, "collision", 0x100));
     Console.WriteLine("PASS batch-additions rollback=verified invalid-template=rejected installed-id=rejected");
 
+    if (args.Length == 4 && args[0] == "--game-root")
+    {
+        // A private creature glb and its idle clip name: only the glb build and its checks run.
+        var idle = new Dictionary<SunriseStudio.Animation.CombatantBehaviour, string>
+        {
+            [SunriseStudio.Animation.CombatantBehaviour.Idle] = args[3], [SunriseStudio.Animation.CombatantBehaviour.Locomotion] = args[3],
+        };
+        CombatantCreatureChecks.RunGlb(args[1], args[2], idle, 0.03f, 90);
+    }
     if (args.Length == 2 && args[0] == "--game-root")
     {
         using var owned = PackageCatalog.Open(args[1]);
@@ -84,6 +93,8 @@ try
         var decoded = new TextureDataReader(built).Read(textureImport.HeaderTag);
         Check(decoded.Subresources.Single().Data.SequenceEqual(image.Pixels), "Owned-template texture pixels changed.");
         Console.WriteLine($"PASS owned-template tag={textureImport.TemplateTag:X8} png-native-package pixels=equal");
+        CombatantAnimationChecks.Run(args[1]);
+        CombatantCreatureChecks.Run(args[1]);
     }
 }
 finally

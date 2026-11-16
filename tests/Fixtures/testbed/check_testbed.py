@@ -23,11 +23,29 @@ def to_game(v):
 MAX_VERTICES = 4_000_000
 MAX_INDICES = 24_000_000
 
-# Exact game-space bounds of each fixture node; they prove the plate is flat and the block stands up.
+# Exact game-space bounds of each fixture node, by glb file name; they prove the plate is flat, the
+# blocks stand up, and no file moved or mirrored its geometry.
 EXPECTED_NODES = {
-    'terrain': ((-12.0, -12.0, 0.0), (12.0, 12.0, 0.0)),
-    'block': ((5.0, 3.0, 0.0), (7.0, 5.0, 3.0)),
+    'static.glb': {'terrain': ((-12.0, -12.0, 0.0), (12.0, 12.0, 0.0)), 'block': ((5.0, 3.0, 0.0), (7.0, 5.0, 3.0))},
+    'profiles.glb': {f'block_{kind}': ((x, 9.25, 0.0), (x + 1.5, 10.75, 1.5))
+                     for kind, x in (('opaque', -10.0), ('cutout', -7.0), ('vertex_colour', -4.0), ('emissive', -1.0))},
+    'lod_block.glb': {'lod_block': ((9.0, -7.0, 0.0), (11.0, -5.0, 2.0))},
+    'lod_block_lod1.glb': {'lod_block': ((9.0, -7.0, 0.0), (11.0, -5.0, 2.0))},
+    'far_bubble_b.glb': {'far_bubble_b': ((0.0, -16.0, 0.0), (64.0, 16.0, 0.0))},
 }
+
+# Each file's materials: alpha mode and whether it emits. Studio refuses blending and double sides.
+EXPECTED_MATERIALS = {
+    'static.glb': {'testbed_grey': ('OPAQUE', False)},
+    'profiles.glb': {'checker_opaque': ('OPAQUE', False), 'leaf_cutout': ('MASK', False),
+                     'vertex_painted': ('OPAQUE', False), 'night_window': ('OPAQUE', True)},
+    'lod_block.glb': {'lod_grey': ('OPAQUE', False)},
+    'lod_block_lod1.glb': {'lod_grey': ('OPAQUE', False)},
+    'far_bubble_b.glb': {'far_atlas': ('OPAQUE', False)},
+}
+
+# The one node whose primitive carries COLOR_0.
+COLOURED_NODES = {'block_vertex_colour'}
 
 COMPONENTS = {5120: ('b', 1), 5121: ('B', 1), 5122: ('h', 2), 5123: ('H', 2), 5125: ('I', 4), 5126: ('f', 4)}
 WIDTHS = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4, 'MAT4': 16}
@@ -157,6 +175,46 @@ def read_glb(path):
     return document, binary
 
 
+def check_entity(path, entity, label, box):
+    """Studio's entity import rules: one skinned mesh of one primitive, unique joint names, named actions."""
+    if not inside(entity['position'], box):
+        fail(f'{label}: outside the bubble bounds')
+    try:
+        document, _ = read_glb(path)
+    except (OSError, ValueError) as error:
+        fail(f'{label}: {error}')
+        return
+    nodes = document.get('nodes', [])
+    skinned = [node for node in nodes if 'mesh' in node]
+    skins = document.get('skins', [])
+    if len(skinned) != 1 or 'skin' not in skinned[0] or len(skins) != 1:
+        fail(f'{label}: needs one skinned mesh and one skin')
+        return
+    if len(document['meshes'][skinned[0]['mesh']]['primitives']) != 1:
+        fail(f'{label}: needs one primitive')
+    joints = [nodes[index].get('name', '') for index in skins[0]['joints']]
+    if len(set(joints)) != len(joints) or '' in joints or len(joints) > 256:
+        fail(f'{label}: joints need unique names and number at most 256')
+    if 'inverseBindMatrices' not in skins[0]:
+        fail(f'{label}: needs inverse bind matrices')
+    actions = [animation.get('name', '') for animation in document.get('animations', [])]
+    # An entity either loops one action or is a device whose position channel scrubs one.
+    if ('plays' in entity) == ('device' in entity):
+        fail(f'{label}: needs either plays or device')
+        return
+    action = entity['plays'] if 'plays' in entity else entity['device']['position']
+    role = 'plays' if 'plays' in entity else f'device {entity["device"]["slot"]} scrubs'
+    for event in entity.get('events', []):
+        if event['action'] not in actions:
+            fail(f'{label}: an event names action {event["action"]}, which is not one of {actions}')
+        if ('sound' in event) == ('effect' in event):
+            fail(f'{label}: an event needs either sound or effect')
+    if action not in actions:
+        fail(f'{label}: {role} {action}, which is not one of {actions}')
+    else:
+        print(f'  entity {entity["name"]} at {entity["position"]}: {len(joints)} joints, {role} {action} of {actions}')
+
+
 def read_accessor(document, binary, index):
     accessor = document['accessors'][index]
     if 'sparse' in accessor:
@@ -223,18 +281,20 @@ def bounds_of(points):
             tuple(max(p[i] for p in points) for i in range(3)))
 
 
-def check_material(document, label):
+def check_material(document, label, expected):
     materials = document.get('materials', [])
-    if len(materials) != 1:
-        fail(f'{label}: expected one material, found {len(materials)}')
+    names = [material.get('name', '?') for material in materials]
+    if sorted(names) != sorted(expected):
+        fail(f'{label}: materials {names}, expected {sorted(expected)}')
     for material in materials:
         name = material.get('name', '?')
-        if material.get('alphaMode', 'OPAQUE') != 'OPAQUE':
-            fail(f'{label}: material {name} is not opaque')
+        mode, emits = expected.get(name, ('OPAQUE', False))
+        if material.get('alphaMode', 'OPAQUE') != mode:
+            fail(f'{label}: material {name} is {material.get("alphaMode", "OPAQUE")}, expected {mode}')
         if material.get('doubleSided', False):
             fail(f'{label}: material {name} is double-sided; Studio refuses it')
-        if any(material.get('emissiveFactor', [0, 0, 0])) or 'emissiveTexture' in material:
-            fail(f'{label}: material {name} is emissive; Studio refuses it')
+        if bool(any(material.get('emissiveFactor', [0, 0, 0])) or 'emissiveTexture' in material) != emits:
+            fail(f'{label}: material {name} {"lacks" if emits else "has"} emission')
         if material.get('extensions'):
             fail(f'{label}: material {name} has extensions; Studio refuses them')
 
@@ -249,7 +309,8 @@ def check_glb(path, label):
     for key in ('extensionsRequired', 'skins', 'animations'):
         if document.get(key):
             fail(f'{label}: has {key}; the static import path refuses it')
-    check_material(document, label)
+    expected_nodes = EXPECTED_NODES.get(path.name, {})
+    check_material(document, label, EXPECTED_MATERIALS.get(path.name, {}))
     nodes = document['nodes']
     scene = document['scenes'][document.get('scene', 0)]
     identity = [[1 if i == j else 0 for j in range(4)] for i in range(4)]
@@ -272,10 +333,11 @@ def check_glb(path, label):
             if primitive.get('mode', 4) != 4 or 'targets' in primitive:
                 fail(f'{where}: primitive is not plain triangles')
                 continue
-            missing = [a for a in ('POSITION', 'NORMAL', 'TEXCOORD_0') if a not in attributes]
-            extra = [a for a in attributes if a not in ('POSITION', 'NORMAL', 'TEXCOORD_0')]
+            wanted = ('POSITION', 'NORMAL', 'TEXCOORD_0') + (('COLOR_0',) if name in COLOURED_NODES else ())
+            missing = [a for a in wanted if a not in attributes]
+            extra = [a for a in attributes if a not in wanted]
             if missing or extra:
-                fail(f'{where}: needs exactly POSITION, NORMAL, TEXCOORD_0; missing {missing}, extra {extra}')
+                fail(f'{where}: needs exactly {", ".join(wanted)}; missing {missing}, extra {extra}')
                 continue
             accessor, positions = read_accessor(document, binary, attributes['POSITION'])
             _, normals = read_accessor(document, binary, attributes['NORMAL'])
@@ -312,15 +374,15 @@ def check_glb(path, label):
             node_points += game
             vertices += len(positions)
             triangles += len(indices) // 3
-        if node_points and name in EXPECTED_NODES:
+        if node_points and name in expected_nodes:
             got = bounds_of(node_points)
-            want = EXPECTED_NODES[name]
+            want = expected_nodes[name]
             if any(abs(g - w) > 1e-6 for pair in zip(got, want) for g, w in zip(*pair)):
                 fail(f'{label}: node {name} game bounds {got}, expected {want}')
             else:
                 print(f'  node {name}: game bounds {got[0]} .. {got[1]}')
         points += node_points
-    missing = set(EXPECTED_NODES) - {n.get('name') for n in nodes}
+    missing = set(expected_nodes) - {n.get('name') for n in nodes}
     if missing:
         fail(f'{label}: missing nodes {sorted(missing)}')
     if vertices > MAX_VERTICES or triangles * 3 > MAX_INDICES or vertices < 3:
@@ -368,6 +430,17 @@ def check_static(folder, bubble, static, label):
           f'placed bounds {placed_bounds[0]} .. {placed_bounds[1]}')
     if not all(inside(p, bubble['bounds']) for p in placed):
         fail(f'{label}: placed bounds {placed_bounds} leave the bubble bounds')
+    lods = static.get('lods', [])
+    if len(static.get('lod_distances', [])) > len(lods):
+        fail(f'{label}: more lod_distances than lods')
+    for lod in lods:
+        path = folder / lod
+        if not path.resolve().is_relative_to(folder.resolve()) or not path.is_file():
+            fail(f'{label}: lod {lod} is missing or leaves the bubble folder')
+            continue
+        lod_result = check_glb(path, f'{label} lod {lod}')
+        if lod_result is not None:
+            print(f'  {label} lod {lod}: {lod_result[1]} vertices, {lod_result[2]} triangles')
 
 
 def check_bundle(root, validate):
@@ -425,6 +498,70 @@ def check_bundle(root, validate):
                 fail(f'{name}: spawn point {spawn["name"]} is outside the bubble bounds')
             else:
                 print(f'  spawn {spawn["name"]} at {spawn["position"]}')
+        lights = bubble.get('lights', [])
+        if len({light['name'] for light in lights}) != len(lights):
+            fail(f'{name}: light names repeat')
+        for light in lights:
+            if not inside(light['position'], box):
+                fail(f'{name}: light {light["name"]} is outside the bubble bounds')
+            else:
+                print(f'  light {light["name"]} at {light["position"]}')
+        entities = bubble.get('entities', [])
+        if len({entity['name'] for entity in entities}) != len(entities):
+            fail(f'{name}: entity names repeat')
+        for entity in entities:
+            check_entity(root / name / entity['glb'], entity, f'{name} entity {entity["name"]}', box)
+        if 'permissions' in bubble:
+            check_permissions(root / name, bubble['permissions'], f'{name} permissions')
+    for tile in bundle.get('far', []):
+        label = f'far {tile["name"]}'
+        for covered in tile['covers']:
+            if covered not in bubbles or bubbles[covered]['kind'] != 'outdoor':
+                fail(f'{label}: covers {covered}, which is not an outdoor bubble of the bundle')
+        path = root / tile['glb']
+        if not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+            fail(f'{label}: {tile["glb"]} is missing or leaves the bundle folder')
+            continue
+        result = check_glb(path, label)
+        if result is not None:
+            print(f'{label}: {result[1]} vertices, {result[2]} triangles, covers {tile["covers"]}')
+    sounds = bundle.get('sounds', [])
+    if len({sound['name'] for sound in sounds}) != len(sounds):
+        fail('sounds: names repeat')
+    for sound in sounds:
+        extra = list(sound.get('variations', [])) + list(sound.get('switches', {}).values())
+        for other in extra:
+            if not (root / other).resolve().is_relative_to(root.resolve()) or not (root / other).is_file():
+                fail(f'sound {sound["name"]}: {other} is missing or leaves the bundle folder')
+        path = root / sound['wav']
+        if not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+            fail(f'sound {sound["name"]}: {sound["wav"]} is missing or leaves the bundle folder')
+            continue
+        data = path.read_bytes()
+        # A canonical PCM header: format 1, 1 or 2 channels, 16 bits.
+        if data[:4] != b'RIFF' or data[8:16] != b'WAVEfmt ' or struct.unpack('<H', data[20:22])[0] != 1 \
+                or struct.unpack('<H', data[22:24])[0] not in (1, 2) or struct.unpack('<H', data[34:36])[0] != 16:
+            fail(f'sound {sound["name"]}: {sound["wav"]} is not mono or stereo PCM16')
+        else:
+            rate = struct.unpack('<I', data[24:28])[0]
+            print(f'sound {sound["name"]}: {sound["wav"]} {rate} Hz, like {sound["like"]}')
+    # An event names a bundle sound or an installed tag in hex.
+    for name in bubbles:
+        for entity in bubbles[name].get('entities', []):
+            for event in entity.get('events', []):
+                text = event.get('sound')
+                if text is not None and not re.fullmatch(r'0x[0-9A-Fa-f]{8}', text) and text not in {sound['name'] for sound in sounds}:
+                    fail(f'{name} entity {entity["name"]}: sound {text} is not one of the bundle sounds')
+    sky = bundle.get('sky')
+    if sky is not None:
+        path = root / sky['panorama']
+        if not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+            fail(f'sky: {sky["panorama"]} is missing or leaves the bundle folder')
+        elif path.read_bytes()[:8] != b'\x89PNG\r\n\x1a\n':
+            fail(f'sky: {sky["panorama"]} is not a PNG')
+        else:
+            width, height = struct.unpack('>II', path.read_bytes()[16:24])
+            print(f'sky: {sky["panorama"]} {width} by {height}')
 
 
 def compare(root, other):
@@ -436,6 +573,35 @@ def compare(root, other):
         if (root / name).read_bytes() != (other / name).read_bytes():
             fail(f'compare: {name} differs')
     print(f'compare: {len(mine & theirs)} files checked against {other}')
+
+
+def read_png(path):
+    """Width, height and RGBA rows of an 8-bit RGBA PNG with filter 0 rows, as the generator writes."""
+    import zlib
+    data = path.read_bytes()
+    width, height, depth, kind = struct.unpack('>IIBB', data[16:26])
+    if depth != 8 or kind != 6:
+        fail(f'{path.name}: not 8-bit RGBA')
+        return 0, 0, []
+    chunks, at = b'', 8
+    while at < len(data):
+        length, tag = struct.unpack('>I4s', data[at:at + 8])
+        if tag == b'IDAT':
+            chunks += data[at + 8:at + 8 + length]
+        at += 12 + length
+    raw = zlib.decompress(chunks)
+    stride = 1 + 4 * width
+    return width, height, [raw[y * stride + 1:(y + 1) * stride] for y in range(height)]
+
+
+def check_permissions(folder, grid, label):
+    """The grid PNG is square cells; the fixture blocks a 1 by 12 cell wall."""
+    width, height, rows = read_png(folder / grid['png'])
+    blocked = sum(1 for row in rows for x in range(width) if row[4 * x] >= 128)
+    if width != 32 or height != 32 or blocked != 12:
+        fail(f'{label}: {width} by {height} cells with {blocked} blocked, not 32 by 32 with 12')
+    else:
+        print(f'  {label}: {width} by {height} cells of {grid["cell"]} m, {blocked} blocked, walls {grid["height"]} m')
 
 
 def main():

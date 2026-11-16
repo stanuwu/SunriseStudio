@@ -1357,7 +1357,7 @@ public struct C808047cb
     public const uint Class = 0x808047CB;
     public const int Align = 8;
 
-    [FieldOffset(0)] public uint Unk0;
+    [FieldOffset(0)] public uint ArtKey;
     [FieldOffset(8)] public TagArray<C808047cd> Entries;
 }
 
@@ -1378,8 +1378,8 @@ public struct C808047cd
     public const uint Class = 0x808047CD;
     public const int Align = 4;
 
-    [FieldOffset(0)] public uint Unk0;
-    [FieldOffset(4)] public uint Unk4;
+    [FieldOffset(0)] public uint Variant;
+    [FieldOffset(4)] public uint Hierarchy;
 }
 
 /** `c_808047cf`, class 0x808047CF. */

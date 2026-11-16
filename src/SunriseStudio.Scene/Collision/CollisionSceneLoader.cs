@@ -37,6 +37,7 @@ public sealed partial class CollisionSceneLoader(PackageCatalog catalog)
         catalog.TryGetEntry(root, out var entry);
         if (entry is { Type: 26, SubType: 7 }) LoadPackfile(root);
         else if (entry?.Reference == StaticCollisionReader.OwnerClass) LoadOwner(root, null);
+        else if (entry is not null && IsNav(entry.Reference)) LoadNav(root, entry.Reference);
         else if (entry?.Reference == EntityClass)
         {
             LoadEntityPhysics(root, null, Matrix4x4.Identity, source.PreviewSpawn, source.PreviewVariant, source.PreviewParameters);

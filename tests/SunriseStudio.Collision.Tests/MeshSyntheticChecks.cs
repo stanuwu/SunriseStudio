@@ -15,6 +15,31 @@ internal static class MeshSyntheticChecks
         var loose = Grid(25, 20, shuffle: true, spacing: 0.25f);
         Convex();
         Console.WriteLine($"PASS collision-mesh-synthetic {cube} {grid} {loose}");
+        Paged();
+    }
+
+    /** A 1415 by 1415 vertex terrain grid: its sections are coarse, so it needs many shared-vertex pages. */
+    private static void Paged()
+    {
+        const int side = 1414;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var vertices = new Vector3[(side + 1) * (side + 1)];
+        for (int y = 0; y <= side; y++)
+            for (int x = 0; x <= side; x++)
+                vertices[y * (side + 1) + x] = new Vector3(x, y, 6 * MathF.Sin(x * 0.05f) * MathF.Cos(y * 0.07f));
+        var indices = new int[side * side * 6];
+        int at = 0;
+        for (int y = 0; y < side; y++)
+            for (int x = 0; x < side; x++)
+            {
+                int a = y * (side + 1) + x, b = a + 1, c = a + side + 2, d = a + side + 1;
+                (indices[at], indices[at + 1], indices[at + 2], indices[at + 3], indices[at + 4], indices[at + 5]) = (a, b, c, a, c, d);
+                at += 6;
+            }
+        var (mesh, summary, _) = RoundTrip(new CompressedMeshSource(vertices, indices), "paged-grid");
+        int pages = mesh.Sections.Max(section => section.Page) + 1;
+        Check(vertices.Length > 2_000_000 && pages > 1 && mesh.SharedVertices.Length > 65536, $"paged-grid: {pages} pages, {mesh.SharedVertices.Length} shared vertices.");
+        Console.WriteLine($"PASS collision-mesh-paged vertices={vertices.Length} pages={pages} {summary} seconds={watch.Elapsed.TotalSeconds:F0}");
     }
 
     /** A cube, a square, a line and 64 points on a sphere. */

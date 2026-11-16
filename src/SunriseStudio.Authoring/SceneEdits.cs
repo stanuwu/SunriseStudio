@@ -31,9 +31,10 @@ public static class SceneEdits
             var key = binding.Target;
             if (key.Layout == ObjectEditLayout.TriggerVolume)
             {
-                ref readonly var sector = ref TagView.Checked<STriggerVolumeRow>(binding.Bytes, key.Offset).Sector;
-                Vector3 min = sector.BoundsMin, max = sector.BoundsMax;
-                return new(false, false, true, (min + max) / 2, Quaternion.Identity, 1,
+                ref readonly var volume = ref TagView.Checked<STriggerVolumeRow>(binding.Bytes, key.Offset);
+                Vector3 min = volume.Sector.BoundsMin, max = volume.Sector.BoundsMax;
+                // The volume moves as a whole by its placement position; it does not turn or scale.
+                return new(true, false, true, (min + max) / 2 + volume.SpawnEntry.Position, Quaternion.Identity, 1,
                     min, max, key.SourceTag, key.Offset, binding.Space, "Trigger bounds metadata", key);
             }
             if (key.Layout == ObjectEditLayout.DecoratorInstance)
@@ -62,11 +63,19 @@ public static class SceneEdits
         Quaternion? rotation, float scale, WorldDocument? world = null, string? name = null)
     {
         var binding = Resolve(catalog, target, world);
-        if (binding.Target.Layout == ObjectEditLayout.TriggerVolume)
-            throw new NotSupportedException("Trigger hull transforms are not editable.");
         if (!Finite(position) || rotation is { } turn && (!float.IsFinite(turn.LengthSquared()) || turn.LengthSquared() < 0.000001f)
             || !float.IsFinite(scale) || scale == 0)
             throw new InvalidDataException("Placement needs finite values, a rotation direction and nonzero scale.");
+        if (binding.Target.Layout == ObjectEditLayout.TriggerVolume)
+        {
+            // The client moves the volume's shape by the row's placement position and nothing else.
+            if (scale != 1 || rotation is { } asked && MathF.Abs(MathF.Abs(Quaternion.Normalize(asked).W) - 1) > 1e-5f)
+                throw new NotSupportedException("A trigger volume moves; it does not turn or scale.");
+            ref readonly var volume = ref TagView.Checked<STriggerVolumeRow>(binding.Bytes, binding.Target.Offset);
+            Vector3 offset = position - (volume.Sector.BoundsMin + volume.Sector.BoundsMax) / 2;
+            return offset == volume.SpawnEntry.Position ? null
+                : new(ObjectEditKind.TriggerBounds, binding.Target, name, ObjectEditCompiler.Floats(offset));
+        }
         if (!binding.Row.Scale && scale != 1) throw new NotSupportedException("This placement has no decoded scale field.");
         if (binding.Target.Layout == ObjectEditLayout.DecoratorInstance)
         {

@@ -166,7 +166,8 @@ public static partial class ProjectBuilder
             string output = Path.Combine(packageRoot, $"w64_sunrise_{group.Key:x4}_0.pkg");
             foreach (var tag in group)
             {
-                entries[TagHashes.Split(tag.TagHash).EntryIndex] = new(tag.ClassId, tag.TypeInfo, tag.Data, tag.GameName ?? tag.Name)
+                // Only game names go in the package; the game caps the name data its added packages carry.
+                entries[TagHashes.Split(tag.TagHash).EntryIndex] = new(tag.ClassId, tag.TypeInfo, tag.Data, tag.GameName)
                 { WideHashes = tag.WideHash == 0 ? WideHashAliases.Empty : new([tag.WideHash]) };
                 builtTags.Add(new(tag.Name, tag.TagHash, output));
             }
@@ -251,7 +252,8 @@ public static partial class ProjectBuilder
         if (!File.Exists(installed))
             throw new InvalidOperationException("Sunrise has not generated its activity SDK yet. Start the game once, then build again.");
         byte[]? pack = ModActivitySdk.Build(project.ContentDirectory, schema,
-            tags.ToDictionary(tag => tag.Name, tag => tag.TagHash, StringComparer.Ordinal), installed);
+            tags.ToDictionary(tag => tag.Name, tag => tag.TagHash, StringComparer.Ordinal), installed,
+            project.ReadAsset(ActivityRows.ActivityTable, catalog));
         if (pack is null) return null;
         string path = Path.Combine(buildRoot, ModActivitySdk.FileName);
         File.WriteAllBytes(path, pack);

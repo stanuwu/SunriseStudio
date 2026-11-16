@@ -232,6 +232,8 @@ public sealed partial class StudioForm
             () => StartClone(CreationTypes.MaterialKey));
         CreationMenuItem("Destination", CreationTypes.Destination, () => StartCreation(CreationTypes.Destination));
         CreationMenuItem("Activity", CreationTypes.Activity, () => StartCreation(CreationTypes.Activity));
+        CreationMenuItem("Director entry", CreationTypes.Director, () => StartCreation(CreationTypes.Director));
+        CreationMenuItem("Door from model", CreationTypes.Door, () => StartCreation(CreationTypes.Door));
         ImGui.Separator();
         foreach (var type in CreationTypes.Blocked) CreationMenuItem(type.Name, type, () => { });
         ImGui.EndPopup();

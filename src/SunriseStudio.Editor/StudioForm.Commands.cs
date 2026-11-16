@@ -14,6 +14,7 @@ public sealed partial class StudioForm
     private string addPath = "", addName = "", addPackageId = "0AA0", addReference = "80800000";
     private int addKind, addType = 8, addSubType;
     private StudioDocument? cloneSource;
+    private IReadOnlyList<string> stripDestinations = [];
 
     /** The main menu bar; each item is disabled while its command cannot run. */
     private void DrawMenu()
@@ -61,6 +62,7 @@ public sealed partial class StudioForm
             if (ImGui.MenuItem("Convert placement deltas to object edits", "", false,
                 workspace.CanEdit && workspace.Project?.Changes.Count > 0))
                 workspace.Run(() => workspace.ConvertPlacementDeltas());
+            DrawStripMenu();
             ImGui.Separator();
             if (ImGui.MenuItem("Shortcuts...")) shortcutsDialog = true;
             ImGui.EndMenu();
@@ -104,6 +106,9 @@ public sealed partial class StudioForm
             if (ImGui.MenuItem("Build to folder...", "", false, workspace.CanEdit))
                 PickFolder("Build output", folder => workspace.Build(folder));
             ImGui.Separator();
+            if (ImGui.MenuItem("Bake collision and occlusion", "", false, workspace.CanEdit)) workspace.Run(() => workspace.BakeWorld(false));
+            if (ImGui.MenuItem("Bake all again", "", false, workspace.CanEdit)) workspace.Run(() => workspace.BakeWorld(true));
+            ImGui.Separator();
             if (ImGui.MenuItem("Mod details...", "", false, workspace.CanEdit)) workspace.Run(OpenModDialog);
             ImGui.EndMenu();
         }
@@ -132,6 +137,37 @@ public sealed partial class StudioForm
         }
         chrome.DrawButtons(ImGui.GetFrameHeight());
         ImGui.EndMainMenuBar();
+    }
+
+    /** Edit > Remove host content: one item per project destination; the list is read when the menu opens. */
+    private void DrawStripMenu()
+    {
+        if (!ImGui.BeginMenu("Remove host content", workspace.CanEdit)) return;
+        if (ImGui.IsWindowAppearing())
+            stripDestinations = SunriseStudio.World.WorldTemplate.ProjectDestinations(workspace.Project!.ContentDirectory,
+                SunriseStudio.Packages.Registry.StudioRegistry.Index);
+        foreach (string name in stripDestinations)
+        {
+            if (ImGui.MenuItem(name) && ConfirmStrip(name)) workspace.Run(() => workspace.StripDestinationHost(name));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Removes the copied statics, terrain, collision, props, nav, squads, triggers and devices.");
+        }
+        if (stripDestinations.Count == 0) ImGui.TextDisabled("No destination in this project");
+        ImGui.EndMenu();
+    }
+
+    /** The strip deletes files and Undo does not restore them, so it asks first. */
+    private bool ConfirmStrip(string destination)
+    {
+        if (options.Smoke) return true;
+        bool previous = nativeDialog;
+        nativeDialog = true;
+        try
+        {
+            return MessageBox.Show(this, $"Remove the host content of {destination}? Undo cannot restore it.", "Remove host content",
+                MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
+        }
+        finally { nativeDialog = previous; }
     }
 
     /** Pixels from a text line's top to its baseline in the current font. */

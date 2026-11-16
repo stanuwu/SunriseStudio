@@ -424,8 +424,9 @@ public sealed partial class StudioWorkspace : IDisposable
                 scene = new AssetSceneLoader(catalog) { NameResolver = ResolveHash, GameNames = Names?.GameNames,
                     IncludeLowerLods = true, Progress = _ => ReportProgress("Reading geometry") }
                     .Load(links.PreviewTag, PreviewOptions(catalog, links.PreviewTag, previewVariant, spawn), OperationToken);
-            // A Havok packfile or a collision owner has no geometry; its empty scene carries the collision layer.
-            else if (entry is { Type: 26, SubType: 7 } || entry.Reference == SunriseStudio.Scene.Collision.StaticCollisionReader.OwnerClass)
+            // A Havok packfile, a collision owner or a nav mesh has no geometry; its empty scene carries the collision layer.
+            else if (entry is { Type: 26, SubType: 7 } || entry.Reference == SunriseStudio.Scene.Collision.StaticCollisionReader.OwnerClass
+                || SunriseStudio.Scene.Collision.CollisionSceneLoader.IsNav(entry.Reference))
                 scene = new SceneDocument { TagHash = entry.TagHash, Name = name };
             if (scene is not null) Names?.NameScene(scene);
             if (scene is not null && links.AnimationEntityTag != 0)

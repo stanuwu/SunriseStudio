@@ -42,7 +42,7 @@ public struct C80805b03
     public const uint Class = 0x80805B03;
     public const int Align = 8;
 
-    [FieldOffset(0)] public uint Unk0;
+    [FieldOffset(0)] public uint MapNodeHash;
     [FieldOffset(8)] public TagArray<C80805b05> H8e00af4d;
 }
 
@@ -63,9 +63,11 @@ public struct C80805b05
     public const uint Class = 0x80805B05;
     public const int Align = 4;
 
-    [FieldOffset(8)] public uint Unk8;
-    [FieldOffset(16)] public uint Unk10;
-    [FieldOffset(20)] public uint Unk14;
+    [FieldOffset(4)] public uint NameBank;
+    [FieldOffset(8)] public uint NameHash;
+    [FieldOffset(12)] public uint ActionBank;
+    [FieldOffset(16)] public uint ActionHash;
+    [FieldOffset(20)] public uint SpawnSetHash;
 }
 
 /** `c_80805b06`, class 0x80805B06. */

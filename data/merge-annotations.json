@@ -154,7 +154,8 @@
       { "name": "ShortRowLimit", "value": 32767, "doc": "Studio stops these tables at short.MaxValue rows." },
       { "name": "StatGroupLimit", "value": 128, "doc": "An item display picks its stat group with a signed byte." },
       { "name": "ActivityRowLimit", "value": 4095, "doc": "Sunrise reads at most this many activity rows." },
-      { "name": "DestinationRowLimit", "value": 256, "doc": "An activity names its destination row with one byte." }
+      { "name": "DestinationRowLimit", "value": 256, "doc": "An activity names its destination row with one byte." },
+      { "name": "GraphRowLimit", "value": 64, "doc": "The client keeps runtime rows for this many graphs." }
     ],
     "classes": [
       { "name": "ItemClass", "class": "item_definition" },
@@ -163,7 +164,9 @@
       { "name": "VendorDisplayClass", "class": "s_investment_vendor_display" },
       { "name": "ActivityRecordClass", "class": "activity_definition" },
       { "name": "ActivityTextClass", "class": "activity_text_record",
-        "doc": "A client activity record's first pointer names a text block of string references." }
+        "doc": "A client activity record's first pointer names a text block of string references." },
+      { "name": "GraphClass", "class": "c_80805e79", "doc": "A display graph: a destination's map page." },
+      { "name": "GraphDefinitionClass", "class": "c_80807512", "doc": "A definition graph: the activities a map page lists." }
     ],
     "tags": [
       { "name": "ItemIndex", "tag": "0x81327CCB", "class": "item_index_table" },
@@ -195,7 +198,15 @@
       { "name": "ActivityDefinitions", "tag": "0x81327CF0", "class": "activity_definition_table" },
       { "name": "ActivityTexts", "tag": "0x81327D35", "class": "activity_client_table" },
       { "name": "Destinations", "tag": "0x81327CDA", "class": "c_80807768" },
-      { "name": "DestinationTexts", "tag": "0x81327D6B", "class": "c_80805b27" }
+      { "name": "DestinationTexts", "tag": "0x81327D6B", "class": "c_80805b27" },
+      { "name": "GraphIndex", "tag": "0x81327D62", "class": "c_80805e73", "doc": "Display graphs; graph 19 is the Director's top page." },
+      { "name": "GraphDefinitions", "tag": "0x81327D04", "class": "c_808075ca" },
+      { "name": "DirectorTop", "tag": "0x81327D50", "class": "c_80805e79", "doc": "Each linked graph row is one planet tile." },
+      { "name": "MapNodes", "tag": "0x81327CD8", "class": "c_80807a30" },
+      { "name": "MapNodeTexts", "tag": "0x81327D6C", "class": "c_80805aff" },
+      { "name": "MapPlacements", "tag": "0x81327CD9", "class": "c_808075a8" },
+      { "name": "DirectorArt", "tag": "0x80BC62C1", "class": "c_808047b7", "doc": "Art key to map page hierarchy." },
+      { "name": "DirectorHeaderArt", "tag": "0x80BC63B5", "class": "c_808047b7" }
     ],
     "shapes": [
       { "name": "StatRow", "class": "s_stat_group_row",
@@ -226,6 +237,8 @@
           { "owned": "h_01709271", "rows": true },
           { "owned": "bubbles", "element": { "class": "c_80807772", "fields": [ { "owned": "h_01709271", "rows": true } ] } }
         ] },
+      { "name": "LinkedGraphShape", "class": "c_808076d8", "doc": "One graph or node a tile or an activity opens.",
+        "fields": [ { "owned": "h_90b11fae.expression_steps" } ] },
       { "name": "DestinationTextShape", "class": "destination_text_row",
         "fields": [
           { "owned": "h_1c2a8c12", "element": { "class": "c_808076d8", "fields": [ { "owned": "h_90b11fae.expression_steps" } ] } },
@@ -339,7 +352,39 @@
           "limit": "DestinationRowLimit", "key": "unk_0", "unique": true } ] },
       { "tag": "DestinationTexts", "name": "destination texts",
         "arrays": [ { "name": "rows", "member": "table", "row": "DestinationTextShape", "pair": "destination",
-          "limit": "DestinationRowLimit", "key": "destination_hash", "unique": true } ] }
+          "limit": "DestinationRowLimit", "key": "destination_hash", "unique": true } ] },
+      { "tag": "GraphIndex", "name": "graph index",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "graph", "limit": "GraphRowLimit", "key": "graph_hash",
+          "unique": true, "row": { "class": "c_80805e77", "fields": [ { "object": "unk_8" } ] } } ] },
+      { "tag": "GraphDefinitions", "name": "graph definitions",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "graph", "limit": "GraphRowLimit", "key": "graph_hash",
+          "unique": true, "row": { "class": "c_80807510", "fields": [ { "object": "unk_8" } ] } } ] },
+      { "tag": "DirectorTop", "name": "Director planet tiles",
+        "arrays": [ { "name": "rows", "member": "linked_graphs", "limit": "EditorRowLimit", "key": "row_hash", "unique": true,
+          "row": { "class": "c_80805e84", "fields": [
+            { "owned": "linked_activity_graphs", "element": "LinkedGraphShape" },
+            { "owned": "display_unlock_expression.expression_steps" }
+          ] } } ] },
+      { "tag": "MapNodes", "name": "map nodes",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "map node", "limit": "ShortRowLimit", "key": "map_node_hash",
+          "unique": true, "row": { "class": "c_80807a35", "fields": [
+            { "object": "unk_8" }, { "owned": "h_e2c95be2" }, { "owned": "h_ec27f4f4.expression_steps" },
+            { "owned": "h_8e00af4d", "element": { "class": "c_80807a3a", "fields": [ { "owned": "h_373d2eff.expression_steps" } ] } }
+          ] } } ] },
+      { "tag": "MapNodeTexts", "name": "map node texts",
+        "arrays": [ { "name": "rows", "member": "table", "pair": "map node", "limit": "ShortRowLimit", "key": "map_node_hash",
+          "unique": true, "row": { "class": "c_80805b03", "fields": [ { "owned": "h_8e00af4d", "rows": true } ] } } ] },
+      { "tag": "MapPlacements", "name": "map placements",
+        "arrays": [ { "name": "rows", "member": "constants.h_d0034236", "limit": "EditorRowLimit",
+          "row": { "class": "c_80807459", "fields": [ { "owned": "h_373d2eff.expression_steps" } ] } } ] },
+      { "tag": "DirectorArt", "name": "Director art library",
+        "arrays": [ { "name": "rows", "member": "h_89303e88", "key": "art_key", "unique": true, "ordered_when_stock_ascending": true,
+          "row": { "class": "c_808047cb", "fields": [ { "owned": "entries", "rows": true } ] } },
+          { "name": "strings", "member": "localized_strings", "row": "c_808047c6", "key": "unk_0", "unique": true } ] },
+      { "tag": "DirectorHeaderArt", "name": "Director header art library",
+        "arrays": [ { "name": "rows", "member": "h_89303e88", "key": "art_key", "unique": true, "ordered_when_stock_ascending": true,
+          "row": { "class": "c_808047cb", "fields": [ { "owned": "entries", "rows": true } ] } },
+          { "name": "strings", "member": "localized_strings", "row": "c_808047c6", "key": "unk_0", "unique": true } ] }
     ],
     "paths": [
       { "name": "SocketRows", "steps": [ { "pointer": "sockets_item_block", "marker": true }, { "each": "sockets" } ] },
@@ -380,6 +425,14 @@
       { "class": "VendorDisplayClass", "rules": [
         { "name": "name bank", "path": [], "field": "display_properties.name_bank", "target": "StringBankIndex" },
         { "name": "subtitle bank", "path": [], "field": "display_properties.subtitle_bank", "target": "StringBankIndex" }
+      ] },
+      { "class": "GraphClass", "rules": [
+        { "name": "name bank", "path": [], "field": "name_bank", "target": "StringBankIndex" },
+        { "name": "subtitle bank", "path": [], "field": "subtitle_bank", "target": "StringBankIndex" }
+      ] },
+      { "class": "GraphDefinitionClass", "rules": [
+        { "name": "activity", "path": [ { "each": "nodes" }, { "each": "activities" } ], "field": "activity_index",
+          "target": "ActivityDefinitions" }
       ] }
     ],
     "table_sites": [
@@ -421,11 +474,39 @@
       { "tag": "ActivityTexts", "rules": [
         { "name": "title bank", "path": [ { "use": "TextBlock" } ], "field": "title_bank", "target": "StringBankIndex" },
         { "name": "description bank", "path": [ { "use": "TextBlock" } ], "field": "description_bank", "target": "StringBankIndex" },
-        { "name": "expansion bank", "path": [ { "use": "TextBlock" } ], "field": "expansion_bank", "target": "StringBankIndex" }
+        { "name": "expansion bank", "path": [ { "use": "TextBlock" } ], "field": "expansion_bank", "target": "StringBankIndex" },
+        { "name": "graph",
+          "path": [ { "use": "Rows" }, { "pointer": "activity_pointer", "marker": true }, { "each": "h_1c2a8c12" } ],
+          "field": "graph_index", "target": "GraphIndex" }
       ] },
       { "tag": "DestinationTexts", "rules": [
         { "name": "name bank", "path": [ { "use": "Rows" } ], "field": "name_bank", "target": "StringBankIndex" },
-        { "name": "subtitle bank", "path": [ { "use": "Rows" } ], "field": "subtitle_bank", "target": "StringBankIndex" }
+        { "name": "subtitle bank", "path": [ { "use": "Rows" } ], "field": "subtitle_bank", "target": "StringBankIndex" },
+        { "name": "graph", "path": [ { "use": "Rows" }, { "each": "h_1c2a8c12" } ], "field": "graph_index", "target": "GraphIndex" }
+      ] },
+      { "tag": "DirectorTop", "rules": [
+        { "name": "graph", "path": [ { "each": "linked_graphs" }, { "each": "linked_activity_graphs" } ], "field": "graph_index",
+          "target": "GraphIndex" },
+        { "name": "name bank", "path": [ { "each": "linked_graphs" } ], "field": "name_bank", "target": "StringBankIndex" },
+        { "name": "description bank", "path": [ { "each": "linked_graphs" } ], "field": "description_bank",
+          "target": "StringBankIndex" },
+        { "name": "short name bank", "path": [ { "each": "linked_graphs" } ], "field": "short_name_bank",
+          "target": "StringBankIndex" }
+      ] },
+      { "tag": "MapNodes", "rules": [
+        { "name": "destination", "path": [ { "use": "Rows" }, { "each": "h_8e00af4d" } ], "field": "destination_index",
+          "target": "Destinations" }
+      ] },
+      { "tag": "MapNodeTexts", "rules": [
+        { "name": "name bank", "path": [ { "use": "Rows" }, { "each": "h_8e00af4d" } ], "field": "name_bank",
+          "target": "StringBankIndex" },
+        { "name": "action bank", "path": [ { "use": "Rows" }, { "each": "h_8e00af4d" } ], "field": "action_bank",
+          "target": "StringBankIndex" }
+      ] },
+      { "tag": "MapPlacements", "rules": [
+        { "name": "map node", "path": [ { "each": "constants.h_d0034236" } ], "field": "map_node_index", "target": "MapNodes" },
+        { "name": "activity", "path": [ { "each": "constants.h_d0034236" } ], "field": "activity_index",
+          "target": "ActivityDefinitions" }
       ] },
       { "tag": "ItemArt", "rules": [
         { "name": "first field", "path": [ { "each": "items" } ], "field": "first_field", "signed": true,

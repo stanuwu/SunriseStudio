@@ -13,13 +13,18 @@ namespace SunriseStudio.Editor.Creation;
 public sealed class DestinationWorkflow : CreationWorkflow
 {
     private readonly StudioWorkspace workspace;
-    private readonly CreationField template, bubbles, name, activity, title, description, package, bundle;
+    private readonly CreationField template, bubbles, name, activity, title, description, package, bundle, host;
     private (string Name, uint Tag)[]? scenarios;
     private IReadOnlyList<ActivityTemplate> activities = [];
     private uint? listed;
     private IReadOnlyList<WorldBubble> rows = [];
     private readonly HashSet<uint> kept = [];
+    private bool stripHost;
     private string listError = "", activityError = "";
+    // The bundle file the issues were checked for, and the first issues found.
+    private string checkedBundle = "";
+    private IReadOnlyList<string> bundleIssues = [];
+    private const int ShownIssues = 5;
 
     public DestinationWorkflow(StudioWorkspace workspace)
     {
@@ -45,18 +50,23 @@ public sealed class DestinationWorkflow : CreationWorkflow
         title = new("Title", CreationFieldKind.Text, false, "Name in the launcher; empty uses the destination name");
         description = new("Description", CreationFieldKind.Text, false, "Text under the title") { Lines = 3 };
         package = PackageField(workspace);
-        bundle = new("Bundle bubble", CreationFieldKind.File, false, "Statics placed around the arrival spawn")
+        bundle = new("World Import Bundle", CreationFieldKind.File, false, "A bundle, or one bubble of it, placed around the arrival spawn")
         {
-            FileFilter = "Bundle bubble|bubble.json",
-            Hint = "Optional. A World Import Bundle bubble.json; its statics are imported and placed around the arrival spawn.",
+            FileFilter = "World Import Bundle|bundle.json;bubble.json",
+            Hint = "Optional. A bundle.json places every bubble of the bundle, with its lights, far tiles and sky; a bubble.json places that bubble's statics in the arrival bubble.",
+        };
+        host = new("Host content", CreationFieldKind.Rows, false,
+            "The template's statics, terrain, collision, props and nav, and its squads, triggers and devices")
+        {
+            DrawRows = () => ImGui.Checkbox("Remove host content##strip-host", ref stripHost),
         };
     }
 
     public override string Title => "New destination";
-    public override IReadOnlyList<CreationField> Fields => [template, bubbles, name, activity, title, description, package, bundle];
+    public override IReadOnlyList<CreationField> Fields => [template, bubbles, name, activity, title, description, package, bundle, host];
     public override IReadOnlyList<string> Limits =>
     [
-        "The kept bubbles keep their installed content.",
+        "The kept bubbles keep their installed content unless Remove host content is on.",
         "Free roam only: the activity copies an installed free-roam activity.",
     ];
     public override uint? AnchorTag => ActivityRows.ActivityTable;
@@ -69,6 +79,7 @@ public sealed class DestinationWorkflow : CreationWorkflow
             if (activities.Count == 0) activities = ActivityRows.FreeRoam(catalog.ReadOriginal(ActivityRows.ActivityTable));
         }
         catch (Exception error) when (error is InvalidDataException or IOException) { activityError = error.Message; }
+        CheckBundle();
         if (template.Tag == listed) return;
         listed = template.Tag;
         kept.Clear();
@@ -90,7 +101,31 @@ public sealed class DestinationWorkflow : CreationWorkflow
         if (listError.Length != 0) yield return listError;
         if (activityError.Length != 0) yield return activityError;
         if (template.Tag is not null && kept.Count == 0) yield return "Keep at least one bubble.";
+        foreach (string issue in bundleIssues) yield return issue;
         if (PackageProblem(workspace, package) is { } problem) yield return problem;
+    }
+
+    /** Checks the picked bundle against the bundle schema once per picked file. */
+    private void CheckBundle()
+    {
+        string file = bundle.Text.Trim();
+        if (file == checkedBundle) return;
+        checkedBundle = file;
+        bundleIssues = [];
+        if (file.Length == 0) return;
+        try
+        {
+            string folder = Path.GetDirectoryName(Path.GetFullPath(file))!;
+            var schema = SunriseStudio.World.Import.WorldBundleSchema.Load();
+            var issues = Path.GetFileName(file).Equals("bundle.json", StringComparison.OrdinalIgnoreCase)
+                ? schema.CheckBundle(folder) : schema.CheckBubble(folder);
+            bundleIssues = issues.Take(ShownIssues).Select(issue => issue.ToString())
+                .Concat(issues.Count > ShownIssues ? [$"The bundle has {issues.Count - ShownIssues} more issues."] : []).ToArray();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            bundleIssues = [error.Message];
+        }
     }
 
     public override CreationFollowUp? Create(StudioWorkspace workspace)
@@ -100,7 +135,7 @@ public sealed class DestinationWorkflow : CreationWorkflow
         var source = activities.Single(row => row.Hash == activity.Tag);
         workspace.CreateDestination(template.Tag!.Value, kept.ToHashSet(), named,
             new(source, heading, description.Text.Trim(), PackageId(package)),
-            bundle.Text.Trim() is { Length: > 0 } file ? Path.GetDirectoryName(Path.GetFullPath(file)) : null);
+            bundle.Text.Trim() is { Length: > 0 } file ? Path.GetDirectoryName(Path.GetFullPath(file)) : null, stripHost);
         return new(Background: true, Status: "Creating destination");
     }
 

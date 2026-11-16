@@ -27,11 +27,11 @@ static class ReferenceMapChecks
         var project = StudioProject.Create(Path.Combine(parent, "refmap-project"), "Reference map");
         project.SetMod(new ModMetadata("test.refmap", "1.0.0", "Reference map"));
         var allocator = project.EnsureTagAllocator(catalog);
-        uint a = allocator.Allocate("hoenn/a.holder"), b = allocator.Allocate("hoenn/b.holder");
+        uint a = allocator.Allocate("demo/a.holder"), b = allocator.Allocate("demo/b.holder");
         project.SaveTagAllocator(allocator);
         ushort own = TagHashes.Split(a).PackageId;
-        Put(project, Tag(schema, "hoenn/a.holder", "hoenn/b.holder"));
-        Put(project, Tag(schema, "hoenn/b.holder", "#0x80A00000"));
+        Put(project, Tag(schema, "demo/a.holder", "demo/b.holder"));
+        Put(project, Tag(schema, "demo/b.holder", "#0x80A00000", "refmap:b"));
         byte[] patched = new byte[24];
         BinaryPrimitives.WriteUInt32LittleEndian(patched.AsSpan(8), b);
         project.ApplyEdit(stock, patched, catalog);
@@ -66,7 +66,7 @@ static class ReferenceMapChecks
                 "The moved copy kept its old package id.");
             Require(U32(remapped.Read(a + shift), 8) == b + shift && U32(remapped.Read(b + shift), 8) == 0x80A00000
                 && U32(remapped.Read(stock), 8) == b + shift, "A reference does not name the moved tag.");
-            Require(remapped.GetName(b + shift) == "hoenn/b.holder" && remapped.GetName(b) is null,
+            Require(remapped.GetName(b + shift) == "refmap:b" && remapped.GetName(b) is null,
                 "The moved package's named-tag rows still name the old tags.");
         }
 
@@ -104,7 +104,7 @@ static class ReferenceMapChecks
         return new RegistryIndex(registry);
     }
 
-    private static TftFile Tag(RegistryIndex schema, string name, string link)
+    private static TftFile Tag(RegistryIndex schema, string name, string link, string? gameName = null)
     {
         var root = new TagBlueprint { ClassId = Holder, Bytes = new byte[24] };
         BinaryPrimitives.WriteUInt32LittleEndian(root.Bytes.AsSpan(8), TftFile.TagRefPlaceholder);
@@ -113,6 +113,7 @@ static class ReferenceMapChecks
         {
             Name = name, TagType = "holder", ClassId = Holder, TypeInfo = 0x101C, BuildHash = TftFile.HashBuildId("test"),
             Layout = TftLayout.Extract(schema, data, Holder), Data = data, References = [new(8, TftReferenceKind.TagRef, 0, link)],
+            GameName = gameName,
         };
     }
 

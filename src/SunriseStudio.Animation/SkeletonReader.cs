@@ -49,7 +49,20 @@ public sealed class SkeletonReader(PackageCatalog catalog)
         }
         if (Class(resourceTag) != SEntityConfig.Class)
             throw new NotSupportedException("Skeleton input must be an entity or skeleton config tag.");
-        byte[] data = catalog.Read(resourceTag);
+        return FromConfig(resourceTag, catalog.Read(resourceTag), NameResolver, entityTag, models.Order().ToArray(),
+            clothModels.Distinct().ToArray());
+    }
+
+    /**
+     * Reads a skeleton config's bytes, such as one a writer made.
+     * @param resourceTag The config's tag, kept on the rig.
+     */
+    public static SkeletonRig FromConfig(uint resourceTag, byte[] data, Func<uint, string?>? names = null) =>
+        FromConfig(resourceTag, data, names, 0, [], []);
+
+    private static SkeletonRig FromConfig(uint resourceTag, byte[] data, Func<uint, string?>? names, uint entityTag,
+        uint[] models, ClothModelReference[] clothModels)
+    {
         int? instance = ConfigTarget(data, nameof(SEntityConfig.DefaultInstance));
         int? definition = ConfigTarget(data, nameof(SEntityConfig.Definition));
         if (instance is not { } primary
@@ -87,14 +100,13 @@ public sealed class SkeletonReader(PackageCatalog catalog)
             var local = parents[i] < 0 ? objectTransforms[i]
                 : BoneTransform.FromMatrix(objectTransforms[i].Matrix * inverseTransforms[parents[i]].Matrix);
             bones[i] = new SkeletonBone(i, hash,
-                NameResolver?.Invoke(hash) ?? BoneNameCandidates.Resolve(hash) ?? $"bone_{hash:X8}",
+                names?.Invoke(hash) ?? BoneNameCandidates.Resolve(hash) ?? $"bone_{hash:X8}",
                 parents[i], child, sibling, objectTransforms[i], inverseTransforms[i], local);
         }
         if (maximumError > 0.002f)
             throw new InvalidDataException($"Skeleton bind and inverse transforms disagree by {maximumError:G6}.");
         ValidateChildren(bones);
-        return new SkeletonRig(entityTag, resourceTag, models.Order().ToArray(), bones, order,
-            maximumError, clothModels.Distinct().ToArray());
+        return new SkeletonRig(entityTag, resourceTag, models, bones, order, maximumError, clothModels);
     }
 
     /**

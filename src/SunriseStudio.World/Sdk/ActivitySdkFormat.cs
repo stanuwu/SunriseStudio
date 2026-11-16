@@ -3,16 +3,16 @@ using System.Runtime.InteropServices;
 namespace SunriseStudio.World.Sdk;
 
 /**
- * The runtime activity SDK pack Sunrise reads: a 976-byte header, then 51 contiguous sections of
+ * The runtime activity SDK pack Sunrise reads: a 992-byte header, then 52 contiguous sections of
  * fixed-stride rows in section order. Only the rows a destination's roster reads are typed here;
  * the strides of the rest come from the installed pack's header.
  */
 public static class ActivitySdkFormat
 {
     public static ReadOnlySpan<byte> Magic => "SRSDKP01"u8;
-    public const uint Version = 47;
-    public const int SectionCount = 51;
-    public const int HeaderSize = 976;
+    public const uint Version = 48;
+    public const int SectionCount = 52;
+    public const int HeaderSize = 992;
     public const uint AbsentIndex = uint.MaxValue;
     /** Header offsets: version, header size, file size, payload digest, section count and section table. */
     public const int VersionAt = 8, HeaderSizeAt = 12, FileSizeAt = 16, DigestAt = 24, SectionCountAt = 152, SectionTableAt = 160;
@@ -26,8 +26,50 @@ public static class ActivitySdkFormat
 /** Section order of the pack; the values index the header's section table. */
 public enum SdkSection
 {
-    Strings = 0, Activities = 1, Scenarios = 2, Bubbles = 3, States = 4, Objects = 5, Occurrences = 6, Slots = 7,
-    AuthoredSceneResources = 19,
+    Strings = 0, Activities = 1, Scenarios = 2, Bubbles = 3, States = 4, Objects = 5, Occurrences = 6, Slots = 7, Texts = 8,
+    ActorClasses = 12, Squads = 16, SquadMembers = 17, SquadAnchors = 18, AuthoredSceneResources = 19,
+    AuthoredSceneSquadEdges = 20, TaskTargets = 21, ActorStateNames = 42, ActorSequenceTables = 43, ActorSequenceEntries = 44,
+    ActorSequenceBindings = 45, CombatObjectiveGroups = 47, ActorAbilities = 48, ActorAbilityTargets = 49, AuthoredSceneEventKeys = 50,
+    IncidentDefinitions = 51,
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct SdkActorClass
+{
+    public SdkStringRef Id;
+    public uint DefinitionTag, NameHash, RsatTag, RsatReverseDefinitionTag, ObjectType, DescriptorArrayOffset;
+    public long DescriptorArrayRelative;
+    public uint DescriptorArrayHeaderOffset, DescriptorArrayDataOffset, DescriptorElementClass;
+    public SdkRange Descriptors;
+    public uint DynamicPresenceTailCount, AuthoredSpawnProfile;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct SdkSquad
+{
+    public SdkStringRef Id;
+    public uint ScenarioIndex, ObjectIndex, SlotIndex, SpawnerConfigTag, SpawnRuleConfigTag, Flags, OccurrenceIndex;
+    public SdkRange Members, Anchors;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct SdkSquadMember
+{
+    public SdkStringRef Id;
+    public uint SquadIndex, MemberOrdinal, MemberKey, ActorClassIndex, Flags;
+    /** Six u16 candidate counts. */
+    public uint CandidateCounts0, CandidateCounts1, CandidateCounts2;
+    public int DefaultCount;
+    public uint AuthoredSpawnProfile;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct SdkSquadAnchor
+{
+    public SdkStringRef Id;
+    public uint SquadIndex, PointOrdinal, ObjectListTag, PlacementOrdinal, Flags;
+    public ulong PlacedEntryIdentity;
+    public uint PositionX, PositionY, PositionZ;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]

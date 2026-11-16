@@ -105,10 +105,20 @@ static class TemplateChecks
             WorldBuild.Check(WorldContent.FirstLiveBubble(world) == Renamed(expected[0]),
                 "The arrival bubble a bundle lands in is not the first row with states.");
 
-            var placed = StaticChecks.Place(project, catalog, schema, Renamed(51));
+            var statics = StaticChecks.Place(project, catalog, schema, Renamed(51));
+            var placed = statics[0];
+            uint collisionOwner = CollisionChecks.Placed(project, catalog, Renamed(51), statics.Count);
+            OcclusionChecks.Placed(project, catalog, placed);
             files = Directory.EnumerateFiles(folder, "*" + TftNames.FileExtension, SearchOption.AllDirectories)
                 .Select(path => TftFile.Read(File.ReadAllBytes(path))).ToList();
-            WorldBuild.Check(files.Count == count + placed.Files.Count, "The placed static did not add its four files.");
+            WorldBuild.Check(files.Count == count + statics.Sum(x => x.Files.Count) + 2, "The placed statics did not add four files each, one collision list and one nav list.");
+            uint covered = RenamedKept.First(hash => hash != Renamed(51));
+            var far = FarChecks.Place(project, catalog, schema, Renamed(51), covered, RenamedKept, scratch);
+            var sky = SkyChecks.Place(project, catalog, Renamed(51));
+            var light = LightChecks.Place(project, catalog, Renamed(51));
+            files = Directory.EnumerateFiles(folder, "*" + TftNames.FileExtension, SearchOption.AllDirectories)
+                .Select(path => TftFile.Read(File.ReadAllBytes(path))).ToList();
+            count = files.Count - statics.Sum(x => x.Files.Count) - 1;
             var tags = WorldBuild.Compile(catalog, schema, files, ModId);
             var (wide, stock, classes) = WorldBuild.Verify(catalog, schema, tags, copied);
             WorldBuild.Overlay(catalog, tags, StaticChecks.Models(project, catalog));
@@ -125,21 +135,29 @@ static class TemplateChecks
                 && loaded.Objects.Count > 0, "The testbed scenario lost its states or the map its objects.");
             Console.WriteLine($"world_testbed files={tags.Count} bubbles={bubbles.Count} states={loaded.AllStates.Count} "
                 + $"objects={loaded.Objects.Count} project_wide_references={wide} stock_references={stock} stock_classes={classes}");
-            StaticChecks.Loaded(loaded, tags, placed, Renamed(51));
+            StaticChecks.Loaded(catalog, loaded, tags, placed, Renamed(51));
+            CollisionChecks.Loaded(catalog, loaded, tags, collisionOwner, statics);
+            FarChecks.Loaded(loaded, tags, far, new WorldFiles(files), covered);
+            SkyChecks.Loaded(loaded, sky.SkyObjects);
+            LightChecks.Loaded(loaded, light.LightTable);
             catalog.SetOverlayEntries([]);
             catalog.ReadOverride = null;
-            Build(catalog, project, tags.Count, scratch, placed);
+            Build(catalog, project, tags.Count, scratch, placed, collisionOwner, statics.Count);
+            BakeChecks.Run(project, catalog, collisionOwner);
+            BundleChecks.Run(catalog, schema, project, scenario, Kept.ToHashSet());
+            StripChecks.Run(catalog, schema, project, scratch);
         }
         finally { if (Directory.Exists(scratch)) Directory.Delete(scratch, true); }
     }
 
     /** The testbed saved into a project builds new packages that carry its names and resolve its bubbles. */
     private static void Build(PackageCatalog catalog, SunriseStudio.Projects.StudioProject project, int count, string scratch,
-        PlacedBundleStatic placed)
+        PlacedBundleStatic placed, uint collisionOwner, int statics)
     {
         var build = project.Build(catalog, tagSchema: StudioRegistry.Index);
         WorldBuild.Check(build.TagFiles.Count == count, $"The project built {build.TagFiles.Count} of {count} world tags.");
         StaticChecks.Built(build, placed);
+        CollisionChecks.Built(build, collisionOwner, statics);
         string packages = Path.Combine(scratch, "built", "packages");
         Directory.CreateDirectory(packages);
         foreach (string file in build.PackageFiles) File.Copy(file, Path.Combine(packages, Path.GetFileName(file)));
@@ -190,6 +208,48 @@ static class TemplateChecks
             "An SDK state keeps its EDZ slice set or registry tag.");
         WorldBuild.Check(occurrences.Length > 0 && occurrences.All(row => row.ObjectIndex < objects.Length && row.StateIndex < states.Length)
             && objects.Any(item => tags.Contains(item.ObjectTag)), "The SDK occurrences do not reach built objects.");
+        // The kept bubbles' squads come along; each row must point inside this pack, in the server's search order.
+        var squads = pack.Rows<SdkSquad>(SdkSection.Squads);
+        var members = pack.Rows<SdkSquadMember>(SdkSection.SquadMembers);
+        var anchors = pack.Rows<SdkSquadAnchor>(SdkSection.SquadAnchors);
+        var classes = pack.Rows<SdkActorClass>(SdkSection.ActorClasses);
+        var slots = pack.Rows<SdkSlot>(SdkSection.Slots);
+        bool squadsJoin = squads.Select((squad, row) => squad.ScenarioIndex == 0 && squad.SlotIndex < slots.Length
+            && slots[squad.SlotIndex].ObjectIndex == squad.ObjectIndex && squad.OccurrenceIndex < occurrences.Length
+            && occurrences[squad.OccurrenceIndex].ObjectIndex == squad.ObjectIndex && pack.Text(squad.Id).Length > 0
+            && squad.Members.Count > 0 && squad.Members.First + squad.Members.Count <= members.Length
+            && squad.Anchors.First + squad.Anchors.Count <= anchors.Length
+            && Enumerable.Range((int)squad.Members.First, (int)squad.Members.Count).All(at => members[at].SquadIndex == row
+                && members[at].MemberOrdinal == at - squad.Members.First
+                && (members[at].ActorClassIndex == uint.MaxValue || members[at].ActorClassIndex < classes.Length))
+            && Enumerable.Range((int)squad.Anchors.First, (int)squad.Anchors.Count).All(at => anchors[at].SquadIndex == row)).All(x => x);
+        WorldBuild.Check(squads.Length > 0 && squadsJoin && classes.Length > 0
+            && classes.Select(item => item.RsatTag).Distinct().Count() == classes.Length && classes.All(item => item.Descriptors.Count == 0),
+            $"The SDK squad rows do not join inside the pack ({squads.Length} squads, {classes.Length} actor classes).");
+        // Rows copied as words: every slot and actor class they name must be a row of this pack, in rising order.
+        var (groups, groupWords) = pack.Words(SdkSection.CombatObjectiveGroups);
+        var (edges, edgeWords) = pack.Words(SdkSection.AuthoredSceneSquadEdges);
+        var (texts, textWords) = pack.Words(SdkSection.Texts);
+        var (stateNames, stateWords) = pack.Words(SdkSection.ActorStateNames);
+        var (bindings, bindingWords) = pack.Words(SdkSection.ActorSequenceBindings);
+        var (sequenceTables, tableWords) = pack.Words(SdkSection.ActorSequenceTables);
+        uint[] Column(uint[] words, int rowWords, int word) => Enumerable.Range(0, words.Length / rowWords).Select(row => words[row * rowWords + word]).ToArray();
+        bool Rising(uint[] values) => values.Zip(values.Skip(1), (a, b) => a <= b).All(x => x);
+        var groupSlots = Column(groups, groupWords, 0);
+        var edgeSlots = Column(edges, edgeWords, 2);
+        var nameClasses = Column(stateNames, stateWords, 0);
+        int tableCount = sequenceTables.Length / tableWords;
+        WorldBuild.Check(groupSlots.Length > 0 && groupSlots.All(slot => slot < slots.Length) && Rising(groupSlots)
+            && edgeSlots.All(slot => slot < slots.Length) && Column(edges, edgeWords, 3).All(slot => slot < slots.Length) && Rising(edgeSlots)
+            && texts.Length / textWords == slots.Sum(slot => slot.Aliases.Count)
+            && slots.All(slot => slot.Aliases.First + slot.Aliases.Count <= texts.Length / textWords)
+            && nameClasses.All(row => row < classes.Length) && Rising(nameClasses)
+            && Column(bindings, bindingWords, 0).All(row => row < classes.Length)
+            && Column(bindings, bindingWords, 4).Concat(Column(bindings, bindingWords, 5)).All(row => row == uint.MaxValue || row < tableCount),
+            "An SDK row copied by slot or actor class points outside the pack or is out of order.");
+        Console.WriteLine($"world_testbed_sdk_rows objective_groups={groupSlots.Length} scene_edges={edgeSlots.Length} alias_texts={texts.Length / textWords} "
+            + $"state_names={nameClasses.Length} sequence_bindings={bindings.Length / bindingWords} sequence_tables={tableCount}");
+        Console.WriteLine($"world_testbed_sdk_squads squads={squads.Length} members={members.Length} anchors={anchors.Length} actor_classes={classes.Length}");
         Console.WriteLine($"world_testbed_sdk bubbles={bubbles.Length} states={states.Length} occurrences={occurrences.Length} "
             + $"objects={objects.Length} built_objects={objects.Count(item => tags.Contains(item.ObjectTag))} bytes={new FileInfo(build.ActivitySdkPack!).Length}");
     }

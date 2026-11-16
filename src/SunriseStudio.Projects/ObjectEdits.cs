@@ -134,8 +134,9 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
         bool bounds = Target.Layout == ObjectEditLayout.TriggerVolume;
         if (bounds != (Kind == ObjectEditKind.TriggerBounds))
             throw new InvalidDataException("Object edit kind does not match its layout.");
-        if (bounds && (Minimum is null || Maximum is null || Position is not null || Rotation is not null || Scale is not null))
-            throw new InvalidDataException("Trigger bounds edits need a minimum and a maximum only.");
+        // A trigger volume edit sets both bounds corners, the row's placement position, or both.
+        if (bounds && ((Minimum is null) != (Maximum is null) || Rotation is not null || Scale is not null))
+            throw new InvalidDataException("A trigger volume edit sets both bounds corners, a position, or both.");
         if (!bounds && (Minimum is not null || Maximum is not null))
             throw new InvalidDataException("Placement edits cannot set bounds.");
         if (!HasValues) throw new InvalidDataException("Object edit sets no value.");
