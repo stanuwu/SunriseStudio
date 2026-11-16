@@ -15,15 +15,9 @@ public sealed record NavigationPoint(Vector3 Normal, uint FaceKind, uint Face, V
 public sealed record NavigationCluster(Vector3 Centre, float Radius, float MinimumZ, float MaximumZ,
     int Representative, NavigationArray Members);
 public sealed record NavigationMeshLayer(int Index, Vector3 Minimum, Vector3 Maximum, float CellSize, float CellHeight,
-    Vector3[] Vertices, NavigationFace[] Faces, NavigationLink[] Links, IReadOnlyList<NavigationArray> Arrays)
-{
-    public ReadOnlyMemory<byte> Header { get; init; }
-}
+    Vector3[] Vertices, NavigationFace[] Faces, NavigationLink[] Links, IReadOnlyList<NavigationArray> Arrays);
 public sealed record NavigationGraphLayer(int Index, float[] Agent, NavigationPoint[] Points,
-    NavigationCluster[] Clusters, IReadOnlyList<NavigationArray> Arrays)
-{
-    public ReadOnlyMemory<byte> Header { get; init; }
-}
+    NavigationCluster[] Clusters, IReadOnlyList<NavigationArray> Arrays);
 public sealed record NavigationMesh(uint MeshTag, uint GraphTag, Vector3 Minimum, Vector3 Maximum,
     NavigationMeshLayer[] Layers, NavigationGraphLayer[] GraphLayers);
 public sealed record PlacedNavigation(uint Tag, uint BubbleHash, Matrix4x4 Transform, NavigationMesh Mesh, SceneMarker Marker);
