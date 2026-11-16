@@ -56,25 +56,31 @@ public static class SpawnPointAdditions
             .OrderBy(edit => edit.Key, StringComparer.Ordinal).ToArray();
 
     /**
-     * The addition whose row starts at `offset` of the compiled bank.
-     * @return Null for a row the bank had before the project.
+     * The addition whose row starts at `offset` of the bank's bytes.
+     * @return Null for an installed row, or when the bytes do not hold exactly these additions.
      */
-    public static ObjectEdit? At(byte[] bank, uint tag, int offset, IEnumerable<ObjectEdit> edits)
+    public static ObjectEdit? At(PackageCatalog catalog, byte[] bank, uint tag, int offset, IEnumerable<ObjectEdit> edits)
     {
         var added = Of(edits, tag);
-        if (added.Length == 0) return null;
-        int[] rows = ObjectRows.RowOffsets<SSpawnPointRow>(bank, Field, SSpawnPointRow.Class);
-        int index = Array.IndexOf(rows, offset) - (rows.Length - added.Length);
+        int index = Array.IndexOf(Added(catalog, bank, tag, added.Length), offset);
         return index >= 0 ? added[index] : null;
     }
 
-    /** @return Where the addition's row starts in the compiled bank, or -1 when the bank does not hold it. */
-    public static int Offset(byte[] bank, ObjectEdit addition, IEnumerable<ObjectEdit> edits)
+    /** @return Where the addition's row starts in the bank's bytes, or -1 when they do not hold it. */
+    public static int Offset(PackageCatalog catalog, byte[] bank, ObjectEdit addition, IEnumerable<ObjectEdit> edits)
     {
         var added = Of(edits, addition.Target.SourceTag);
         int index = Array.FindIndex(added, edit => edit.Key == addition.Key);
+        int[] rows = Added(catalog, bank, addition.Target.SourceTag, added.Length);
+        return index >= 0 && index < rows.Length ? rows[index] : -1;
+    }
+
+    /** The rows past the installed ones, when the bytes hold exactly `count` of them. */
+    private static int[] Added(PackageCatalog catalog, byte[] bank, uint tag, int count)
+    {
+        if (count == 0) return [];
         int[] rows = ObjectRows.RowOffsets<SSpawnPointRow>(bank, Field, SSpawnPointRow.Class);
-        int at = rows.Length - added.Length + index;
-        return index < 0 || at < 0 ? -1 : rows[at];
+        int own = ObjectRows.RowOffsets<SSpawnPointRow>(catalog.ReadOriginal(tag), Field, SSpawnPointRow.Class).Length;
+        return rows.Length == own + count ? rows[own..] : [];
     }
 }

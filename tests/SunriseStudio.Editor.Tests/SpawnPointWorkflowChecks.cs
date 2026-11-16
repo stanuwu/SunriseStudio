@@ -21,30 +21,30 @@ internal static class SpawnPointWorkflowChecks
         File.WriteAllBytes(keys, keyExport);
         using var workspace = new StudioWorkspace { CacheOptions = new() { Enabled = false } };
         workspace.OpenInstallation(install, keys); Wait(workspace);
-        workspace.CreateProject(Path.Combine(root, "spawn-project"), "Arrival workflow"); Wait(workspace);
+        workspace.CreateProject(Path.Combine(root, "spawn-project"), "Spawn point workflow"); Wait(workspace);
         workspace.OpenMission(WorldFixture.Base, WorldFixture.Base + 4); Wait(workspace);
         var catalog = workspace.Catalog!;
         var project = workspace.Project!;
         var original = catalog.ReadOriginal(bank);
-        var addition = SpawnPointAuthoring.Create(catalog, project.ObjectEdits, bank, new(30, 40, 50), Quaternion.Identity, 500);
-        workspace.ApplyObjectEdit(addition); Wait(workspace);
         SceneMarker[] Points() => workspace.World!.Scene.Markers.Where(marker => marker.SourceTag == bank).ToArray();
+        var addition = SceneEdits.CreateSpawnPointEdit(catalog, Points()[0], project.ObjectEdits, new(30, 40, 50), Quaternion.Identity);
+        workspace.ApplyObjectEdit(addition); Wait(workspace);
         Require(Points().Length == 2 && Points()[1].Position == new Vector3(30, 40, 50), "Added marker did not reach the mission.");
-        var duplicate = SpawnPointAuthoring.Create(catalog, project.ObjectEdits, bank, Points()[1].Position, Points()[1].Rotation, Points()[1].NameHash);
+        var duplicate = SceneEdits.CreateSpawnPointEdit(catalog, Points()[1], project.ObjectEdits, Points()[1].Position, Points()[1].Rotation);
         workspace.ApplyObjectEdit(duplicate); Wait(workspace);
         byte[] both = catalog.Read(bank);
         Require(Points().Length == 3, "Duplicate did not reach the mission.");
         var point = Points()[2];
         var frame = TransformHandles.Read(catalog, point, workspace.World, out _, project.ObjectEdits)!;
         workspace.ApplyObjectEdit(TransformHandles.CreateEdit(catalog, point, frame, frame.Pivot,
-            new(new(2, 3, 4), Quaternion.Identity, Vector3.One), workspace.World, "Moved arrival", project.ObjectEdits));
+            new(new(2, 3, 4), Quaternion.Identity, Vector3.One), workspace.World, "Moved spawn point", project.ObjectEdits));
         Wait(workspace);
         Require(Points()[2].Position == new Vector3(32, 43, 54) && project.ObjectEdits.Count == 2,
             "Gizmo edit did not update the existing addition.");
         workspace.Undo(); Wait(workspace);
         Require(catalog.Read(bank).SequenceEqual(both), "Gizmo undo changed the bank.");
         workspace.RevertObjectEdit(addition.Key); Wait(workspace);
-        Require(Points().Length == 2 && SpawnPointAuthoring.Find(catalog, Points()[1], project.ObjectEdits)?.Key == duplicate.Key,
+        Require(Points().Length == 2 && SpawnPointAdditions.At(catalog, catalog.Read(bank), bank, Points()[1].SourceOffset, project.ObjectEdits)?.Key == duplicate.Key,
             "Remove did not preserve the duplicate's stable identity.");
         workspace.Undo(); Wait(workspace);
         Require(catalog.Read(bank).SequenceEqual(both) && Points().Length == 3, "Remove undo did not restore both rows.");

@@ -210,6 +210,7 @@ try
     if (gameIndex >= 0)
     {
         using var owned = PackageCatalog.Open(args[gameIndex + 1]);
+        SpawnPointChecks.Owned(owned);
         var ownedLoader = new WorldLoader(owned, StudioNameIndex.Create(owned));
         var ownedIndex = ownedLoader.BuildCatalog();
         Check(ownedIndex.Maps.Count > 0 && ownedIndex.Missions.Count > 0, "Owned world catalog is empty.");

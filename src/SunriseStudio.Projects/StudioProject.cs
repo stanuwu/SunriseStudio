@@ -12,7 +12,8 @@ public sealed partial class StudioProject
     public const string ProjectFileName = "sunrise.project.json";
     // The newest manifest version this build reads and writes.
     public const int ManifestVersion = 7;
-    private const int MaximumManifestBytes = 16 * 1024 * 1024;
+    // A whole ported region lists about 76,000 assets, about 50 MB of manifest.
+    private const int MaximumManifestBytes = 128 * 1024 * 1024;
     private ProjectManifest manifest;
     public string DirectoryPath { get; }
     public string ManifestPath => Path.Combine(DirectoryPath, ProjectFileName);

@@ -71,8 +71,6 @@ public static class SceneEdits
         IReadOnlyList<ObjectEdit>? edits = null)
     {
         var binding = Resolve(catalog, target, world, edits: edits);
-        if (binding.Target.Layout == ObjectEditLayout.TriggerVolume)
-            throw new NotSupportedException("Trigger hull transforms are not editable.");
         if (!Finite(position) || rotation is { } turn && (!float.IsFinite(turn.LengthSquared()) || turn.LengthSquared() < 0.000001f)
             || !float.IsFinite(scale) || scale == 0)
             throw new InvalidDataException("Placement needs finite values, a rotation direction and nonzero scale.");
@@ -203,7 +201,7 @@ public static class SceneEdits
         var row = ObjectRows.Locate(catalog, key, bytes);
         // An added spawn row has no installed original; its edit stands in for it.
         if (key.Layout == ObjectEditLayout.SpawnPoint && edits is not null
-            && SpawnPointAdditions.At(bytes, key.SourceTag, key.Offset, edits) is { } addition)
+            && SpawnPointAdditions.At(catalog, bytes, key.SourceTag, key.Offset, edits) is { } addition)
             return new(key, bytes, row, space, addition);
         byte[] original;
         if (authored?.Invoke(key.SourceTag) == true) original = bytes;

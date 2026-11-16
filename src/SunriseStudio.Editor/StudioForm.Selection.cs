@@ -233,7 +233,7 @@ public sealed partial class StudioForm
     {
         if (workspace.World is not { } world || workspace.Catalog is not { } catalog || workspace.Project is not { } project)
             return null;
-        int offset = SpawnPointAdditions.Offset(catalog.Read(addition.Target.SourceTag), addition, project.ObjectEdits);
+        int offset = SpawnPointAdditions.Offset(catalog, catalog.Read(addition.Target.SourceTag), addition, project.ObjectEdits);
         return world.Scene.Markers.FirstOrDefault(marker => marker.SourceTag == addition.Target.SourceTag
             && marker.SourceOffset == offset);
     }
