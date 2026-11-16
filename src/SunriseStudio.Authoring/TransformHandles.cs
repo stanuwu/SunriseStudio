@@ -14,10 +14,12 @@ public static class TransformHandles
     /**
      * The pivot is the edit position mapped through its parent; it must land on the drawn position.
      * @param reason Why the selection gets no handles; empty when it gets them.
+     * @param edits The project's edits; an added spawn point gets handles only with them.
      */
-    public static TransformHandleFrame? Read(PackageCatalog catalog, object target, WorldDocument? world, out string reason, IReadOnlyList<ObjectEdit>? edits = null)
+    public static TransformHandleFrame? Read(PackageCatalog catalog, object target, WorldDocument? world, out string reason,
+        IReadOnlyList<ObjectEdit>? edits = null)
     {
-        var info = SceneEdits.Describe(catalog, target, world, edits);
+        var info = SceneEdits.Describe(catalog, target, world, edits: edits);
         if (!info.CanTransform)
         {
             reason = info.Reason.Length > 0 ? info.Reason : "This selection has no editable transform.";
@@ -49,6 +51,7 @@ public static class TransformHandles
      * Maps a world change about a pivot into the row's own parent space.
      * Size follows only a uniform scale on a row that stores one; else only the position moves.
      * @param pivot World point to turn and scale about; the frame's own pivot for one object.
+     * @param edits The project's edits; an added spawn point then moves by its own edit.
      * @return Null when nothing changed.
      */
     public static ObjectEdit? CreateEdit(PackageCatalog catalog, object target, TransformHandleFrame frame, Vector3 pivot,

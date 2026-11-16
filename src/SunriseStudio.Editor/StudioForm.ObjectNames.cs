@@ -18,8 +18,9 @@ public sealed partial class StudioForm
     {
         if (!ReferenceEquals(nameKeyWorld, inspectionWorld)) { nameKeys.Clear(); nameKeyWorld = inspectionWorld; }
         if (nameKeys.TryGetValue(row, out var key)) return key;
-        string? target = workspace.Catalog is { } catalog
-            ? SceneEdits.Describe(catalog, row.Source, inspectionWorld, workspace.Project?.ObjectEdits).Target?.Key : null;
+        var info = workspace.Catalog is { } catalog
+            ? SceneEdits.Describe(catalog, row.Source, inspectionWorld, edits: workspace.Project?.ObjectEdits) : null;
+        string? target = info?.Target?.Key ?? info?.Addition?.Key;
         return nameKeys[row] = target is null ? "row:" + row.Id : "edit:" + target;
     }
 

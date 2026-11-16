@@ -7,26 +7,29 @@ namespace SunriseStudio.Editor;
 
 public sealed partial class StudioForm
 {
-    /** Arrival additions inherit the selected native name; routing remains owned by the mission. */
+    /** A new spawn point copies this marker's row, name included, and takes only a new pose. */
     private void DrawSpawnPointActions(SceneMarker? marker)
     {
         if (marker?.Layer != SceneLayer.Spawns || workspace.World is null) return;
-        ImGui.TextUnformatted("Arrival points");
-        StudioUi.Wip(StudioUi.MayNotWork);
-        ImGui.TextWrapped("May not work in game.");
+        ImGui.TextUnformatted("Spawn points");
         ImGui.BeginDisabled(!workspace.CanEdit);
         if (ImGui.Button("Add spawn point here")) AddSpawnPoint(marker, viewport!.Camera.Pivot, Quaternion.Identity);
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Add an arrival at the 3D cursor with this spawn name hash.");
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Adds a copy of this spawn point at the 3D cursor.\n" + StudioUi.MayNotWork);
         if (ImGui.Button("Add at camera")) AddSpawnPoint(marker, viewport!.Camera.Position, Quaternion.Identity);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Adds a copy of this spawn point at the camera.\n" + StudioUi.MayNotWork);
         if (ImGui.Button("Duplicate spawn point")) AddSpawnPoint(marker, marker.Position, marker.Rotation);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Adds a copy of this spawn point in the same place.\n" + StudioUi.MayNotWork);
         ImGui.EndDisabled();
     }
 
-    private void AddSpawnPoint(SceneMarker marker, Vector3 position, Quaternion rotation) => workspace.Run(() =>
-        workspace.ApplyObjectEdit(SpawnPointAuthoring.Create(workspace.Catalog!, workspace.Project!.ObjectEdits,
-            marker.SourceTag, position, rotation, marker.NameHash), "Added arrival point"));
+    private void AddSpawnPoint(SceneMarker marker, Vector3 position, Quaternion rotation)
+    {
+        var world = inspectionWorld;
+        workspace.Run(() => workspace.ApplyObjectEdit(SceneEdits.CreateSpawnPointEdit(workspace.Catalog!, marker,
+            workspace.Project!.ObjectEdits, position, rotation, world, marker.Name), "Added spawn point"));
+    }
 
-    /** Spawn rows and their containing mission tree expose the same actions as the Inspector. */
+    /** Spawn rows and the mission nodes above them offer the same actions as the Inspector. */
     private void DrawSpawnTreeMenu(SceneHierarchyNode? node)
     {
         if (node is null || workspace.World is null) return;

@@ -141,7 +141,8 @@ public sealed partial class StudioForm
         {
             // The catalog shows compiled project bytes, so these start from the current edited state.
             editTarget = selectedObject;
-            sceneEditInfo = SceneEdits.Describe(catalog, selectedObject, inspectionWorld, workspace.Project?.ObjectEdits);
+            sceneEditInfo = SceneEdits.Describe(catalog, selectedObject, inspectionWorld, workspace.IsProjectContent,
+                workspace.Project?.ObjectEdits);
             editPosition = sceneEditInfo.Position;
             editRotation = editRotationBase = QuaternionToDegrees(sceneEditInfo.Rotation);
             editScale = sceneEditInfo.Scale;
@@ -166,9 +167,25 @@ public sealed partial class StudioForm
             // A static of the project's own content is moved in its source file, not by an object edit.
             bool content = info.Target is { Layout: ObjectEditLayout.StaticInstance } row && workspace.IsProjectContent(row.SourceTag);
             if (ImGui.Button("Apply transform", new(-1, 0))) workspace.Run(() =>
-                workspace.ApplyObjectEdit(SceneEdits.CreateTransformEdit(catalog, selectedObject, editPosition,
-                    editRotation == editRotationBase ? null : DegreesToQuaternion(editRotation), editScale, inspectionWorld,
-                    objectInspection?.Object.Name, workspace.Project?.ObjectEdits)));
+            {
+                if (content)
+                    workspace.MoveContentStatic(info.Target!.SourceTag, info.Target.Index, editPosition,
+                        editRotation == editRotationBase ? info.Rotation : DegreesToQuaternion(editRotation), editScale);
+                else
+                    workspace.ApplyObjectEdit(SceneEdits.CreateTransformEdit(catalog, selectedObject, editPosition,
+                        editRotation == editRotationBase ? null : DegreesToQuaternion(editRotation), editScale, inspectionWorld,
+                        objectInspection?.Object.Name, workspace.Project?.ObjectEdits));
+            });
+            if (!content && info.Target?.Layout == ObjectEditLayout.StaticInstance && workspace.Project is { } project)
+            {
+                if (ImGui.Button("Copy to this transform", new(-1, 0))) workspace.Run(() =>
+                    workspace.ApplyObjectEdit(SceneEdits.CreateCopyEdit(catalog, selectedObject, project.ObjectEdits, editPosition,
+                        DegreesToQuaternion(editRotation), editScale, inspectionWorld, objectInspection?.Object.Name)));
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Adds a copy at the values above; the object itself stays.");
+                if (ImGui.Button("Remove object", new(-1, 0))) workspace.Run(() =>
+                    workspace.ApplyObjectEdit(SceneEdits.CreateRemoveEdit(catalog, selectedObject, inspectionWorld,
+                        objectInspection?.Object.Name)));
+            }
         }
         if (info.CanBounds)
         {
@@ -181,7 +198,12 @@ public sealed partial class StudioForm
         if (info.Target is { } target && workspace.Project?.FindObjectEdit(target.Key) is { } saved)
         {
             ImGui.TextColored(StudioTheme.Accent, $"Edited: {saved.Summary()}");
-            if (ImGui.Button(saved.Target.Layout == ObjectEditLayout.AddedSpawnPoint ? "Remove added spawn point" : "Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
+            if (ImGui.Button("Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
+        }
+        if (info.Addition is { } addition)
+        {
+            ImGui.TextColored(StudioTheme.Accent, "Added in this project");
+            if (ImGui.Button("Remove spawn point", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(addition.Key));
         }
         if (info.Target is { Layout: ObjectEditLayout.StaticInstance } removable
             && workspace.Project?.FindObjectEdit(new ObjectEdit(ObjectEditKind.RemoveInstance, removable).Key) is { } removal)
@@ -196,13 +218,24 @@ public sealed partial class StudioForm
     /** A Changes row selects its object in the open world; with no world, or no match, it opens the source asset. */
     private void SelectEditedObject(ObjectEdit edit)
     {
-        if (FindEditedSource(edit.Target) is { } source && inspectionWorld?.Find(source) is { } row)
+        object? found = edit.Kind == ObjectEditKind.AddSpawnPoint ? FindAddedSpawnPoint(edit) : FindEditedSource(edit.Target);
+        if (found is { } source && inspectionWorld?.Find(source) is { } row)
         {
             SelectWorldObject(row);
             focusWorldScene = true;
             return;
         }
         workspace.Open(edit.Target.SourceTag);
+    }
+
+    /** The marker of an added spawn point's row in the compiled bank; null without a world or a match. */
+    private SceneMarker? FindAddedSpawnPoint(ObjectEdit addition)
+    {
+        if (workspace.World is not { } world || workspace.Catalog is not { } catalog || workspace.Project is not { } project)
+            return null;
+        int offset = SpawnPointAdditions.Offset(catalog.Read(addition.Target.SourceTag), addition, project.ObjectEdits);
+        return world.Scene.Markers.FirstOrDefault(marker => marker.SourceTag == addition.Target.SourceTag
+            && marker.SourceOffset == offset);
     }
 
     /** The open world's scene object for an edit target; null without a world or a match. */
@@ -216,8 +249,6 @@ public sealed partial class StudioForm
                 item.InstanceSourceTag == target.SourceTag && item.InstanceSourceIndex == target.Index),
             ObjectEditLayout.Light => world.Objects.FirstOrDefault(row => row.Source is WorldLight light
                 && light.Owner.Table.TagHash == target.SourceTag && light.Row.TransformOffset == target.Offset)?.Source,
-            ObjectEditLayout.AddedSpawnPoint => scene.Markers.FirstOrDefault(marker => marker.SourceTag == target.SourceTag
-                && marker.SourceOffset == SpawnPointAuthoring.Offset(workspace.Catalog!, target, workspace.Project!.ObjectEdits)),
             ObjectEditLayout.CollisionInstance => null,
             ObjectEditLayout.DecoratorInstance => scene.Instances.FirstOrDefault(item =>
                 item.ObjectPlacement?.SourceTag == target.Identity && item.ObjectPlacement.SourceIndex == target.Index),

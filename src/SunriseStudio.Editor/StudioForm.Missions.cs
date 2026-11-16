@@ -131,7 +131,6 @@ public sealed partial class StudioForm
                         foreach (var group in missionGroups.GetValueOrDefault(stateKey, []))
                             if (ImGui.TreeNodeEx($"{group.Name} ({group.Rows.Length:N0})###{group.Name}"))
                             {
-                                if (group.Name == "Spawns") StudioUi.Wip(StudioUi.MayNotWork, sameLine: false);
                                 DrawMissionObjects(group.Rows);
                                 ImGui.TreePop();
                             }
