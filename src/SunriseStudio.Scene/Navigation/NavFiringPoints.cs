@@ -65,6 +65,7 @@ public static class NavFiringPointTag
     internal const int MemberRowAt = 4;
     // The tree's build type word of a layer with clusters.
     private const uint TreeBuilt = 1;
+    // A row count cap well above the largest installed array.
     private const int MaximumRows = 1 << 22;
     // What the game's own baker left after the code: unset heap bytes.
     private static readonly byte[] DefaultFill = [0xCD, 0xCD, 0xCD];
@@ -75,8 +76,6 @@ public static class NavFiringPointTag
         PointSize = Unsafe.SizeOf<C80809a51>(), LinkRowSize = Unsafe.SizeOf<C80808c83>();
     private static readonly int ClustersField = TagView.FieldOffset<G80808c7a0>(nameof(G80808c7a0.Unk30)),
         PointsField = TagView.FieldOffset<G80808c7a0>(nameof(G80808c7a0.Unk50)),
-        TreeScaleAt = TagView.FieldOffset<G80808c7a0>(nameof(G80808c7a0.Unk64)),
-        TreeOffsetAt = TagView.FieldOffset<G80808c7a0>(nameof(G80808c7a0.Unk70)),
         TreeField = TagView.FieldOffset<G80808c7a0>(nameof(G80808c7a0.Unk80)),
         LinksField = TagView.FieldOffset<G80808c7a0>(nameof(G80808c7a0.Unk90)),
         MembersField = TagView.FieldOffset<C80809a4a>(nameof(C80809a4a.H6139c90c));
