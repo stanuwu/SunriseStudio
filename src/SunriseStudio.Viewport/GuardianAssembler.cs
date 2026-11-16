@@ -14,10 +14,7 @@ public sealed record PreparedGuardian(SceneDocument Scene, AssetAnimationSource?
     GuardianParts Parts, IReadOnlyList<string> Diagnostics, IReadOnlySet<uint> SourceTags,
     IReadOnlyDictionary<string, IReadOnlyList<string>> SlotNotes);
 
-/**
- * A guardian that wears or shows an item in its preview; EntityTag is the item's model entity for that class and gender,
- * 0 for an item with no model of its own.
- */
+/** A guardian that wears or shows an item; EntityTag is the item's model for it, 0 when the item has none. */
 public sealed record ItemWearer(GuardianClass Class, bool Female, uint EntityTag)
 {
     public string Name => $"{Class.Name} {GuardianAppearance.GenderNames[Female ? 1 : 0]}";
@@ -157,9 +154,8 @@ public sealed class GuardianAssembler(PackageCatalog catalog)
     }
 
     /**
-     * Runs on a worker. A guardian of this class and gender, for an item shown on it rather than worn: a weapon in its
-     * hands, in the default loadout. A shader's dyes go on showcase armor, since the default slots hold the undyed
-     * gear-preview placeholders.
+     * Runs on a worker. A guardian in the default loadout, for an item shown on it rather than worn.
+     * A shader's dyes go on showcase armor, since the default slots hold undyed placeholders.
      * @param weapon The weapon item it holds in its hold pose; 0 holds none.
      */
     public PreparedGuardian PrepareWearer(ItemWearer wearer, NativeGearDyes? armorDyes = null, CancellationToken token = default,

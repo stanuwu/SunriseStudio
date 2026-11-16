@@ -115,11 +115,10 @@ public sealed partial class NativeSceneRenderer
     {
         SunActive = false; ShadowsActive = false; LastShadowDraws = 0;
         Array.Clear(cascadeParts);
-        // The viewer has no sun outside atmosphere lighting, except an asset's studio key. An orthographic view has no
-        // linear depth for the cascades, so it draws only the studio key, unshadowed.
+        // The sun needs atmosphere lighting, or an asset's studio key. An orthographic view draws the key unshadowed.
         bool keyed = StudioKeyActive;
-        if (!keyed && (!SunEnabled || LightingMode != NativeLightingMode.Atmosphere || !AtmosphereActive || TimeOfDayFallback
-            || camera.Orthographic) || cameraScope is null) return null;
+        if (!SunEnabled || cameraScope is null || !keyed && (LightingMode != NativeLightingMode.Atmosphere || !AtmosphereActive
+            || TimeOfDayFallback || camera.Orthographic)) return null;
         var toLight = keyed ? studioKey : LightDirection;
         try
         {

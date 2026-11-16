@@ -192,7 +192,8 @@ public sealed partial class StudioForm : Form
             assetViewport.ShowCursor = settings.ShowAssetCursor;
             viewport.ControlsPinned = assetViewport.ControlsPinned = settings.AssetControlsPinned;
             viewport.FlatBackdrop = assetViewport.FlatBackdrop = settings.FlatBackdrop;
-            viewport.Camera.Orthographic = assetViewport.Camera.Orthographic = settings.Orthographic;
+            // The saved projection is an asset preview setting; the main view takes it when it adopts an asset.
+            assetViewport.Camera.Orthographic = settings.Orthographic;
             workspace.ShowGuardian = settings.ShowGuardian;
             viewport.PreparationProgress = ReportPreparation;
             assetViewport.PreparationProgress = ReportPreparation;

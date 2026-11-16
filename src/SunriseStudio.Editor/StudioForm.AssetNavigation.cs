@@ -28,8 +28,7 @@ public sealed partial class StudioForm
             if (sameLine) ImGui.SameLine();
             bool shown = workspace.ShowGuardian;
             if (!ImGuiIcons.Toggle("show-guardian", StudioIcon.Wearer, "Show Guardian", ref shown)) return;
-            // The model grows or shrinks, so the view frames it again. A weapon's own view reads EntityTag as its
-            // animation owner, so leaving the guardian drops the wearer.
+            // Reframe for the new size. A weapon's own view reads EntityTag as its owner, so leaving drops the wearer.
             workspace.ShowGuardian = shown;
             reframeView = true;
             workspace.Select(document.Entry.TagHash,
@@ -39,8 +38,7 @@ public sealed partial class StudioForm
         {
             var current = document.Wearers.FirstOrDefault(value => value.Class.BodyTag == context?.EntityTag
                 && value.Female == context.WearerFemale) ?? document.Wearers[0];
-            // Armor names its model entity, like the weapon owners, with the guardian it is worn by; an item with no
-            // model of its own, a shader, names the guardian alone and always draws it.
+            // Armor names its model with its wearer; an item with no model, a shader, names the guardian alone.
             bool piece = current.EntityTag != 0;
             string Label(ItemWearer wearer) => piece ? $"{workspace.DisplayName(wearer.EntityTag)} - {wearer.Name}" : wearer.Name;
             ImGui.SetNextItemWidth(piece || weapon ? MathF.Max(1, width - toggle) : width);

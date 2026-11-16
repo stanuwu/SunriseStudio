@@ -391,9 +391,8 @@ public sealed class AssetAnimationPreview : IDisposable
             : part.Palette == SkinPaletteKind.ClothInput ? Pose.ClothInputSkinMatrices : DisplayPose.SkinMatrices;
 
     /**
-     * How the shown pose moves a mesh that follows one bone, in mesh space: an attached part's bone, else the bone
-     * carrying more than half its skin weight. Null for a mesh spread over many bones, such as a guardian's body, and
-     * for cloth or an unskinned mesh.
+     * The shown pose's move of a mesh that follows one bone, in mesh space: its attach bone, else the bone with over
+     * half its skin weight. Null for a mesh over many bones, for cloth and for an unskinned mesh.
      */
     public Matrix4x4? BonePose(MeshData mesh)
     {

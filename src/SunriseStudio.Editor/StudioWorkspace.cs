@@ -240,8 +240,7 @@ public sealed partial class StudioWorkspace : IDisposable
 
     private (uint Tag, AssetOpenContext? Context)? pendingOpen;
 
-    // A weapon view stores the animation owner it found, and an item view the part or wearer chosen; the request carries
-    // neither.
+    // A view stores the owner, part or wearer it chose; the request carries none of them.
     private static bool SameView(AssetOpenContext? open, AssetOpenContext? target) =>
         open == target || open is { } held && target is { EntityTag: 0 } and ({ WeaponItemTag: > 0 } or { ItemModelTag: > 0 })
             && held with { EntityTag = 0, WearerFemale = false } == target;

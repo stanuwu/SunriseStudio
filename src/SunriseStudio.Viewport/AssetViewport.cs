@@ -547,9 +547,8 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     }
 
     /**
-     * A native item outside a map orbits in its model's own frame, Z up, turned with it by an animation pose measured on
-     * its largest part, and opens at a three-quarter angle, so a weapon posed at an angle stands level.
-     * Returns false, with the world frame kept, in player mode or when the scene has no part to take the frame from.
+     * A native item outside a map orbits in its largest part's posed frame, Z up, from a three-quarter view.
+     * @return False, with the world frame kept, in player mode or when no part gives a frame.
      */
     private bool SetItemFrame(SceneDocument scene)
     {
@@ -572,8 +571,7 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
             itemPose = toMesh * moved * main.Transform;
         if (Camera.Player) return false;
         Camera.Basis = Quaternion.Normalize(rotation * turn);
-        // The grid lies under the posed item, its lines the power of ten nearest a tenth of its width apart. A part with a
-        // pose gives its posed vertices, so a guardian stands on the floor in the clip's pose.
+        // The grid lies under the posed item, spaced by the power of ten nearest a tenth of its width.
         var toFrame = Matrix4x4.CreateFromQuaternion(Quaternion.Inverse(Camera.Basis));
         var low = new Vector3(float.MaxValue); var high = new Vector3(float.MinValue);
         void Extend(Vector3 point) { low = Vector3.Min(low, point); high = Vector3.Max(high, point); }
@@ -617,13 +615,10 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
 
     // Collision, markers and volumes sit on the item at rest; the preview draws it posed, so they take its pose.
     private Matrix4x4 itemPose = Matrix4x4.Identity;
-    // The grid's height and spacing in the frame the camera orbits in: under and fitted to the posed item, else the
-    // world floor with spacing that follows the camera.
+    // Grid height and spacing in the orbit frame; 0 uses the world floor and camera-driven spacing.
     private float gridHeight, gridStep;
 
-    // The preview's yaw and pitch in the model frame: the eye sits 53 degrees from the model's +X toward -Y and 14 degrees
-    // above it, a three-quarter view. The view closes in this many zoom steps past the bounding-sphere
-    // fit, which leaves room for depth; an orthographic view has none to leave room for, so it closes in further.
+    // Viewer choice: a three-quarter view, then zoom steps past the bounding-sphere fit per projection.
     private const float PreviewYaw = 2.221f, PreviewPitch = -.25f, PerspectiveZoom = 1, OrthographicZoom = 3;
 
     /** Bubble identities may be either package tags or canonical name hashes. */
@@ -1662,15 +1657,13 @@ public sealed partial class AssetViewport(Dx11Renderer renderer) : IDisposable
     }
 
     /**
-     * Grid spacing follows camera distance so both props and maps stay readable. The grid lies on the floor of the
-     * frame the camera orbits in, so an item seen in its own frame stands on it, at a spacing that zooming keeps.
+     * The grid lies on the orbit frame's floor. Spacing follows camera distance, or stays fixed under an item.
      */
     private void DrawGrid(Matrix4x4 view)
     {
         float step = gridStep > 0 ? gridStep : MathF.Pow(10, MathF.Floor(MathF.Log10(MathF.Max(.01f, Camera.Distance / 8))));
         var pivot = Vector3.Transform(Camera.Pivot, Quaternion.Inverse(Camera.Basis));
-        // Lines stay on whole steps from the origin, so the axes keep their colors; an item's grid centers on the
-        // nearest step under the item.
+        // Lines stay on whole steps from the origin so the axes keep their colors.
         float x = (gridStep > 0 ? MathF.Round(pivot.X / step) : MathF.Floor(pivot.X / step)) * step;
         float y = (gridStep > 0 ? MathF.Round(pivot.Y / step) : MathF.Floor(pivot.Y / step)) * step;
         float extent = step * 20;

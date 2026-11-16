@@ -68,20 +68,18 @@ public static class WeaponArchetypeAuthoring
         {
             int group = Group(table, holders, i);
             if (group < 0) throw new InvalidDataException("An art variant has no group.");
-            int selector = table.U8(group);
-            var hashes = table.Array(group + 8, ArtHashClass, 4);
-            // A region with no art is optional and adds nothing to the weapon: no hashes, an empty first name the art map
-            // does not name, or a wrapper that names no model.
+            int selector = table.Field<ArrangementArtGroup, byte>(group, nameof(ArrangementArtGroup.Selector));
+            var hashes = table.Rows<ArrangementArtGroup, SArtHash>(group, nameof(ArrangementArtGroup.H3265b065), ArtHashClass);
+            // A region with no hashes, an unnamed empty first name, or no model adds nothing.
             if (hashes.Count == 0) continue;
-            uint[] values = Enumerable.Range(0, hashes.Count)
-                .Select(index => table.U32(hashes.Data + index * 4)).ToArray();
+            uint[] values = Column<SArtHash>(table, hashes, value => value.ArtName);
             if (!TryResolve(artMap, ArtMapRowClass, values[0], out uint wrapper))
             {
-                if (values[0] is 0 or uint.MaxValue or InvestmentItemClone.EmptyStringHash) continue;
+                if (values[0] is 0 or uint.MaxValue or StringHash.Empty) continue;
                 throw new InvalidDataException($"Weapon art name {values[0]:X8} does not resolve.");
             }
             var wrapperBytes = Read(catalog, wrapper, WrapperClass);
-            uint modelEntity = wrapperBytes.U32(16);
+            uint modelEntity = wrapperBytes.Field<SArtWrapper, uint>(0, nameof(SArtWrapper.ArtTag));
             if (modelEntity is 0 or uint.MaxValue) continue;
             Read(catalog, modelEntity, EntityClass);
             variants.Add(new(selector, wrapper, modelEntity, values) { HolderIndex = i });
@@ -207,25 +205,35 @@ public static class WeaponArchetypeAuthoring
         var oldHolders = Holders(arrangement, originalArt);
         // The new row's holders, groups and hashes form one block of self-relative pointers.
         var output = new List<byte>();
-        int newHolders = AppendArray(output, -1, HolderClass, oldHolders.Count, 8);
+        int newHolders = AppendArray(output, -1, HolderClass, oldHolders.Count, Unsafe.SizeOf<SArrangementHolder>());
         for (int i = 0, v = 0; i < oldHolders.Count; i++)
         {
-            int originalGroup = arrangement.Relative(oldHolders.Data + i * 8);
-            Align(output, 8);
+            int originalGroup = Group(arrangement, oldHolders, i);
+            Align(output, ArrangementArtGroup.Align);
             int group = output.Count;
-            output.AddRange(arrangement.Slice(originalGroup, 24));
-            Put64(output, newHolders + i * 8, group - newHolders - i * 8);
-            // An empty region stays empty in the copy.
+            output.AddRange(arrangement.Slice(originalGroup, Unsafe.SizeOf<ArrangementArtGroup>()));
+            var block = CollectionsMarshal.AsSpan(output);
+            TagView.SetTarget(block, in TagView.At<SArrangementHolder>(block, newHolders + i * Unsafe.SizeOf<SArrangementHolder>()).Group, group);
+            int hashField = TagView.OffsetOf(block, in TagView.At<ArrangementArtGroup>(block, group).H3265b065);
             if (v == source.Variants.Count || source.Variants[v].HolderIndex != i)
-            { AppendArray(output, group + 8, ArtHashClass, 0, 4); continue; }
+            {
+                // A region with no variant keeps the original's hashes.
+                var original = arrangement.Rows<ArrangementArtGroup, SArtHash>(originalGroup, nameof(ArrangementArtGroup.H3265b065), ArtHashClass);
+                uint[] kept = Column<SArtHash>(arrangement, original, value => value.ArtName);
+                int copy = AppendArray(output, hashField, ArtHashClass, kept.Length, Unsafe.SizeOf<SArtHash>());
+                block = CollectionsMarshal.AsSpan(output);
+                for (int j = 0; j < kept.Length; j++) TagView.Edit<SArtHash>(block, copy + j * Unsafe.SizeOf<SArtHash>()).ArtName = kept[j];
+                continue;
+            }
             var variant = source.Variants[v];
-            int hashes = AppendArray(output, group + 8, ArtHashClass, variant.ArtHashes.Count, 4);
+            int hashes = AppendArray(output, hashField, ArtHashClass, variant.ArtHashes.Count, Unsafe.SizeOf<SArtHash>());
             uint hash = NewName(artMap, ArtMapRowClass,
                 $"sunrise.weapon.art.{packageId:X4}.{firstEntry}.{variant.Selector}.{name}");
             artMap = AppendName(artMap, ArtMapRowClass, hash, Tag(v + wrapperStart));
-            for (int j = 0; j < variant.ArtHashes.Count; j++) Put32(output, hashes + j * 4, hash);
+            block = CollectionsMarshal.AsSpan(output);
+            for (int j = 0; j < variant.ArtHashes.Count; j++) TagView.Edit<SArtHash>(block, hashes + j * Unsafe.SizeOf<SArtHash>()).ArtName = hash;
             byte[] wrapper = Read(catalog, variant.WrapperTag, WrapperClass).Data.ToArray();
-            Put32(wrapper, 16, variantEntities[variant.Selector]);
+            EditField<SArtWrapper, uint>(wrapper, 0, nameof(SArtWrapper.ArtTag)) = variantEntities[variant.Selector];
             Add(variant.WrapperTag, wrapper, v + wrapperStart, $"art-{variant.Selector}");
             v++;
         }
@@ -361,14 +369,17 @@ public static class WeaponArchetypeAuthoring
         return StringHash.NewDefinitionHash(key, NameHashes(reader, type, NameRows(reader, type)).ToHashSet());
     }
 
-    private static uint Resolve(Bytes reader, uint type, uint hash) => TryResolve(reader, type, hash, out uint value) ? value
-        : throw new InvalidDataException($"Weapon art name {hash:X8} does not resolve.");
+    private static uint Resolve(Bytes reader, uint type, uint hash) => TryResolve(reader, type, hash, out uint value)
+        ? value : throw new InvalidDataException($"Weapon art name {hash:X8} does not resolve.");
 
     private static bool TryResolve(Bytes reader, uint type, uint hash, out uint value)
     {
         var rows = NameRows(reader, type);
         for (int i = 0; i < rows.Count; i++)
-            if (reader.U32(rows.Data + i * 8) == hash) { value = reader.U32(rows.Data + i * 8 + 4); return true; }
+        {
+            var (name, tag) = Name(reader, type, rows.Data + i * NameStride(type));
+            if (name == hash) { value = tag; return true; }
+        }
         value = 0;
         return false;
     }

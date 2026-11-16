@@ -81,9 +81,8 @@ public static class NativeGearPlating
     }
 
     /**
-     * Item dyes: art block +0x38 rows, then +0x48 rows replace rows of the same i8 key, then the rows of the shader the
-     * item's sockets start with, read the same way. A shader that does not read leaves the item's own.
-     * Rows are {i8 key, i8 pad, u16 dye index}; 0x7FF742200F30 owns the order.
+     * Item dyes: MaterialOverrides1 rows, then MaterialOverrides2 rows replace rows of the same i8 key, then the
+     * rows of the shader the item's sockets start with. A shader that does not read leaves the item's own.
      * @return The records by slot, the default record where the item names none; null when unreadable.
      */
     public static NativeGearDyes? ReadItemDyes(PackageCatalog catalog, byte[] item, out string? error)
@@ -92,17 +91,6 @@ public static class NativeGearPlating
         try
         {
             var rows = new List<(sbyte Key, int Dye)>();
-            void Take(byte[] source)
-            {
-                int art = Relative(source, 136);
-                foreach (int row in Rows(source, art + 0x38, 0x808077B3, 4).Concat(Rows(source, art + 0x48, 0x808077B3, 4)))
-                {
-                    (sbyte Key, int Dye) value = ((sbyte)source[row], BinaryPrimitives.ReadUInt16LittleEndian(source.AsSpan(row + 2)));
-                    int same = rows.FindIndex(other => other.Key == value.Key);
-                    if (same < 0) rows.Add(value);
-                    else rows[same] = value;
-                }
-            }
             Take(item);
             string described = "the item's dyes";
             var own = rows.ToList();
@@ -110,8 +98,9 @@ public static class NativeGearPlating
             {
                 if (GuardianArt.EquippedShader(catalog, item) is not 0 and var shader)
                 {
+                    // Assumed: the shader's rows replace the item's like the item's second list does.
                     Take(catalog.Read(shader));
-                    return Dyes("the item's dyes with its shader");
+                    return Dyes(WithShader);
                 }
             }
             catch (Exception exception) when (Unreadable(exception))
@@ -120,6 +109,26 @@ public static class NativeGearPlating
                 described += $" (shader unreadable: {exception.Message})";
             }
             return Dyes(described);
+
+            // 0x7FF742200F30 owns the order of the two lists.
+            void Take(byte[] source)
+            {
+                int art = Relative(source, in TagView.Member<ItemDefinition, RelativePointer<ItemTranslationBlock>>(source, 0,
+                    nameof(ItemDefinition.TranslationItemBlock)));
+                int stride = Unsafe.SizeOf<ItemMaterialOverride>();
+                int[] first = Rows(source, art + TagView.FieldOffset<ItemTranslationBlock>(nameof(ItemTranslationBlock.MaterialOverrides1)),
+                    ItemMaterialOverride.Class, stride);
+                int[] second = Rows(source, art + TagView.FieldOffset<ItemTranslationBlock>(nameof(ItemTranslationBlock.MaterialOverrides2)),
+                    ItemMaterialOverride.Class, stride);
+                foreach (int row in first.Concat(second))
+                {
+                    ref readonly var entry = ref TagView.At<ItemMaterialOverride>(source, row);
+                    (sbyte Key, int Dye) value = (entry.Key, entry.Value);
+                    int same = rows.FindIndex(other => other.Key == value.Key);
+                    if (same < 0) rows.Add(value);
+                    else rows[same] = value;
+                }
+            }
             NativeGearDyes Dyes(string source)
             {
                 var (records, decalMode) = ScopeRecords(catalog, rows.Select(row => row.Dye));
@@ -132,6 +141,9 @@ public static class NativeGearPlating
             return null;
         }
     }
+
+    /** The dye source of an item whose shader's rows were merged over its own. */
+    public const string WithShader = "the item's dyes with its shader";
 
     /** The gear kind of an item definition's bucket; null when the bucket has no measured kind. */
     public static int? ItemKind(byte[] item) => TagView.FitsThrough<ItemDefinition>(item, 0, BucketMember)

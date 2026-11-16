@@ -7,8 +7,8 @@ namespace SunriseStudio.Editor;
 public sealed partial class StudioWorkspace
 {
     /**
-     * Runs on a worker. An item opens with its model: armor worn by a guardian, a shader on a guardian's armor, any
-     * other item with art as its art entities together with the item's dyes. An item with no art opens without a model.
+     * Runs on a worker. Armor opens worn, a shader on a guardian's armor, other items as their dyed art entities.
+     * An item with no art opens without a model.
      */
     private StudioDocument ReadItemModelDocument(PackageCatalog catalog, PackageEntry entry, string name,
         AssetOpenContext context)
@@ -21,6 +21,7 @@ public sealed partial class StudioWorkspace
         {
             var shaderDyes = NativeGearPlating.ReadItemDyes(catalog, document.Bytes, out string? shaderError);
             var shown = ReadGuardianItemDocument(catalog, document, context, shaderDyes);
+            shown.Scene?.Diagnostics.Add(GuardianArt.ShowcaseNote);
             if (shaderDyes is null) shown.Scene?.Diagnostics.Add($"Dyes: unreadable, using the armor's own ({shaderError})");
             return shown;
         }
@@ -31,8 +32,7 @@ public sealed partial class StudioWorkspace
         var sources = new HashSet<uint>(document.SourceTags ?? new HashSet<uint>());
         var loader = new AssetSceneLoader(catalog) { NameResolver = ResolveHash, GameNames = Names?.GameNames,
             IncludeLowerLods = true, Progress = _ => ReportProgress("Reading item model") };
-        // The entity picker lists the parts; a chosen part loads alone. Item art is never placed by a map's spawn rows, so
-        // it loads without the authored spawn index.
+        // A chosen part loads alone. Item art has no spawn rows, so it loads without the spawn index.
         foreach (uint entity in entities.Contains(context.EntityTag) ? [context.EntityTag] : entities)
             try
             {

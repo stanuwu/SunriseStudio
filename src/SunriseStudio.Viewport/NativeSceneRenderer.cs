@@ -252,18 +252,14 @@ public sealed partial class NativeSceneRenderer : IDisposable
     // Asset previews reflect a studio and take a key light that follow the camera; maps keep the flat level.
     private NativeStudioEnvironment? studioEnvironment;
     private NativeRenderTargets? antialiased;
-    // The key in camera terms: right, up and toward the eye.
+    // The key in camera terms: right, up and toward the eye. Viewer choice.
     private static readonly Vector3 StudioKeyView = Vector3.Normalize(new(-.35f, .55f, .76f));
-    // Key light color in the sun's units, and the native ambient strength under it: the key models the form and the
-    // ambient keeps the shaded side readable.
+    // Assumed values, tuned by eye: the key light in sun units and the ambient under it.
     private static readonly Vector4 StudioKeyColor = new(StudioKeyIntensity, StudioKeyIntensity, StudioKeyIntensity, 1);
     private const float StudioKeyIntensity = 16, AssetAmbientIntensity = .5f;
-    // Asset previews hold one exposure, so a black weapon stays black instead of metering up to middle gray. The value
-    // is where the meter settled for light weapons under the studio key.
+    // Assumed: a fixed preview exposure, tuned by eye, so dark items stay dark.
     private const float AssetViewerStops = 1.5f;
-    // An asset's backdrop is one dark blue-gray, about as bright as the viewer gradient, so the sky meter and the
-    // transparents it exposes read as they do over the gradient. The gain alone darkens it; through the film curve it
-    // shows as sRGB 24, 28, 35.
+    // Viewer backdrop: a dark blue-gray near the gradient's level, darkened by the gain.
     private static readonly Vector3 AssetBackdrop = new Vector3(.85f, 1, 1.35f) * .045f;
     private const float AssetBackdropGain = .13f;
     /** An asset preview draws its flat backdrop; off draws the viewer gradient behind it, as maps have. */
@@ -281,8 +277,12 @@ public sealed partial class NativeSceneRenderer : IDisposable
             if (!Enum.IsDefined(value)) throw new ArgumentOutOfRangeException(nameof(value));
             if (lightingMode == value) return;
             lightingMode = value;
-            // An asset preview holds its exposure only under its studio key; other lighting meters as maps do.
-            if (Plan.AssetPreview) AutoExposure = value != NativeLightingMode.Studio;
+            // An asset preview holds its own exposure under the studio key; other lighting meters as maps do.
+            if (Plan.AssetPreview)
+            {
+                AutoExposure = value != NativeLightingMode.Studio;
+                if (!AutoExposure) ViewerStops = AssetViewerStops;
+            }
             RequestExposureWarmup();
         }
     }
@@ -1355,8 +1355,8 @@ public sealed partial class NativeSceneRenderer : IDisposable
             if (hasForward)
             {
                 // The game's forward pass is pre-exposed: frame row 1 X is the exposure and authored colours are
-                // display values. It runs here in display units, exposed like the sky; an asset preview has no sky
-                // of its own, so its transparents, such as hologram shells, take the item's exposure.
+                // display values. It runs here in display units, exposed like the sky; an asset preview has no
+                // sky, so its transparents take the item's exposure.
                 float forwardExposure = Plan.AssetPreview ? viewerGain : MathF.Pow(2, skyDisplayLog);
                 var forwardFrame = NativeScenePlan.InspectionFrame(simulationSeconds, ev, forwardExposure / MathF.Pow(2, ev));
                 renderer.UpdateNativeConstantBuffer(forwardFrameConstants, MemoryMarshal.AsBytes(forwardFrame.Vectors.AsSpan()));
