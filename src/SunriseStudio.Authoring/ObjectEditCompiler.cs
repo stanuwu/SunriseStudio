@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using SunriseStudio.Packages;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene;
@@ -146,12 +146,6 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
         bool Held(Func<byte[], float[]> read, float[]? value) =>
             value is not null && read(raw).SequenceEqual(value) && read(original).SequenceEqual(value);
         ObjectEdit next;
-        // An added copy has no installed row that could already hold a value, so it keeps every value.
-        if (edit.Target.Layout == ObjectEditLayout.AddedStaticInstance)
-        {
-            edit.Validate();
-            return edit;
-        }
         if (edit.Target.Layout == ObjectEditLayout.CollisionInstance)
         {
             // Locate parsed both layers, so the instance exists in each.
@@ -216,8 +210,6 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
         if (edit.Target.Layout == ObjectEditLayout.CollisionInstance) return;
         // DecoratorInstanceRule writes decorator records together, since one may re-quantize the block.
         if (edit.Target.Layout == ObjectEditLayout.DecoratorInstance) return;
-        // StaticPlacementRule writes added copies into generated tables; the source row stays as it is.
-        if (edit.Target.Layout == ObjectEditLayout.AddedStaticInstance) return;
         if (edit.Kind == ObjectEditKind.TriggerBounds)
         {
             int at = edit.Target.Offset;

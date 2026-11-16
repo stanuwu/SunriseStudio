@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using SunriseStudio.Projects;
 using SunriseStudio.Scene.Collision;
 using SunriseStudio.Tags.Generated;
@@ -9,7 +9,8 @@ namespace SunriseStudio.Authoring;
 /**
  * Collision copies each static instance's world transform into a baked compound and never reads the
  * render row. This rule moves the compound instances whose installed transform equals the row's,
- * then refits the compound tree so every leaf encloses its moved shape.
+ * then refits the compound tree so every leaf encloses its moved shape. A copied row gets copies of
+ * its source's compound instances.
  */
 internal sealed class StaticCollisionRule : IObjectEditRule
 {
@@ -21,6 +22,9 @@ internal sealed class StaticCollisionRule : IObjectEditRule
     /** Static instance edits and direct collision instance edits patch the same compounds, so they run together. */
     public IReadOnlyCollection<ObjectEditLayout> Layouts => [ObjectEditLayout.StaticInstance, ObjectEditLayout.CollisionInstance];
 
+    public IReadOnlyCollection<ObjectEditKind> Kinds =>
+        [ObjectEditKind.PlacementTransform, ObjectEditKind.TriggerBounds, ObjectEditKind.AddInstance];
+
     public void Apply(ObjectEditContext context, IReadOnlyList<ObjectEdit> edits)
     {
         var patches = new SortedDictionary<uint, CompoundPatch>();
@@ -30,7 +34,7 @@ internal sealed class StaticCollisionRule : IObjectEditRule
             ? compound : current[entity.Owner.CompoundTag] = ReadCurrent(context, entity);
         CollisionIndex Index(ushort package) => indexes.TryGetValue(package, out var index)
             ? index : indexes[package] = new CollisionIndex(context, package);
-        foreach (var package in edits.Where(edit => edit.Target.Layout == ObjectEditLayout.StaticInstance)
+        foreach (var package in edits.Where(edit => edit.Target.Layout == ObjectEditLayout.StaticInstance && !edit.Structural)
             .GroupBy(edit => PackageOf(context, edit.Target.SourceTag)).OrderBy(group => group.Key))
         {
             var index = Index(package.Key);
@@ -62,6 +66,70 @@ internal sealed class StaticCollisionRule : IObjectEditRule
             context.Produced(edit, compound);
         }
         foreach (var patch in patches.Values) patch.Write(context);
+        // Copies append after the moves, so a moved compound is re-emitted from its patched bytes.
+        AddCopies(context, edits.Where(edit => edit.Kind == ObjectEditKind.AddInstance).ToArray(), Index);
+    }
+
+    /**
+     * Gives each copied row new compound instances: one per instance of its source row, at the copy's
+     * world transform through each placement of its table. A copy with no collision to copy gets a note.
+     */
+    private static void AddCopies(ObjectEditContext context, ObjectEdit[] copies, Func<ushort, CollisionIndex> index)
+    {
+        var added = new SortedDictionary<uint, (Entity Entity, List<(int Instance, QsTransform Local)> Rows)>();
+        foreach (var edit in copies)
+        {
+            List<(Entity Entity, int Instance, QsTransform Local)> found;
+            try { found = CopyJoin(context, index(PackageOf(context, edit.Target.SourceTag)), edit); }
+            catch (Exception error) when (error is NotSupportedException or InvalidDataException)
+            {
+                context.Note($"{edit.Name ?? edit.Key}: the copy has no collision. {error.Message}");
+                continue;
+            }
+            if (found.Count == 0) context.Note($"{edit.Name ?? edit.Key}: the copied row has no collision to copy.");
+            foreach (var (entity, instance, local) in found)
+            {
+                if (!added.TryGetValue(entity.Owner.CompoundTag, out var compound))
+                    added[entity.Owner.CompoundTag] = compound = (entity, []);
+                compound.Rows.Add((instance, local));
+                context.Produced(edit, entity.Owner.CompoundTag);
+            }
+        }
+        foreach (var (tag, (entity, copied)) in added)
+        {
+            var current = ReadCurrent(context, entity);
+            var (found, refusal) = CollisionCompoundWriter.Rows(current);
+            var rows = found ?? throw new NotSupportedException($"Compound {tag:X8} cannot take new instances: {refusal}.");
+            var leaves = current.LeafBoxes().ToList();
+            foreach (var (instance, local) in copied)
+            {
+                rows.Add(CollisionAdditions.CopyRow(rows[instance], local));
+                leaves.Add(MovedChild(context, entity, current, current.Instances[instance], local));
+            }
+            int keyBits = Math.Max(0, (int)CollisionCompoundWriter.ChildKeyBits(current.File));
+            context.ReplaceCurrent(tag, CollisionAdditions.Rebuild(current, rows, leaves, keyBits));
+        }
+    }
+
+    /** The compound instances of the copy's source row and each one's local transform at the copy. */
+    private static List<(Entity Entity, int Instance, QsTransform Local)> CopyJoin(ObjectEditContext context, CollisionIndex index,
+        ObjectEdit edit)
+    {
+        uint tableTag = edit.Target.SourceTag;
+        var installedRow = Row(InstanceRows(context.Original(tableTag))[edit.Target.Index]);
+        var source = Row(InstanceRows(context.Current(tableTag))[edit.Target.Index]);
+        // An unset rotation or scale keeps the source row's, as the generated row does.
+        var copy = new QsTransform(ObjectEditCompiler.Vector(edit.Position!),
+            edit.Rotation is { } rotation ? new Quaternion(rotation[0], rotation[1], rotation[2], rotation[3]) : source.Rotation,
+            edit.Scale is float scale ? new Vector3(scale) : source.Scale);
+        var found = new List<(Entity, int, QsTransform)>();
+        foreach (var owner in index.TableOwners(tableTag))
+        {
+            var world = Compose(Placement(context.Current(owner.ListTag), owner.Row), copy);
+            foreach (var (entity, instance) in index.Find(Compose(Placement(context.Original(owner.ListTag), owner.Row), installedRow)))
+                found.Add((entity, instance, ToLocal(entity.Placement.Placement, world)));
+        }
+        return found;
     }
 
     /** The new transform of one compound instance and the edited rows that set it. */
@@ -144,7 +212,7 @@ internal sealed class StaticCollisionRule : IObjectEditRule
             Multiply(owner.Rotation, row.Rotation), owner.Scale.X * row.Scale);
 
     /** Undoes the entity placement; the client applies only its rotation and translation. */
-    internal static QsTransform ToLocal(QsTransform placement, QsTransform world)
+    private static QsTransform ToLocal(QsTransform placement, QsTransform world)
     {
         var inverse = Quaternion.Conjugate(Quaternion.Normalize(placement.Rotation));
         return new(Rotate(inverse, world.Translation - placement.Translation),
@@ -359,6 +427,25 @@ internal sealed class StaticCollisionRule : IObjectEditRule
         }
     }
 
+    /** The child's local box moved by a compound instance transform, as eight corners. */
+    private static CompoundBox MovedChild(ObjectEditContext context, Entity entity, StaticCompoundShape current,
+        CompoundInstance instance, QsTransform transform)
+    {
+        var (min, max) = instance.ChildObject is int local
+            ? CollisionShapes.Bounds(current.File, local)
+            : ChildBounds(context, entity.Owner.ImportTag(instance.ImportIndex));
+        return MovedBox(min, max, transform);
+    }
+
+    /** The child as the raw deltas leave it, so an edited shape keeps its new box. */
+    private static (Vector3 Min, Vector3 Max) ChildBounds(ObjectEditContext context, uint tag)
+    {
+        byte[] bytes = context.Current(tag);
+        if (!HavokPackfile.IsPackfile(bytes)) throw new InvalidDataException("The collision child is not a Havok packfile.");
+        var file = HavokPackfile.Parse(bytes);
+        return CollisionShapes.Bounds(file, file.RootOffset);
+    }
+
     /** The new transforms for one compound; Write patches them in place and refits the tree. */
     private sealed class CompoundPatch(Entity entity, StaticCompoundShape current)
     {
@@ -377,31 +464,12 @@ internal sealed class StaticCollisionRule : IObjectEditRule
                 uint flags = StaticCompoundShape.Flags(transform, (compound.Instances[index].Flags & StaticCompoundShape.ConvexFlag) != 0);
                 int at = current.File.Absolute(instance.Offset);
                 CollisionCompoundWriter.WriteInstanceTransform(bytes, at, transform, flags);
-                leaves[index] = MovedBounds(context, current, instance, transform);
+                leaves[index] = MovedChild(context, entity, current, instance, transform);
             }
             var (nodes, domainMin, domainMax) = current.Refit(leaves);
             nodes.CopyTo(bytes, current.File.Absolute(current.NodeData));
             WriteVector(bytes, current.File.Absolute(current.DomainOffset), domainMin);
             WriteVector(bytes, current.File.Absolute(current.DomainOffset + 16), domainMax);
-        }
-
-        /** The child's local box moved by the new transform, as eight corners. */
-        private CompoundBox MovedBounds(ObjectEditContext context, StaticCompoundShape current, CompoundInstance instance,
-            QsTransform transform)
-        {
-            var (min, max) = instance.ChildObject is int local
-                ? CollisionShapes.Bounds(current.File, local)
-                : ChildBounds(context, entity.Owner.ImportTag(instance.ImportIndex));
-            return MovedBox(min, max, transform);
-        }
-
-        /** The child as the raw deltas leave it, so an edited shape moves with its new box. */
-        private static (Vector3 Min, Vector3 Max) ChildBounds(ObjectEditContext context, uint tag)
-        {
-            byte[] bytes = context.Current(tag);
-            if (!HavokPackfile.IsPackfile(bytes)) throw new InvalidDataException("The collision child is not a Havok packfile.");
-            var file = HavokPackfile.Parse(bytes);
-            return CollisionShapes.Bounds(file, file.RootOffset);
         }
 
         private static void WriteVector(byte[] bytes, int at, Vector3 value) =>

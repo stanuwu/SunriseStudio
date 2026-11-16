@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../Fixtures/StaticIsolationFixture.cs" Link="StaticIsolationFixture.cs" />
+    <Compile Include="../Fixtures/StaticPlacementFixture.cs" Link="StaticPlacementFixture.cs" />
     <ProjectReference Include="../../src/SunriseStudio.Authoring/SunriseStudio.Authoring.csproj" />
   </ItemGroup>
 </Project>

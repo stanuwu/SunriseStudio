@@ -139,7 +139,10 @@ internal sealed class StaticAdditionRule : IObjectEditRule
         ref var instances = ref TagView.Edit<SStaticMeshInstances>(compact);
         instances.Instances.AggregateMinimumW1 = new Vector4(min, 1);
         instances.Instances.AggregateMaximumW1 = new Vector4(max, 1);
-        context.CompleteGenerated(table, compact);
+        // The editor maps the drawn row back to this edit, so selecting it edits the addition.
+        var added = new PackageAddedInstance(edit.Target.SourceTag, edit.Target.Offset, edit.Target.Index, edit.Target.Identity,
+            edit.Model ?? 0);
+        context.CompleteGenerated(table, compact, added: new Dictionary<int, PackageAddedInstance> { [0] = added });
         var generatedOwners = new Dictionary<uint, uint>();
         foreach (uint owner in templates.Select(template => template.Owner).Distinct().Order())
         {

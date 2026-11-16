@@ -3,6 +3,7 @@ using System.Numerics;
 using SunriseStudio.Authoring;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene.Collision;
+using SunriseStudio.Tags.Generated;
 
 /**
  * A synthetic map with one static table of three rows and two models, placed in one of two containers,
@@ -65,7 +66,7 @@ internal static class StaticPlacementFixture
         Entry(ModelA, 0x808071A7, Model(new(0, 0, 0.5f), 0.5f));
         Entry(ModelB, 0x808071A7, Model(new(0, 0, 1), 1));
         Entry(MapList, 0x808099D6, Placement(0x80807246, VisibilityMap, Entity));
-        Entry(CollisionList, 0x808099D6, Placement(StaticCollisionReader.CollisionMarker, CollisionOwner, 0));
+        Entry(CollisionList, 0x808099D6, Placement(SStaticCollisionPayload.Class, CollisionOwner, 0));
         Entry(CollisionOwner, StaticCollisionReader.OwnerClass, CollisionOwnerBytes(Compound, Shape));
         Entry(VisibilityMap, 0x80807320, MapBytes([101, 102, 103]));
         uint packfile = (26u << 9) | (7u << 6);

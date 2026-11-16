@@ -59,9 +59,9 @@ public sealed partial class PackageCatalog
                 || !byTag.TryGetValue(replacement.PlacementSourceTag, out var placement) || placement.Reference != SMapPlacements.Class)
                 throw new InvalidDataException("Generated instance replacement is invalid.");
         foreach (var (index, added) in entry.AddedInstances)
-            if (index < 0 || added is null || added.SourceIndex < 0 || entry.InstanceOrigins.ContainsKey(index)
-                || !byTag.TryGetValue(added.SourceTag, out var original) || original.Reference != 0x8080966D
-                || !byTag.TryGetValue(added.Container, out var container) || container.Reference != 0x80808A54)
+            if (index < 0 || added is null || added.SourceOffset < 0 || entry.InstanceOrigins.ContainsKey(index)
+                || !byTag.TryGetValue(added.SourceTag, out var original)
+                || original.Reference != (added.Model == 0 ? SStaticMeshInstances.Class : SMapContainer.Class))
                 throw new InvalidDataException("Generated added instance is invalid.");
         return entry with
         {

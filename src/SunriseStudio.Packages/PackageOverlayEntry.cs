@@ -3,8 +3,11 @@ namespace SunriseStudio.Packages;
 public sealed record PackageInstanceOrigin(uint SourceTag, int SourceIndex);
 public sealed record PackagePlacementOrigin(uint SourceTag, int SourceOffset, int SourceIndex);
 public sealed record PackageInstanceReplacement(uint SourceTag, int SourceIndex, uint PlacementSourceTag, int PlacementSourceOffset);
-/** A generated row with no installed row: a copy of SourceIndex, the project's Copy of it, drawn in Container. */
-public sealed record PackageAddedInstance(uint SourceTag, int SourceIndex, ulong Copy, uint Container, bool Collision);
+/**
+ * The added object a generated row draws. Model 0 is a copy of the installed row at SourceOffset of
+ * table SourceTag; any other Model is placed in container SourceTag. Identity numbers it.
+ */
+public sealed record PackageAddedInstance(uint SourceTag, int SourceOffset, int SourceIndex, ulong Identity, uint Model);
 
 /** Overlay metadata describes project bytes; installed entries remain the baseline. */
 public sealed record PackageOverlayEntry(PackageEntry Entry, string? Name = null)

@@ -192,10 +192,7 @@ internal static class CollisionAdditions
             string what = $"A copy of compound {compound:X8} instance {input.Instance}";
             var (translation, rotation, lanes) = CollisionImport.Local(entity.Frame, input.World, what);
             var transform = new QsTransform(translation, rotation, new Vector3(CollisionImport.Uniform(lanes, what)));
-            var source = rows[input.Instance];
-            var row = source with { Bytes = source.Bytes.ToArray() };
-            row.SetTransform(transform, (source.Flags & StaticCompoundShape.ConvexFlag) != 0);
-            rows.Add(row);
+            rows.Add(CopyRow(rows[input.Instance], transform));
             leaves.Add(PieceBox(input.Instance, transform));
         }
 
@@ -311,17 +308,34 @@ internal static class CollisionAdditions
          */
         internal void Write(Dictionary<uint, byte[]> assets)
         {
-            CollisionCompoundWriter.RequireKeyCapacity(rows.Count, keyBits);
-            var (nodes, domainMin, domainMax) = CompoundTree.Build(leaves);
-            sbyte stored = CollisionCompoundWriter.ChildKeyBits(shape.File);
-            byte[] bytes = CollisionCompoundWriter.Write(shape, rows, nodes, domainMin, domainMax, keyBits != stored ? (sbyte)keyBits : null);
-            var written = StaticCompoundShape.Parse(HavokPackfile.Parse(bytes));
-            var decoded = written.LeafBoxes();
-            for (int i = 0; i < leaves.Count; i++)
-                if (!decoded[i].Contains(leaves[i])) throw new InvalidDataException($"The rebuilt tree does not enclose instance {i}.");
-            assets[compound] = bytes;
+            assets[compound] = Rebuild(shape, rows, leaves, keyBits);
             byte[] owner = Owner.Write();
             if (!owner.AsSpan().SequenceEqual(ownerBytes)) assets[OwnerTag] = owner;
         }
+    }
+
+    /** Another instance of an existing one: the same child, filter, mask and user data at a new transform. */
+    internal static CompoundInstanceRow CopyRow(CompoundInstanceRow source, QsTransform transform)
+    {
+        var row = source with { Bytes = source.Bytes.ToArray() };
+        row.SetTransform(transform, (source.Flags & StaticCompoundShape.ConvexFlag) != 0);
+        return row;
+    }
+
+    /**
+     * The compound re-emitted with these rows and a new tree over their leaves.
+     * @param keyBits The child key width the rows need; +0x30 is rewritten only when it changes.
+     */
+    internal static byte[] Rebuild(StaticCompoundShape shape, IReadOnlyList<CompoundInstanceRow> rows,
+        IReadOnlyList<CompoundBox> leaves, int keyBits)
+    {
+        CollisionCompoundWriter.RequireKeyCapacity(rows.Count, keyBits);
+        var (nodes, domainMin, domainMax) = CompoundTree.Build(leaves);
+        sbyte stored = CollisionCompoundWriter.ChildKeyBits(shape.File);
+        byte[] bytes = CollisionCompoundWriter.Write(shape, rows, nodes, domainMin, domainMax, keyBits != stored ? (sbyte)keyBits : null);
+        var decoded = StaticCompoundShape.Parse(HavokPackfile.Parse(bytes)).LeafBoxes();
+        for (int i = 0; i < leaves.Count; i++)
+            if (!decoded[i].Contains(leaves[i])) throw new InvalidDataException($"The rebuilt tree does not enclose instance {i}.");
+        return bytes;
     }
 }
