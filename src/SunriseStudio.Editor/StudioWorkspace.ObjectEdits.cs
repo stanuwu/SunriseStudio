@@ -145,7 +145,8 @@ public sealed partial class StudioWorkspace
         prior.Native == next.Native && prior.SourceTag == next.SourceTag
         && prior.InstanceOrigins.OrderBy(pair => pair.Key).SequenceEqual(next.InstanceOrigins.OrderBy(pair => pair.Key))
         && prior.PlacementOrigins.OrderBy(pair => pair.Key).SequenceEqual(next.PlacementOrigins.OrderBy(pair => pair.Key))
-        && prior.Replaces.ToHashSet().SetEquals(next.Replaces);
+        && prior.Replaces.ToHashSet().SetEquals(next.Replaces)
+        && prior.AddedInstances.OrderBy(pair => pair.Key).SequenceEqual(next.AddedInstances.OrderBy(pair => pair.Key));
 
     /** Bytes without object edits. Raw deltas and undo frames store these, so object values never enter a delta. */
     private byte[] ReadRawBytes(uint tag) =>

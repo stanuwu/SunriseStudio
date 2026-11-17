@@ -28,6 +28,7 @@ SyntheticChecks.Run();
 MeshSyntheticChecks.Run();
 CullChecks.Synthetic();
 StaticAdditionChecks.Synthetic();
+StaticCopyChecks.Synthetic();
 ConfigReferenceCacheChecks.Run();
 PhysicsChecks.Synthetic();
 SharedShapeChecks.Synthetic();

@@ -237,6 +237,8 @@ public sealed record GeneratedObjectAsset(string Id, string Name, NativeAssetMet
     public IReadOnlyDictionary<int, PackageInstanceOrigin> InstanceOrigins { get; init; } = new Dictionary<int, PackageInstanceOrigin>();
     public IReadOnlyDictionary<int, PackagePlacementOrigin> PlacementOrigins { get; init; } = new Dictionary<int, PackagePlacementOrigin>();
     public IReadOnlyList<PackageInstanceReplacement> Replaces { get; init; } = [];
+    /** Rows that draw an added object instead of an installed row. */
+    public IReadOnlyDictionary<int, PackageAddedInstance> AddedInstances { get; init; } = new Dictionary<int, PackageAddedInstance>();
     public uint TagHash => TagHashes.Make(Native.PackageId, Native.EntryIndex!.Value);
 }
 

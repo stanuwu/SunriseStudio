@@ -9,7 +9,7 @@ using SunriseStudio.Tags.Views;
 namespace SunriseStudio.Authoring;
 
 /**
- * Target is null when the object is read only or added by the project.
+ * Target is null when the object is read only or an added spawn point; for an added static it is the addition's target.
  * Addition is the edit that adds the object, if any.
  */
 public sealed record SceneEditInfo(bool CanTransform, bool CanScale, bool CanBounds,
@@ -20,7 +20,7 @@ public sealed record SceneEditInfo(bool CanTransform, bool CanScale, bool CanBou
 /** Scene edits target only rows reached through the same typed rows as the scene decoder. */
 public static class SceneEdits
 {
-    /** Addition is set for an added row; Target then names that row in the compiled bytes. */
+    /** Target is the drawn row; Addition is the project edit that adds it, for an added spawn row or a generated row. */
     private sealed record Binding(ObjectEditTarget Target, byte[] Bytes, ObjectRow Row, string Space, ObjectEdit? Addition = null);
 
     /**
@@ -50,9 +50,12 @@ public static class SceneEdits
                     key.SourceTag, key.Offset, binding.Space, "", key);
             }
             var stored = ObjectRows.ReadTransform(key.Layout, binding.Bytes, key.Offset);
+            // An added spawn row has no target of its own; an added static is edited through its addition's target.
+            bool spawn = binding.Addition?.Kind == ObjectEditKind.AddSpawnPoint;
+            var edited = spawn ? key : binding.Addition?.Target ?? key;
             return new(true, binding.Row.Scale, false, stored.Position, ObjectRows.Rotation(stored.Rotation),
                 binding.Row.Scale ? stored.Scale : 1, default, default,
-                key.SourceTag, key.Offset, binding.Space, "", binding.Addition is null ? key : null, binding.Addition);
+                edited.SourceTag, edited.Offset, binding.Space, "", spawn ? null : edited, binding.Addition);
         }
         catch (Exception error) when (error is NotSupportedException or InvalidDataException or ArgumentException)
         {
@@ -96,6 +99,13 @@ public static class SceneEdits
             return new(ObjectEditKind.PlacementTransform, binding.Target, name, movedTo, turnedTo, scaledTo);
         }
         var stored = ObjectRows.ReadTransform(binding.Target.Layout, binding.Bytes, binding.Target.Offset);
+        if (binding.Addition is { Kind: not ObjectEditKind.AddSpawnPoint } generated)
+        {
+            // An addition saves its whole pose and keeps its name; its drawn row holds the saved floats.
+            var pose = rotation is { } value ? Quaternion.Normalize(value) : stored.Rotation;
+            if (position == stored.Position && pose == stored.Rotation && scale == stored.Scale) return null;
+            return generated with { Position = ObjectEditCompiler.Floats(position), Rotation = ObjectEditCompiler.Floats(pose), Scale = scale };
+        }
         float[]? moved = position != stored.Position ? ObjectEditCompiler.Floats(position) : null;
         // Re-encoding an unchanged rotation would add float noise or flip q to -q.
         float[]? turned = rotation is { } edited && Quaternion.Normalize(edited) is var unit && unit != ObjectRows.Rotation(stored.Rotation)
@@ -115,7 +125,8 @@ public static class SceneEdits
         Vector3 position, Quaternion rotation, WorldDocument? world = null, string? name = null)
     {
         var binding = Resolve(catalog, target, world, edits: existing);
-        var source = binding.Addition?.Target ?? (binding.Target.Layout == ObjectEditLayout.SpawnPoint ? binding.Target
+        var source = binding.Addition is { Kind: ObjectEditKind.AddSpawnPoint } point ? point.Target
+            : (binding.Target.Layout == ObjectEditLayout.SpawnPoint ? binding.Target
             : throw new NotSupportedException("Only a spawn point can be copied as a spawn point."));
         if (!Finite(position)) throw new InvalidDataException("A spawn point needs a finite position.");
         int index = existing.Where(edit => edit.Kind == ObjectEditKind.AddSpawnPoint && edit.Target.Key == source.Key)
@@ -142,11 +153,52 @@ public static class SceneEdits
 
     /** Hides the selected static row; its place and id slot stay, so other rows keep their indices. */
     public static ObjectEdit CreateRemoveEdit(PackageCatalog catalog, object target, WorldDocument? world = null,
-        string? name = null) => new(ObjectEditKind.RemoveInstance, StaticRow(catalog, target, world), name);
+        string? name = null) => new(ObjectEditKind.RemoveInstance, StaticRow(catalog, target, world, remove: true), name);
 
-    private static ObjectEditTarget StaticRow(PackageCatalog catalog, object target, WorldDocument? world)
+    /**
+     * A static model placed in a map container at a position in the container's space.
+     * @param existing The project's edits; the placement takes the next free identity for its container.
+     */
+    public static ObjectEdit CreatePlacementEdit(PackageCatalog catalog, uint container, uint model, IEnumerable<ObjectEdit> existing,
+        Vector3 position, string? name = null)
+    {
+        if (!Finite(position)) throw new InvalidDataException("A placement needs a finite position.");
+        byte[] source = catalog.ReadOriginal(container);
+        var target = new ObjectEditTarget(container, ObjectEditLayout.Container, 0, source.Length, -1, 0, BinaryDelta.Hash(source));
+        ulong identity = existing.Where(edit => edit.Kind == ObjectEditKind.AddPlacement && edit.Target.Key == target.Key)
+            .Select(edit => edit.Target.Identity).DefaultIfEmpty(0UL).Max() + 1;
+        return new(ObjectEditKind.AddPlacement, target with { Identity = identity }, name, ObjectEditCompiler.Floats(position),
+            Model: model);
+    }
+
+    /**
+     * A static model placed at a world point, in a container of the drawn installed static nearest to it.
+     * @param existing The project's edits; the placement takes the next free identity for its container.
+     */
+    public static ObjectEdit CreatePlacementEdit(PackageCatalog catalog, WorldDocument world, uint model,
+        IEnumerable<ObjectEdit> existing, Vector3 point, string? name = null)
+    {
+        bool Installed(uint tag) => catalog.TryGetEntry(tag, out var entry) && catalog.ContainsInstalledPackage(entry.PackageId);
+        var nearest = world.Scene.Instances.Where(item => item.InstanceSourceTag != 0 && item.PlacementSourceOffset >= 0
+                && Installed(item.PlacementSourceTag) && item.MapContainers.Any(container => Installed(container.TagHash))
+                && !catalog.TryGetAddedInstance(item.InstanceSourceTag, item.InstanceSourceIndex, out _))
+            .MinBy(item => Vector3.DistanceSquared(item.Transform.Translation, point))
+            ?? throw new NotSupportedException("The open world draws no installed static in a map container.");
+        // The list row's parent is the container's space; an added placement draws there with a zeroed row.
+        var row = AssetSceneLoader.EntryPlacement(catalog.Read(nearest.PlacementSourceTag), nearest.PlacementSourceOffset);
+        if (!Matrix4x4.Invert(row, out var inverseRow) || !Matrix4x4.Invert(inverseRow * nearest.InstanceParent, out var toContainer))
+            throw new InvalidDataException("The nearest static's container space has no inverse.");
+        uint container = nearest.MapContainers.First(item => Installed(item.TagHash)).TagHash;
+        return CreatePlacementEdit(catalog, container, model, existing, Vector3.Transform(point, toContainer), name);
+    }
+
+    /** A copy of an added copy copies its source row; an added object is removed by reverting its edit. */
+    private static ObjectEditTarget StaticRow(PackageCatalog catalog, object target, WorldDocument? world, bool remove = false)
     {
         var binding = Resolve(catalog, target, world);
+        if (binding.Addition is { } added)
+            return added.Kind == ObjectEditKind.AddInstance && !remove ? added.Target
+                : throw new NotSupportedException(remove ? "Remove an added object by reverting its edit." : "Only a static instance can be copied.");
         return binding.Target.Layout == ObjectEditLayout.StaticInstance ? binding.Target
             : throw new NotSupportedException("Only a static instance can be copied or removed.");
     }
@@ -203,6 +255,8 @@ public static class SceneEdits
         if (key.Layout == ObjectEditLayout.SpawnPoint && edits is not null
             && SpawnPointAdditions.At(catalog, bytes, key.SourceTag, key.Offset, edits) is { } addition)
             return new(key, bytes, row, space, addition);
+        if (key.Layout == ObjectEditLayout.StaticInstance && catalog.TryGetAddedInstance(key.SourceTag, key.Index, out var added))
+            return new(key, bytes, row, space, Addition(catalog, added));
         byte[] original;
         if (authored?.Invoke(key.SourceTag) == true) original = bytes;
         else
@@ -211,6 +265,26 @@ public static class SceneEdits
         ObjectRows.Locate(catalog, key, original);
         key = key with { OriginalSha256 = BinaryDelta.Hash(original.AsSpan(key.Offset, key.Length)) };
         return new(key, bytes, row, space);
+    }
+
+    /** The key of the edit that adds a generated row. */
+    public static string AddedKey(PackageAddedInstance added)
+    {
+        var (kind, layout) = added.Model == 0 ? (ObjectEditKind.AddInstance, ObjectEditLayout.StaticInstance)
+            : (ObjectEditKind.AddPlacement, ObjectEditLayout.Container);
+        return new ObjectEdit(kind, new(added.SourceTag, layout, added.SourceOffset, 1, added.SourceIndex, added.Identity, "")).Key;
+    }
+
+    /** The edit that adds a generated row, with no values; its target is the one the edit was made with. */
+    private static ObjectEdit Addition(PackageCatalog catalog, PackageAddedInstance added)
+    {
+        byte[] original = catalog.ReadOriginal(added.SourceTag);
+        if (added.Model != 0)
+            return new(ObjectEditKind.AddPlacement, new(added.SourceTag, ObjectEditLayout.Container, 0, original.Length, -1,
+                added.Identity, BinaryDelta.Hash(original)), Model: added.Model);
+        var source = Target(added.SourceTag, ObjectEditLayout.StaticInstance, added.SourceOffset, added.SourceIndex, added.Identity);
+        ObjectRows.Locate(catalog, source, original);
+        return new(ObjectEditKind.AddInstance, source with { OriginalSha256 = BinaryDelta.Hash(original.AsSpan(source.Offset, source.Length)) });
     }
 
     /** Maps a selection to its row. The row checks themselves run in ObjectRows.Locate. */

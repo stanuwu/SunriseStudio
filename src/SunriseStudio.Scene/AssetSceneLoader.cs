@@ -353,7 +353,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
     internal static Matrix4x4 RowTransform(byte[] data, int row, Matrix4x4 parent) => EntryPlacement(data, row) * parent;
 
     /** Reads only the row's QTS, so a row cut short after it still places. */
-    internal static Matrix4x4 EntryPlacement(byte[] data, int row)
+    public static Matrix4x4 EntryPlacement(byte[] data, int row)
     {
         var rotation = TagView.Member<AuthoredPlacementEntry, Quaternion>(data, row, nameof(AuthoredPlacementEntry.Rotation));
         var position = TagView.Member<AuthoredPlacementEntry, Vector3>(data, row, nameof(AuthoredPlacementEntry.Position));

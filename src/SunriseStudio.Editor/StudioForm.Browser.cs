@@ -480,6 +480,13 @@ public sealed partial class StudioForm
         if (clone.Available && (!workspace.IsProjectTag(entry.TagHash) || clone.ClonesProject))
             CreationMenuItem("Clone", clone, () => StartCreation(clone, entry.TagHash, name));
         if (ImGui.MenuItem("Copy tag")) ImGui.SetClipboardText($"{entry.TagHash:X8}");
+        if (entry.Reference == SStaticMesh.Class && workspace.World is not null)
+        {
+            if (ImGui.MenuItem("Place in map", "", false, workspace.CanEdit))
+                workspace.Run(() => PlaceModel(entry.TagHash));
+            StudioUi.Tip(workspace.CanEdit ? $"Places this model at the 3D cursor, in the map container of the nearest static. {StudioUi.MayNotWork}"
+                : "Open a project to edit.");
+        }
     }
 
     private void PollAssetFilter()

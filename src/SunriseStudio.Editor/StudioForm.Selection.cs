@@ -15,6 +15,8 @@ public sealed partial class StudioForm
     private Vector3 editPosition, editRotation, editRotationBase, editMinimum, editMaximum;
     private float editScale = 1;
     private bool expandObjectDetails;
+    // The key of an object just added, to select once the reloaded world draws it.
+    private string? pendingAddedKey;
 
     /** Names the current Frame selection key, which the user can remap. */
     private static string FrameTooltip => ShortcutInput.Text(ShortcutActions.FrameSelection3D) is { Length: > 0 } key
@@ -179,10 +181,14 @@ public sealed partial class StudioForm
             if (!content && info.Target?.Layout == ObjectEditLayout.StaticInstance && workspace.Project is { } project)
             {
                 if (ImGui.Button("Copy to this transform", new(-1, 0))) workspace.Run(() =>
-                    workspace.ApplyObjectEdit(SceneEdits.CreateCopyEdit(catalog, selectedObject, project.ObjectEdits, editPosition,
-                        DegreesToQuaternion(editRotation), editScale, inspectionWorld, objectInspection?.Object.Name)));
+                {
+                    var copy = SceneEdits.CreateCopyEdit(catalog, selectedObject, project.ObjectEdits, editPosition,
+                        DegreesToQuaternion(editRotation), editScale, inspectionWorld, objectInspection?.Object.Name);
+                    workspace.ApplyObjectEdit(copy);
+                    pendingAddedKey = copy.Key;
+                });
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip("Adds a copy at the values above; the object itself stays.");
-                if (ImGui.Button("Remove object", new(-1, 0))) workspace.Run(() =>
+                if (info.Addition is null && ImGui.Button("Remove object", new(-1, 0))) workspace.Run(() =>
                     workspace.ApplyObjectEdit(SceneEdits.CreateRemoveEdit(catalog, selectedObject, inspectionWorld,
                         objectInspection?.Object.Name)));
             }
@@ -195,17 +201,26 @@ public sealed partial class StudioForm
                 workspace.ApplyObjectEdit(SceneEdits.CreateBoundsEdit(catalog, selectedObject, editMinimum, editMaximum,
                     inspectionWorld, objectInspection?.Object.Name)));
         }
-        if (info.Target is { } target && workspace.Project?.FindObjectEdit(target.Key) is { } saved)
+        if (info.Addition is { } addition)
+        {
+            // An added object is its edit; reverting the edit removes it.
+            if (addition.Kind == ObjectEditKind.AddSpawnPoint)
+            {
+                ImGui.TextColored(StudioTheme.Accent, "Added in this project");
+                if (ImGui.Button("Remove spawn point", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(addition.Key));
+            }
+            else if (workspace.Project?.FindObjectEdit(addition.Key) is { } added)
+            {
+                ImGui.TextColored(StudioTheme.Accent, $"Added: {added.Summary()}");
+                if (ImGui.Button("Remove added object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(added.Key));
+            }
+        }
+        else if (info.Target is { } target && workspace.Project?.FindObjectEdit(target.Key) is { } saved)
         {
             ImGui.TextColored(StudioTheme.Accent, $"Edited: {saved.Summary()}");
             if (ImGui.Button("Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
         }
-        if (info.Addition is { } addition)
-        {
-            ImGui.TextColored(StudioTheme.Accent, "Added in this project");
-            if (ImGui.Button("Remove spawn point", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(addition.Key));
-        }
-        if (info.Target is { Layout: ObjectEditLayout.StaticInstance } removable
+        if (info.Addition is null && info.Target is { Layout: ObjectEditLayout.StaticInstance } removable
             && workspace.Project?.FindObjectEdit(new ObjectEdit(ObjectEditKind.RemoveInstance, removable).Key) is { } removal)
         {
             ImGui.TextColored(StudioTheme.Accent, "Removed in this project");
@@ -218,8 +233,13 @@ public sealed partial class StudioForm
     /** A Changes row selects its object in the open world; with no world, or no match, it opens the source asset. */
     private void SelectEditedObject(ObjectEdit edit)
     {
-        object? found = edit.Kind == ObjectEditKind.AddSpawnPoint ? FindAddedSpawnPoint(edit) : FindEditedSource(edit.Target);
-        if (found is { } source && inspectionWorld?.Find(source) is { } row)
+        object? source = edit.Kind switch
+        {
+            ObjectEditKind.AddSpawnPoint => FindAddedSpawnPoint(edit),
+            ObjectEditKind.AddInstance or ObjectEditKind.AddPlacement => FindAddedSource(edit.Key),
+            _ => FindEditedSource(edit.Target)
+        };
+        if (source is not null && inspectionWorld?.Find(source) is { } row)
         {
             SelectWorldObject(row);
             focusWorldScene = true;
@@ -236,6 +256,34 @@ public sealed partial class StudioForm
         int offset = SpawnPointAdditions.Offset(catalog, catalog.Read(addition.Target.SourceTag), addition, project.ObjectEdits);
         return world.Scene.Markers.FirstOrDefault(marker => marker.SourceTag == addition.Target.SourceTag
             && marker.SourceOffset == offset);
+    }
+
+    /** The drawn row of an added object, found by its edit key; null without a world or a match. */
+    private MeshInstance? FindAddedSource(string key)
+    {
+        if (workspace.World is not { } world || workspace.Catalog is not { } catalog) return null;
+        return world.Scene.Instances.FirstOrDefault(item => item.InstanceSourceTag != 0
+            && catalog.TryGetAddedInstance(item.InstanceSourceTag, item.InstanceSourceIndex, out var added)
+            && SceneEdits.AddedKey(added) == key);
+    }
+
+    /** Selects an object just added once the reloaded world draws it, then forgets it. */
+    private void SelectPendingAdded()
+    {
+        if (pendingAddedKey is not { } key || FindAddedSource(key) is not { } drawn || inspectionWorld?.Find(drawn) is not { } row) return;
+        pendingAddedKey = null;
+        SelectWorldObject(row);
+        focusWorldScene = true;
+    }
+
+    /** Places a static model at the 3D cursor and selects it once the world draws it. */
+    private void PlaceModel(uint model)
+    {
+        if (workspace.World is not { } world || workspace.Catalog is not { } catalog || workspace.Project is not { } project) return;
+        var placed = SceneEdits.CreatePlacementEdit(catalog, world, model, project.ObjectEdits, viewport!.Camera.Pivot,
+            workspace.DisplayName(model));
+        workspace.ApplyObjectEdit(placed);
+        pendingAddedKey = placed.Key;
     }
 
     /** The open world's scene object for an edit target; null without a world or a match. */
