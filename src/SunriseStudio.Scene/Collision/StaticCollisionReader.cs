@@ -18,6 +18,9 @@ public readonly record struct PlacedPayload(uint ListTag, int Row, uint Marker, 
 /** The 0x80808A15 tag of a collision entity: its compound and the tags its imports name. */
 public sealed record StaticCollisionOwner(uint Tag, uint CompoundTag, IReadOnlyList<uint> ImportTags)
 {
+    /** The owner's material maps; an import `tK` is the payload that map K names. */
+    public IReadOnlyList<uint> MaterialMaps { get; init; } = [];
+
     /** The tag an import `iN` resolves to. */
     public uint ImportTag(int index) => index >= 0 && index < ImportTags.Count
         ? ImportTags[index] : throw new InvalidDataException("Compound import is outside its owner's tag list.");
@@ -147,7 +150,9 @@ public sealed class StaticCollisionReader(PackageCatalog catalog)
             for (int i = 0; i < count; i++)
                 imports.Add(TagView.At<TagReferenceElement>(owner, (int)header.DataOffset + i * stride).Tag);
         }
-        return new(tag, view.CompoundPackfile, imports);
+        var maps = TagView.CheckedRows(owner, in view.MaterialMaps, SCollisionMaterialMapRef.Class, MaximumImports).ToArray()
+            .Select(row => row.MaterialMap).ToArray();
+        return new(tag, view.CompoundPackfile, imports) { MaterialMaps = maps };
     }
 
     /** Object lists under the map's bubbles and containers, whatever their layer mask. */
@@ -254,8 +259,9 @@ public sealed class StaticCollisionReader(PackageCatalog catalog)
         if (instance.ChildObject is int local) offset = local;
         else
         {
-            int index = instance.ImportIndex;
-            tag = index >= 0 && index < owner.ImportTags.Count ? owner.ImportTags[index] : uint.MaxValue;
+            int index = instance.ImportIndex, map = instance.MaterialMapIndex;
+            tag = index >= 0 && index < owner.ImportTags.Count ? owner.ImportTags[index]
+                : map >= 0 && map < owner.MaterialMaps.Count ? MapPayload(owner.MaterialMaps[map]) : uint.MaxValue;
             file = tag == uint.MaxValue ? null : Packfile(tag);
             if (file is null)
             {
@@ -274,6 +280,14 @@ public sealed class StaticCollisionReader(PackageCatalog catalog)
             if (shape.Undecoded is { } missing) set.Count(missing, shape.UndecodedCustomPrimitives > 0 ? shape.UndecodedCustomPrimitives : 1);
         }
         return (tag, offset, shape);
+    }
+
+    /** The payload tag a material map names, or 0xFFFFFFFF when the map is missing. */
+    private uint MapPayload(uint map)
+    {
+        if (!catalog.TryGetEntry(map, out _)) return uint.MaxValue;
+        byte[] data = Read(map);
+        return TagView.Fits<C808092db>(data, 0) ? TagView.At<C808092db>(data, 0).Unk14 : uint.MaxValue;
     }
 
     private HavokPackfile? Packfile(uint tag)

@@ -159,7 +159,7 @@ public static partial class WorldBundleImport
     }
 
     /** The bubble's stock collision, read through its lists' installed sources, and its first compound. */
-    private static (CollisionScene Baseline, uint Template) CollisionTemplate(WorldFiles world, PackageCatalog catalog, uint bubbleNameHash)
+    internal static (CollisionScene Baseline, uint Template) CollisionTemplate(WorldFiles world, PackageCatalog catalog, uint bubbleNameHash)
     {
         var lists = WorldContent.Containers(world, bubbleNameHash).SelectMany(container => ((JsonArray)world.Fields(container)["contents"]!)
                 .Select(row => WorldFiles.Text(row!["member_tag"])).OfType<string>())
