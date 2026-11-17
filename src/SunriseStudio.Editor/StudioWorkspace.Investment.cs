@@ -13,6 +13,8 @@ public sealed partial class StudioWorkspace
     private StudioDocument? investmentDocument;
     public InvestmentCatalog? Investment => ReferenceEquals(investmentSource, Catalog)
         && Catalog?.OverlayRevision == investmentOverlayRevision ? investment : null;
+    /** The last catalog read from this installation. It may lag the project overlay, which is fine for browser names and icons. */
+    public InvestmentCatalog? LoadedInvestment => ReferenceEquals(investmentSource, Catalog) ? investment : null;
     public InvestmentItemDetail? SelectedInvestmentItem { get; private set; }
     public InvestmentVendorDetail? SelectedInvestmentVendor { get; private set; }
     public InvestmentIcon? SelectedInvestmentIcon { get; private set; }
@@ -75,6 +77,24 @@ public sealed partial class StudioWorkspace
         return catalog.ContainsTag(index) ? InvestmentItemClone.ReadBankRows(catalog.Read(index)).Select(row => row.ContainerTag) : [];
     }
 
+    private StudioDocument? requestedDetailDocument;
+    private InvestmentCatalog? requestedDetailCatalog;
+
+    /**
+     * Starts the detail read of the open document once per document and catalog, for every page that shows it. Pages call it
+     * each frame. After a failed read it waits for RetryInvestmentDetail.
+     */
+    public void RequestInvestmentDetail()
+    {
+        if (InvestmentDetailCurrent || IsBusy || Investment is not { } catalog || Document is not { } wanted
+            || ReferenceEquals(requestedDetailDocument, wanted) && ReferenceEquals(requestedDetailCatalog, catalog)) return;
+        requestedDetailDocument = wanted; requestedDetailCatalog = catalog;
+        Run(LoadInvestmentDetail);
+    }
+
+    /** Lets the next RequestInvestmentDetail read the open document again. */
+    public void RetryInvestmentDetail() => requestedDetailDocument = null;
+
     /** A detail snapshot is adopted only for the document that supplied its bytes. */
     public void LoadInvestmentDetail()
     {
@@ -85,7 +105,7 @@ public sealed partial class StudioWorkspace
         {
             InvestmentItemDetail? item = null; InvestmentVendorDetail? vendor = null;
             if (data.FindItem(document.Entry.TagHash) is { } summary && summary.Tag == document.Entry.TagHash)
-                item = data.ReadItem(document.Entry.TagHash, document.Bytes);
+                item = data.ReadItemWithPursuit(document.Entry.TagHash, document.Bytes, OperationToken);
             if (data.FindVendor(document.Entry.TagHash) is { } seller && seller.Tag == document.Entry.TagHash)
                 vendor = data.ReadVendor(document.Entry.TagHash, document.Bytes);
             InvestmentIcon? icon = null;
@@ -105,6 +125,22 @@ public sealed partial class StudioWorkspace
                 SelectedInvestmentIcon = icon; SelectedInvestmentPerkIcons = perkIcons;
                 InvestmentIconError = string.Join("\n", iconErrors);
                 InvestmentRevision++; Status = document.Name;
+            };
+        }, blocking: false, keepNotice: true);
+    }
+
+    /** Reads the root-slot tables in the background, like the catalog itself. Each catalog snapshot reads them once. */
+    public void LoadInvestmentTables()
+    {
+        RequireIdle();
+        var data = Investment ?? throw new InvalidOperationException("Load investment first.");
+        BeginWork("Reading reward tables", () =>
+        {
+            var tables = data.Tables(OperationToken);
+            return () =>
+            {
+                InvestmentRevision++;
+                Status = $"{tables.PassCandidates.Count:N0} reward ladders";
             };
         }, blocking: false, keepNotice: true);
     }

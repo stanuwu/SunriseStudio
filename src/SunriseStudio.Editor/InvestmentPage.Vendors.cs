@@ -3,6 +3,7 @@ using System.Numerics;
 using ImGuiNET;
 using SunriseStudio.Formats;
 using SunriseStudio.Projects;
+using ItemKinds = SunriseStudio.Packages.InvestmentItemKinds;
 
 namespace SunriseStudio.Editor;
 
@@ -15,9 +16,8 @@ public sealed partial class InvestmentPage
     private long costOverlayRevision;
     private bool openCostEditor;
     private int costItem = -1;
-    private string costQuantity = "", costSearch = "", costMatchedSearch = "";
-    private InvestmentCatalog? costCatalog;
-    private InvestmentItem[] costMatches = [];
+    private string costQuantity = "";
+    private readonly ItemCatalogView costPicker = new();
 
     private void InvalidateCostDraft(StudioWorkspace workspace)
     {
@@ -74,42 +74,27 @@ public sealed partial class InvestmentPage
     private void BeginCostEditor(StudioPageContext context, InvestmentSale sale, InvestmentCost cost)
     {
         costSale = sale; costRow = cost; costItem = cost.ItemIndex;
-        costQuantity = cost.Quantity.ToString(CultureInfo.InvariantCulture); costSearch = "";
-        costCatalog = null; openCostEditor = true;
+        costQuantity = cost.Quantity.ToString(CultureInfo.InvariantCulture);
+        // The picker opens on the currencies for a currency cost, since most costs are one, and on every item otherwise.
+        bool currency = context.Workspace.Investment is { } items && (uint)costItem < items.Items.Count
+            && items.Items[costItem].Category == InvestmentCategory.Currencies;
+        costPicker.Chosen = costItem; costPicker.Reset(currency ? ItemKinds.Currencies : ItemCatalogView.AllItems);
+        openCostEditor = true;
         costDocument = context.Workspace.Document; costProject = context.Workspace.Project;
         costOverlayRevision = context.Workspace.Catalog!.OverlayRevision;
     }
 
     /** Payment edits retain the selected sale identity and wait for explicit application. */
-    private unsafe void DrawCostEditor(StudioPageContext context, InvestmentCatalog catalog)
+    private void DrawCostEditor(StudioPageContext context, InvestmentCatalog catalog)
     {
         if (openCostEditor) { ImGui.OpenPopup("Edit cost"); openCostEditor = false; }
         if (!ImGui.BeginPopupModal("Edit cost", ImGuiWindowFlags.AlwaysAutoResize)) return;
         InvalidateCostDraft(context.Workspace);
         if (costSale is not { } sale || costRow is not { } row)
         { ImGui.CloseCurrentPopup(); ImGui.EndPopup(); return; }
-        ImGui.SetNextItemWidth(380); ImGui.InputTextWithHint("##cost-search", "Find item or currency", ref costSearch, 128);
-        if (!ReferenceEquals(costCatalog, catalog) || costMatchedSearch != costSearch)
-        {
-            costCatalog = catalog; costMatchedSearch = costSearch;
-            costMatches = catalog.Items.Where(item => costSearch.Length == 0
-                || item.Name.Contains(costSearch, StringComparison.OrdinalIgnoreCase)
-                || item.TypeName.Contains(costSearch, StringComparison.OrdinalIgnoreCase)
-                || item.Index.ToString(CultureInfo.InvariantCulture) == costSearch)
-                .OrderByDescending(item => item.Category == InvestmentCategory.Currencies).ThenBy(item => item.Name).ToArray();
-        }
-        ImGui.BeginChild("cost-items", new(380, 210), ImGuiChildFlags.Borders);
-        var clipper = new ImGuiListClipperPtr(ImGuiNative.ImGuiListClipper_ImGuiListClipper());
-        clipper.Begin(costMatches.Length);
-        while (clipper.Step())
-            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
-            {
-                var item = costMatches[i]; ImGui.PushID(item.Index);
-                if (ImGui.Selectable(item.Name, costItem == item.Index)) costItem = item.Index;
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip($"{item.Name}\n{item.TypeName}");
-                ImGui.PopID();
-            }
-        clipper.End(); clipper.Destroy(); ImGui.EndChild();
+        if (costPicker.DrawPicker("cost-items", context.Workspace, catalog,
+            InvestmentIconCache.Of(context), default) is { } chosen)
+            costItem = chosen.Index;
         if ((uint)costItem < catalog.Items.Count) ImGui.TextUnformatted(catalog.Items[costItem].Name);
         ImGui.SetNextItemWidth(180); ImGui.InputText(row.Conditional ? "Base quantity" : "Quantity", ref costQuantity, 10, ImGuiInputTextFlags.CharsDecimal);
         bool valid = (uint)costItem < catalog.Items.Count && uint.TryParse(costQuantity, NumberStyles.None, CultureInfo.InvariantCulture, out _);

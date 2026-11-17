@@ -121,7 +121,7 @@ public static class StudioUi
     }
 
     /** The text, or its longest prefix that fits with "..." added. */
-    private static string Fit(string text, float width)
+    internal static string Fit(string text, float width)
     {
         if (width <= 0 || ImGui.CalcTextSize(text).X <= width) return text;
         int low = 0, high = text.Length;

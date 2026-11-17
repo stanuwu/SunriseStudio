@@ -7,12 +7,13 @@ using SunriseStudio.Tags.Views;
 namespace SunriseStudio.Formats;
 
 public enum InvestmentCategory { Weapons, Armor, Items, Currencies }
+/** The installed tables Studio reads. Root and ObjectiveDisplays of 0 are found by their entry class. */
 public sealed record InvestmentSources(uint Items = InvestmentTags.ItemIndex, uint Displays = InvestmentTags.ItemDisplayIndex,
     uint StringBanks = 0x81A27211, uint StatNames = 0x81613D07, uint Vendors = InvestmentTags.VendorIndex,
     uint VendorDisplays = InvestmentTags.VendorDisplayIndex, uint PlugSets = 0x81319349, uint Icons = 0x81A291C2,
     uint Perks = 0x81613D28, uint StatGroups = 0x81613D08, uint Collectibles = 0x81327CDE,
     uint CollectibleDisplays = 0x81327D67, uint PresentationNodes = 0x8131933F, uint PresentationNodeDisplays = 0x81613CF8,
-    uint ItemArt = InvestmentItemArt.TableTag);
+    uint ItemArt = InvestmentItemArt.TableTag, uint Root = 0, uint ObjectiveDisplays = 0);
 public sealed record InvestmentItem(int Index, uint Hash, uint Tag, uint DisplayTag, string Name,
     string TypeName, string Description, byte Bucket, byte Tier, int MaximumStack, bool Instanced)
 {
@@ -35,6 +36,7 @@ public sealed record InvestmentItemDetail(InvestmentItem Item, IReadOnlyList<Inv
     IReadOnlyList<AssetProperty> Fields, IReadOnlyList<string> Diagnostics)
 {
     public IReadOnlyDictionary<byte, InvestmentStatCurve> DisplayCurves { get; init; } = new Dictionary<byte, InvestmentStatCurve>();
+    public InvestmentPursuit? Pursuit { get; init; }
 }
 public sealed record InvestmentCost(ushort ItemIndex, string Name, uint Quantity, AssetProperty ItemField,
     AssetProperty QuantityField, bool Conditional);
@@ -51,6 +53,8 @@ public sealed record InvestmentVendorDetail(InvestmentVendor Vendor, IReadOnlyLi
 public sealed partial class InvestmentCatalog
 {
     public const uint ItemIndexTag = InvestmentTags.ItemIndex, DisplayIndexTag = InvestmentTags.ItemDisplayIndex;
+    /** All ones marks an absent 16-bit item, pool, objective, flag or value reference. */
+    public const ushort Absent = ushort.MaxValue;
     public const uint VendorIndexTag = InvestmentTags.VendorIndex, VendorDisplayIndexTag = InvestmentTags.VendorDisplayIndex;
     public const uint ItemClass = InvestmentTags.ItemClass, DisplayClass = InvestmentTags.ItemDisplayClass,
         VendorClass = InvestmentTags.VendorClass;
@@ -58,9 +62,11 @@ public sealed partial class InvestmentCatalog
     private readonly LocalizedStrings strings;
     private readonly uint[] banks;
     private readonly Dictionary<uint, InvestmentItem> byTag;
+    private readonly Dictionary<uint, InvestmentItem> byHash;
     private readonly Dictionary<uint, InvestmentVendor> vendorsByTag;
     private readonly Dictionary<byte, string> statNames;
     private readonly InvestmentSources sources;
+    private readonly InvestmentItemLinks[] links;
     public IReadOnlyList<InvestmentItem> Items { get; }
     public IReadOnlyList<InvestmentVendor> Vendors { get; }
     public IReadOnlyList<string> Diagnostics { get; }
@@ -70,20 +76,26 @@ public sealed partial class InvestmentCatalog
 
     private InvestmentCatalog(PackageCatalog catalog, LocalizedStrings strings, uint[] banks,
         InvestmentItem[] items, InvestmentVendor[] vendors, Dictionary<byte, string> statNames, string[] diagnostics,
-        InvestmentSources sources, InvestmentPerkDefinition[] perks)
+        InvestmentSources sources, InvestmentPerkDefinition[] perks, InvestmentItemLinks[] links)
     {
         this.catalog = catalog; this.strings = strings; this.banks = banks;
-        this.sources = sources;
+        this.sources = sources; this.links = links;
         Items = items; Vendors = vendors; this.statNames = statNames; Diagnostics = diagnostics;
         StatDefinitions = statNames.Select(pair => new InvestmentStatDefinition(pair.Key, pair.Value))
             .OrderBy(row => row.Name, StringComparer.OrdinalIgnoreCase).ThenBy(row => row.Index).ToArray();
         PerkDefinitions = perks;
-        byTag = new(); vendorsByTag = new();
-        foreach (var item in items) { byTag.TryAdd(item.Tag, item); if (item.DisplayTag != 0) byTag.TryAdd(item.DisplayTag, item); }
+        byTag = new(); byHash = new(); vendorsByTag = new();
+        foreach (var item in items)
+        {
+            byTag.TryAdd(item.Tag, item); byHash.TryAdd(item.Hash, item);
+            if (item.DisplayTag != 0) byTag.TryAdd(item.DisplayTag, item);
+        }
         foreach (var vendor in vendors) { vendorsByTag.TryAdd(vendor.Tag, vendor); if (vendor.DisplayTag != 0) vendorsByTag.TryAdd(vendor.DisplayTag, vendor); }
     }
 
     public InvestmentItem? FindItem(uint tag) => byTag.GetValueOrDefault(tag);
+    /** The item with this definition hash. When index rows share a hash, the first one wins. */
+    public InvestmentItem? FindByHash(uint hash) => byHash.GetValueOrDefault(hash);
     public InvestmentVendor? FindVendor(uint tag) => vendorsByTag.GetValueOrDefault(tag);
     public string ItemName(int index) => index == ushort.MaxValue ? "None" : index >= 0 && index < Items.Count
         ? Items[index].Name : $"Item {index}";
@@ -127,20 +139,23 @@ public sealed partial class InvestmentCatalog
         var displays = ReadIndex<C80805cdb, ItemStringsIndexRow>(catalog.Read(sources.Displays),
             static row => (row.ItemHash, row.ItemDisplay));
         var items = new InvestmentItem[definitions.Length];
+        var links = new InvestmentItemLinks[definitions.Length];
         for (int i = 0; i < definitions.Length; i++)
         {
             token.ThrowIfCancellationRequested();
             var definition = definitions[i];
             uint displayTag = i < displays.Length && displays[i].Hash == definition.Hash ? displays[i].Tag : 0;
             string name = "", type = "", description = ""; byte bucket = 255, tier = 255; int maximum = 0; bool instanced = false;
+            links[i] = InvestmentItemLinks.None;
             try
             {
                 RequireClass(catalog, definition.Tag, ItemClass);
                 byte[] data = catalog.Read(definition.Tag);
+                links[i] = InvestmentItemLinks.Read(data);
                 if (!TagView.FitsThrough<ItemDefinition>(data, 0, "InventoryItemBlock.Instanced"))
                     throw new InvalidDataException("Item fixed fields are truncated.");
                 maximum = TagView.At<int>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.MaximumStack"));
-                bucket = TagView.At<byte>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.InventoryBucket"));
+                bucket = ReadBucket(data);
                 tier = TagView.At<byte>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.Tier"));
                 instanced = TagView.At<byte>(data, TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.Instanced")) != 0;
                 if (displayTag != 0)
@@ -213,7 +228,7 @@ public sealed partial class InvestmentCatalog
                 if (perks.Length > ushort.MaxValue) throw new InvalidDataException("Sandbox perk index exceeds its native range.");
             }
             catch (Exception error) when (Recoverable(error)) { perks = []; diagnostics.Add("Sandbox perks: " + error.Message); }
-        return new(catalog, strings, banks, items, vendors, stats, diagnostics.ToArray(), sources, perks);
+        return new(catalog, strings, banks, items, vendors, stats, diagnostics.ToArray(), sources, perks, links);
     }
 
     /**
@@ -232,11 +247,24 @@ public sealed partial class InvestmentCatalog
         return result;
     }
 
-    private static void RequireClass(PackageCatalog catalog, uint tag, uint expected)
+    /** The item's bucket byte, or NoBucket when its fixed fields are truncated. */
+    internal static byte ReadBucket(ReadOnlySpan<byte> item) => TagView.FitsThrough<ItemDefinition>(item, 0,
+        "InventoryItemBlock.Instanced")
+        ? TagView.At<byte>(item,
+            TagView.FieldOffset<ItemDefinition>("InventoryItemBlock.InventoryBucket")) : InvestmentItemKinds.NoBucket;
+
+    internal static void RequireClass(PackageCatalog catalog, uint tag, uint expected)
     {
         if (!catalog.TryGetEntry(tag, out var entry) || entry.Type is not (8 or 16) || entry.Reference != expected)
             throw new InvalidDataException("Investment reference has an unexpected class.");
     }
-    private static bool Recoverable(Exception error) => error is InvalidDataException or NotSupportedException
+    internal static bool Recoverable(Exception error) => error is InvalidDataException or NotSupportedException
         or ArgumentException or IndexOutOfRangeException or OverflowException or KeyNotFoundException;
+
+    /** Reads one section of a table. A recoverable failure adds "section: message" to the diagnostics and gives the fallback. */
+    internal static T ReadSection<T>(List<string> diagnostics, string section, T fallback, Func<T> read)
+    {
+        try { return read(); }
+        catch (Exception error) when (Recoverable(error)) { diagnostics.Add($"{section}: {error.Message}"); return fallback; }
+    }
 }

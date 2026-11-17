@@ -4,12 +4,23 @@ using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
-/** A node as the canvas draws it. Code, when present, shows inside the node; otherwise Rows do, such as typed parameters. */
+/**
+ * A node as the canvas draws it. Code, when present, shows inside the node; otherwise Rows do, such as typed parameters.
+ * Icon is an ImGui texture drawn in the header, and zero draws an empty frame while it loads. Chips follow the rows as one
+ * row of icons.
+ */
 internal sealed record CanvasNode(string Key, string Title, string Subtitle, string? Code = null,
-    Vector4? Tint = null, float? Width = null, IReadOnlyList<string>? Rows = null);
+    Vector4? Tint = null, float? Width = null, IReadOnlyList<string>? Rows = null, nint? Icon = null,
+    IReadOnlyList<CanvasChip>? Chips = null);
 
-/** A link from one node's output to another node's input. Only an editable link can be cut or moved. */
-internal sealed record CanvasEdge(string Source, string Target, bool Editable, string Label = "");
+/**
+ * One icon in a node's chip row. Icon is an ImGui texture, and zero draws an empty frame while it loads. Count shows in the
+ * corner, and Pool adds the pool glyph for an item that opens a reward pool.
+ */
+internal sealed record CanvasChip(nint Icon, string Count, bool Pool);
+
+/** A link from one node's output to another node's input. Only an editable link can be cut or moved. Tip replaces Label on hover. */
+internal sealed record CanvasEdge(string Source, string Target, bool Editable, string Label = "", string Tip = "");
 
 /** Edits the canvas asks its owner to make; a null action is not offered. */
 internal sealed class CanvasActions
@@ -28,6 +39,12 @@ internal sealed class NodeCanvas
     // Layout sizes in canvas units at zoom 1.
     private const float NodeWidth = 230, CodeWidth = 330, Header = 48, CodeLine = 15, GapX = 90, GapY = 30;
     private const int MaxCodeLines = 8, ChainRow = 4;
+    // Header text inset, and the margin around a header icon.
+    private const float TextLeft = 14, IconMargin = 8;
+    // A chip's side and the gap after it, the glyph's share of a chip, and the count's text scale.
+    private const float ChipSide = 30, ChipGap = 4, ChipGlyph = .4f, ChipCountScale = .62f;
+    // A chip's border is the node's own border colour, and its count sits on the canvas at 80% opacity, readable over an icon.
+    private static readonly Vector4 ChipBorder = new(.28f, .31f, .36f, 1), ChipCountBacking = StudioTheme.Canvas with { W = .8f };
     // Code previews kept between frames; cleared when full.
     private const int MaxPreviews = 1024;
     /** Hovered links and ports. */
@@ -57,6 +74,10 @@ internal sealed class NodeCanvas
     /** The smallest zoom a fit picks; manual zoom can still go lower. */
     public float MinimumFitZoom { get; set; } = .6f;
     public CanvasEdge? SelectedEdge { get; private set; }
+    /** The key of the node under the pointer this frame, or empty. Owners draw its tooltip. */
+    public string HoveredNode { get; private set; } = "";
+    /** The index of the hovered node's chip under the pointer, or -1 for none, which includes the "+n" place. */
+    public int HoveredChip { get; private set; } = -1;
     /** Set when a node was dragged; the owner clears it after saving the layout. */
     public bool Moved { get; set; }
 
@@ -109,6 +130,8 @@ internal sealed class NodeCanvas
         var byKey = nodes.ToDictionary(node => node.Key, StringComparer.Ordinal);
         float portRadius = MathF.Max(4, 7 * zoom);
         var hover = hovered ? HitTest(nodes, edges, byKey, portRadius) : default;
+        HoveredNode = hover.Node?.Key ?? "";
+        HoveredChip = hover.Node is { } under ? ChipAt(under, ImGui.GetIO().MousePos) : -1;
         HandleInput(hovered, hover, edges, editable, ref selected, actions);
 
         var draw = ImGui.GetWindowDrawList();
@@ -121,7 +144,8 @@ internal sealed class NodeCanvas
         if (linkFrom.Length != 0 && byKey.TryGetValue(linkFrom, out var from))
             DrawCurve(draw, Out(from), io.MousePos, ImGui.GetColorU32(StudioTheme.Accent), 2 * MathF.Max(.5f, zoom));
         draw.PopClipRect();
-        if (hover.Edge is { Label.Length: > 0 } labelled) ImGui.SetTooltip(labelled.Label);
+        if (hover.Edge is { } edge
+            && (edge.Tip.Length != 0 ? edge.Tip : edge.Label) is { Length: > 0 } tip) ImGui.SetTooltip(tip);
         DrawMenus(editable, actions, edges, nodes);
     }
 
@@ -320,13 +344,23 @@ internal sealed class NodeCanvas
         draw.AddRectFilled(min, max, ImGui.GetColorU32(selected ? new Vector4(.15f, .17f, .21f, 1) : StudioTheme.Panel), rounding);
         var tint = node.Tint ?? new Vector4(.2f, .24f, .3f, 1);
         draw.AddRectFilled(min, new(max.X, min.Y + Header * zoom), ImGui.GetColorU32(tint with { W = .55f }), rounding,
-            node.Code is null && node.Rows is not { Count: > 0 } ? ImDrawFlags.RoundCornersAll : ImDrawFlags.RoundCornersTop);
+            node.Code is null && Body(node) == 0 ? ImDrawFlags.RoundCornersAll : ImDrawFlags.RoundCornersTop);
         draw.AddRect(min, max, ImGui.GetColorU32(selected ? StudioTheme.Accent : hovered ? new Vector4(.5f, .55f, .62f, 1)
             : new Vector4(.28f, .31f, .36f, 1)), rounding, ImDrawFlags.None, selected ? 2 : 1);
         draw.PushClipRect(min + new Vector2(6, 0) * zoom, max - new Vector2(6, 0) * zoom, true);
         var font = ImGui.GetFont(); float fontSize = ImGui.GetFontSize();
-        draw.AddText(font, fontSize * zoom, min + new Vector2(14, 7) * zoom, ImGui.GetColorU32(ImGuiCol.Text), node.Title);
-        draw.AddText(font, fontSize * .8f * zoom, min + new Vector2(14, 27) * zoom, ImGui.GetColorU32(ImGuiCol.TextDisabled), node.Subtitle);
+        float textX = TextLeft;
+        if (node.Icon is { } icon)
+        {
+            // The icon fills the header's height inside its margin, and the title and subtitle start right of it.
+            var iconMin = min + new Vector2(IconMargin) * zoom; var iconMax = iconMin + new Vector2(Header - 2 * IconMargin) * zoom;
+            if (icon != 0) draw.AddImage(icon, iconMin, iconMax);
+            else draw.AddRectFilled(iconMin, iconMax, ImGui.GetColorU32(ImGuiCol.FrameBg), 2 * zoom);
+            textX = TextLeft + Header - IconMargin;
+        }
+        draw.AddText(font, fontSize * zoom, min + new Vector2(textX, 7) * zoom, ImGui.GetColorU32(ImGuiCol.Text), node.Title);
+        draw.AddText(font, fontSize * .8f * zoom, min + new Vector2(textX, 27) * zoom,
+            ImGui.GetColorU32(ImGuiCol.TextDisabled), node.Subtitle);
         if (node.Code is { } code)
         {
             var codeFont = CodeFont ?? font;
@@ -342,14 +376,15 @@ internal sealed class NodeCanvas
                 }
             }
         }
-        else if (node.Rows is { Count: > 0 } rows)
+        else
         {
             float line = CodeLine * zoom, y = min.Y + (Header + 5) * zoom;
-            foreach (string text in Capped(rows))
+            foreach (string text in Capped(node.Rows ?? []))
             {
                 draw.AddText(font, fontSize * .82f * zoom, new(min.X + 12 * zoom, y), ImGui.GetColorU32(new Vector4(.72f, .78f, .86f, 1)), text);
                 y += line;
             }
+            if (node.Chips is { Count: > 0 } chips) { DrawChips(draw, node, chips, min); y += (ChipSide + ChipGap) * zoom; }
         }
         draw.PopClipRect();
         // Input: a hollow ring on the left, filled when a link arrives. Output: a solid arrow on the right.
@@ -362,6 +397,70 @@ internal sealed class NodeCanvas
         uint outputColor = ImGui.GetColorU32(outHovered ? Highlight : StudioTheme.Accent);
         draw.AddTriangleFilled(output + new Vector2(-portRadius * .7f, -portRadius), output + new Vector2(-portRadius * .7f, portRadius),
             output + new Vector2(portRadius * 1.1f, 0), outputColor);
+    }
+
+    /** Draws the chips that fit across the node. When some do not fit, the last place counts the rest as "+n". */
+    private void DrawChips(ImDrawListPtr draw, CanvasNode node, IReadOnlyList<CanvasChip> chips, Vector2 min)
+    {
+        int shown = ChipsShown(node, chips.Count);
+        float side = ChipSide * zoom, rounding = 2 * zoom, countSize = ImGui.GetFontSize() * ChipCountScale * zoom;
+        uint frame = ImGui.GetColorU32(ImGuiCol.FrameBg), border = ImGui.GetColorU32(ChipBorder);
+        uint backing = ImGui.GetColorU32(ChipCountBacking), text = ImGui.GetColorU32(ImGuiCol.Text);
+        for (int i = 0; i < shown; i++)
+        {
+            var chip = chips[i];
+            var (a, b) = ChipRect(min, i, node);
+            if (chip.Icon != 0) draw.AddImage(chip.Icon, a, b);
+            else draw.AddRectFilled(a, b, frame, rounding);
+            draw.AddRect(a, b, border, rounding);
+            if (chip.Pool)
+            {
+                float glyph = side * ChipGlyph;
+                draw.AddRectFilled(a, a + new Vector2(glyph + 2 * zoom), backing, rounding);
+                ImGuiIcons.Draw(draw, StudioIcon.Tree, a + new Vector2(zoom), glyph, text);
+            }
+            if (chip.Count.Length != 0)
+            {
+                var extent = ImGui.GetFont().CalcTextSizeA(countSize, float.MaxValue, 0, chip.Count);
+                var at = b - extent - new Vector2(zoom);
+                draw.AddRectFilled(at - new Vector2(zoom), b, backing, rounding);
+                draw.AddText(ImGui.GetFont(), countSize, at, text, chip.Count);
+            }
+        }
+        if (shown == chips.Count) return;
+        var (moreMin, moreMax) = ChipRect(min, shown, node);
+        draw.AddRectFilled(moreMin, moreMax, frame, rounding);
+        string more = $"+{chips.Count - shown}";
+        float moreSize = ImGui.GetFontSize() * .82f * zoom;
+        var moreExtent = ImGui.GetFont().CalcTextSizeA(moreSize, float.MaxValue, 0, more);
+        draw.AddText(ImGui.GetFont(), moreSize, (moreMin + moreMax - moreExtent) / 2,
+            ImGui.GetColorU32(ImGuiCol.TextDisabled), more);
+    }
+
+    /** Chips drawn with an icon: as many as fit inside the 12-unit margins, or one fewer when "+n" takes the last place. */
+    private static int ChipsShown(CanvasNode node, int count)
+    {
+        int fit = Math.Max(1, (int)((Size(node).X - 24 + ChipGap) / (ChipSide + ChipGap)));
+        return count > fit ? fit - 1 : count;
+    }
+
+    /** The screen rectangle of a node's i-th chip place, under its rows. */
+    private (Vector2 Min, Vector2 Max) ChipRect(Vector2 nodeMin, int i, CanvasNode node)
+    {
+        var a = nodeMin + new Vector2(12 + i * (ChipSide + ChipGap), Header + 5 + RowLines(node) * CodeLine) * zoom;
+        return (a, a + new Vector2(ChipSide * zoom));
+    }
+
+    /** The chip under the point, or -1 for none or the "+n" place. */
+    private int ChipAt(CanvasNode node, Vector2 point)
+    {
+        if (node.Code is not null || node.Chips is not { Count: > 0 } chips) return -1;
+        for (int i = 0; i < ChipsShown(node, chips.Count); i++)
+        {
+            var (a, b) = ChipRect(Min(node), i, node);
+            if (point.X >= a.X && point.X <= b.X && point.Y >= a.Y && point.Y <= b.Y) return i;
+        }
+        return -1;
     }
 
     private static void DrawCurve(ImDrawListPtr draw, Vector2 a, Vector2 b, uint color, float thickness)
@@ -429,10 +528,16 @@ internal sealed class NodeCanvas
             yield return i == MaxCodeLines - 1 && lines.Count > MaxCodeLines ? "..." : lines[i];
     }
 
+    /** Rows the node draws, at most MaxCodeLines. */
+    private static int RowLines(CanvasNode node) => Math.Min(node.Rows?.Count ?? 0, MaxCodeLines);
+
+    /** Height under the header of a node without code: its rows and chip row. */
+    private static float Body(CanvasNode node) => RowLines(node) * CodeLine + (node.Chips is { Count: > 0 } ? ChipSide + ChipGap : 0);
+
     private static Vector2 Size(CanvasNode node)
     {
-        if (node.Code is null && node.Rows is { Count: > 0 } rows)
-            return new(Math.Max(120, node.Width ?? NodeWidth), Header + 10 + Math.Min(rows.Count, MaxCodeLines) * CodeLine);
+        if (node.Code is null
+            && Body(node) is > 0 and var body) return new(Math.Max(120, node.Width ?? NodeWidth), Header + 10 + body);
         if (node.Code is null) return new(Math.Max(120, node.Width ?? NodeWidth), Header);
         int lines = Math.Min(node.Code.Count(character => character == '\n') + 1, MaxCodeLines);
         return new(Math.Max(120, node.Width ?? CodeWidth), Header + 10 + lines * CodeLine);

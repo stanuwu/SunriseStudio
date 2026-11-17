@@ -4,7 +4,10 @@ using SunriseStudio.Viewport;
 
 namespace SunriseStudio.Editor;
 
-/** One browser category with its own viewer; Name is the category part of a browser kind. */
+/**
+ * One browser category with its own viewer; Name is the category part of a browser kind. Views counts the leading
+ * Sections that are alternative primary views, and an asset has no view of the category only when none of them opens.
+ */
 public sealed record StudioCategory(
     string Name,
     string Label,
@@ -13,7 +16,8 @@ public sealed record StudioCategory(
     string Tooltip,
     string[] Sections,
     bool ModelPane = false,
-    Func<uint, AssetOpenContext?>? OpenContext = null);
+    Func<uint, AssetOpenContext?>? OpenContext = null,
+    int Views = 1);
 
 /** Kind is "Name / Type" or "Name"; Tags join the search text; Tier >= 0 colours the row. */
 public readonly record struct StudioCategoryMatch(string Kind, string Tags = "", int Tier = -1);

@@ -76,6 +76,8 @@ try
     if (args is ["--creation-history"]) { ImportHistoryChecks.Run(root); CreationSafetyChecks.Run(root); return 0; }
     if (args is ["--creation-history", var importGame]) { ImportHistoryChecks.Owned(root, importGame); return 0; }
     if (args is ["--browser-category"]) { BrowserCategoryChecks.Run(root); return 0; }
+    if (args is ["--browser-grid"]) { BrowserGridChecks.Run(); return 0; }
+    if (args is ["--icon-stream"]) { IconStreamChecks.Run(); return 0; }
     if (args is ["--category-shell"]) { CategoryShellChecks.Run(root); return 0; }
     if (args is ["--part-navigation", var partGame]) { PartNavigationChecks.Run(partGame, root); return 0; }
     if (args is ["--collision-parts", var partsGame]) { CollisionPartWorkflowChecks.Run(partsGame, root); return 0; }
@@ -98,6 +100,8 @@ try
         return 0;
     }
     CanvasChecks.Run(root);
+    BrowserGridChecks.Run();
+    IconStreamChecks.Run();
     LayoutChecks.Run(root);
     IsolatedObjectWorkflowChecks.Run(root);
     NoticesUiChecks.Run(root);

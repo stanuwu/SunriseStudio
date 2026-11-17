@@ -9,7 +9,17 @@ namespace SunriseStudio.Formats;
 public sealed partial class InvestmentCatalog
 {
     /** Detail rows keep exact byte offsets so edits never resize native arrays. */
-    public InvestmentItemDetail ReadItem(uint tag, ReadOnlyMemory<byte> bytes)
+    public InvestmentItemDetail ReadItem(uint tag, ReadOnlyMemory<byte> bytes) =>
+        ReadItem(tag, bytes, withPursuit: false, default);
+
+    /**
+     * The item's detail with its pursuit: the objective block, quest chain, reward previews and lifetime. Reading a pursuit
+     * loads the root-slot tables once per catalog, on the caller's worker.
+     */
+    public InvestmentItemDetail ReadItemWithPursuit(uint tag, ReadOnlyMemory<byte> bytes, CancellationToken token = default) =>
+        ReadItem(tag, bytes, withPursuit: true, token);
+
+    private InvestmentItemDetail ReadItem(uint tag, ReadOnlyMemory<byte> bytes, bool withPursuit, CancellationToken token)
     {
         var summary = FindItem(tag) ?? throw new InvalidDataException("Item is absent from the investment index.");
         if (tag != summary.Tag) throw new InvalidDataException("Open the gameplay definition to edit this item.");
@@ -101,8 +111,10 @@ public sealed partial class InvestmentCatalog
                     allowed.OrderBy(index => ItemName(index), StringComparer.OrdinalIgnoreCase).ToArray()));
             }
         }, "Sockets");
+        InvestmentPursuit? pursuit = null;
+        if (withPursuit) Read(() => pursuit = ReadPursuit(item, bytes, token), "Objectives");
         var curves = ReadDisplayCurves(item, errors);
-        return new(item, stats, sockets, perks, fields, errors) { DisplayCurves = curves };
+        return new(item, stats, sockets, perks, fields, errors) { DisplayCurves = curves, Pursuit = pursuit };
     }
 
     /** Conditional cost expressions remain visible and are never labelled a final price. */

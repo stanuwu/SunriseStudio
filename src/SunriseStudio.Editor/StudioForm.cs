@@ -37,7 +37,10 @@ public sealed partial class StudioForm : Form
     private string? focusDocumentPage;
     private readonly MissionGraphPage missionGraph = new();
     private readonly LivePage livePage = new();
+    private readonly LiveTab liveTab;
     private bool missionGraphActive, focusMissionGraph, focusAssets, focusLive, initialMissionScript;
+    // True when the workbench last drew Live rather than Assets, so a browser choice brings Assets forward.
+    private bool liveInFront;
     private int documentRevision = -1, assetRevision = -1, smokeFrames;
     private int nativeRevision;
     private int sceneRevision = -1;
@@ -76,11 +79,13 @@ public sealed partial class StudioForm : Form
     }
 
     public void ShowMissionEditor() => focusMissionPage = true;
-    public void ShowAssetPage(string page)
+    /** Shows a page of the open or opening document. A given row is chosen when the page draws and is recorded as a new place. */
+    public void ShowAssetPage(string page, string? row = null)
     {
         if (page.Equals("Mission Graph", StringComparison.OrdinalIgnoreCase)) { focusMissionGraph = true; return; }
         if (page.Equals("Live", StringComparison.OrdinalIgnoreCase)) { focusLive = true; return; }
         focusAssets = true; focusDocumentPage = page; focusAssetPage = true; inspectAsset = true;
+        pendingRow = row is null ? null : (page, row);
     }
 
     public StudioForm(StudioOptions options)
@@ -94,8 +99,8 @@ public sealed partial class StudioForm : Form
         ApplyCacheSettings();
         location = options.Game ?? settings.SunrisePath;
         keySource = options.KeySource ?? settings.KeySource;
-        if (StartupCategory() is { } named) category = named.Name;
-        else if (options.Category is { } kind) (category, assetType) = SplitFilter(kind);
+        if (StartupCategory() is { } named) StartOnCategory(named.Name);
+        else if (options.Category is { } kind) { (category, assetType) = SplitFilter(kind); StartOnCategory(category); }
         Text = $"Sunrise Studio {StudioVersion.Text}";
         chrome = new(this);
         Icon = studioIcon = StudioBrand.CreateIcon();
@@ -105,6 +110,7 @@ public sealed partial class StudioForm : Form
         KeyPreview = true;
         SetStyle(ControlStyles.Opaque | ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint, true);
         if (options.Smoke) ShowInTaskbar = false;
+        liveTab = new LiveTab(workspace.LiveInvestment, [livePage, new LiveInvestmentSection(workspace)]);
         timer.Tick += (_, _) => TickFrame();
         workspace.BeforeAssetMutation += () =>
         {
@@ -208,14 +214,19 @@ public sealed partial class StudioForm : Form
         catch (Exception error) { Failure = error.ToString(); Close(); }
     }
 
+    /** Scene frames per second while a game is attached, which shares this GPU: focused, then in the background. */
+    private const double AttachedSceneRate = 30, AttachedBackgroundSceneRate = 10;
+
     /** Worker results are adopted before the frame; native dialogs cannot reenter rendering. */
     private void TickFrame()
     {
         if (drawing || nativeDialog || closed || renderer is null || gui is null || viewport is null
             || WindowState == FormWindowState.Minimized) return;
-        // An attached game shares this GPU; Studio draws at most 30 frames a second, and 10 in the background.
-        if (livePage.IsAttached && !options.Smoke
-            && clock.Elapsed.TotalSeconds - lastFrame < (ContainsFocus ? 1 / 30.0 : 1 / 10.0)) return;
+        // Only the scene views are held back; the rest of the window keeps its frame rate.
+        double sceneInterval = liveTab.Attached && !options.Smoke
+            ? 1 / (ContainsFocus ? AttachedSceneRate : AttachedBackgroundSceneRate) : 0;
+        viewport.RenderInterval = sceneInterval;
+        if (assetViewport is not null) assetViewport.RenderInterval = sceneInterval;
         drawing = true;
         long profileStart = Stopwatch.GetTimestamp();
         long profileBytes = options.ProfileFrames is null ? 0 : GC.GetAllocatedBytesForCurrentThread();
@@ -229,7 +240,7 @@ public sealed partial class StudioForm : Form
             AdoptDocument();
             AdoptPlacementUpdates();
             PollCollisionLayer();
-            livePage.Poll(workspace, viewport);
+            liveTab.Poll(LiveContext());
             PollStartup();
             RefreshWorldLabels();
             PrepareMissionRows();
@@ -253,14 +264,16 @@ public sealed partial class StudioForm : Form
             viewport.Animation?.Tick(0);
             assetViewport?.Animation?.Tick(0);
             UpdateLiveInspection();
-            foreach (var page in pages.Pages.OfType<InvestmentPage>()) page.PrepareDetail(workspace, renderer);
+            foreach (var page in pages.Pages.OfType<IFramePreparedPage>()) page.PrepareFrame(workspace, renderer);
+            icons.Prepare(workspace.LoadedInvestment, renderer);
+            liveTab.PrepareFrame(workspace, renderer);
             EditorReady = !setup && !workspace.IsBlocking && !browserPreparing && workspace.Catalog is not null
                 && viewport.Animation?.IsLoading != true && assetViewport?.Animation?.IsLoading != true;
             double now = clock.Elapsed.TotalSeconds;
             ApplyPendingDpi();
             renderer.Resize(ClientSize.Width, ClientSize.Height);
             guiFrameActive = true;
-            shownPage = null;
+            shownPage = null; shownRowPage = null;
             float frameDelta = (float)Math.Clamp(now - lastFrame, 0.001, 0.1);
             gui.NewFrame(frameDelta);
             ShortcutInput.BeginFrame(gui.IsInputActive && EditorReady && !workspace.IsBusy);
@@ -642,20 +655,26 @@ public sealed partial class StudioForm : Form
             if (assets)
             {
                 focusAssets = false;
+                liveInFront = false;
                 DrawAssetDocument();
                 ImGui.EndTabItem();
             }
             if (BeginEditorTab("Live", focusLive))
             {
                 focusLive = false;
-                shownPage = "live";
-                livePage.Draw(workspace, viewport!, DrawSceneWithTree);
+                liveInFront = true;
+                shownPage = liveTab.Draw(LiveContext());
                 ImGui.EndTabItem();
             }
             ImGui.EndTabBar();
         }
         ImGui.End();
     }
+
+    /** What Live's sections may use of the window this frame. */
+    internal LiveSectionContext LiveContext() => new(workspace, viewport!, DrawSceneWithTree, scale,
+        settings.BrowserGrid, SetBrowserGrid,
+        (tag, page, row) => { workspace.Open(tag); if (page is not null) ShowAssetPage(page, row); }, ShowAssetPage, icons);
 
     /** The open world, the open asset with its pages, or the start screen. */
     private void DrawAssetDocument()
@@ -691,9 +710,13 @@ public sealed partial class StudioForm : Form
             }
             DrawDocumentPages(document, "asset:", new(workspace, viewport!, property =>
                 { selectedProperty = property; propertyValue = property.Value; },
-                mesh => viewport!.SetSelection(mesh), selectedMesh, gui!.MonospaceFont, ExportFullAsset));
+                mesh => viewport!.SetSelection(mesh), selectedMesh, gui!.MonospaceFont, ExportFullAsset,
+                    ShowAssetPage, LiveLink(), icons));
         }
     }
+
+    /** Open in Live for asset pages: brings Live forward on the given investment subtab with the row chosen. */
+    internal StudioLiveLink LiveLink() => new(liveTab.Attached, (view, row) => { liveTab.Show("investment", view, row); focusLive = true; });
 
     // Last tab a category bar drew; the model pane hides while that tab draws its own view.
     private (string Bar, string Page) documentTab = ("", "");
@@ -723,7 +746,7 @@ public sealed partial class StudioForm : Form
             StudioUi.Tip(document.PreviewError);
         }
         var tabs = StudioCategories.Tabs(category, pages.Pages, document, modelView);
-        if (category.Sections.Length != 0 && !tabs.Any(page => page.Id == category.Sections[0]))
+        if (category.Sections.Length != 0 && !tabs.Any(page => category.Sections.Take(category.Views).Contains(page.Id)))
             ImGui.TextDisabled($"No {category.Label} view for this type");
         // A bar keeps its selected tab when the next document has that tab too.
         bool ownView = documentTab.Bar == bar && StudioCategories.OwnViewPages.Contains(documentTab.Page)
@@ -761,6 +784,12 @@ public sealed partial class StudioForm : Form
             {
                 shownPage = shownPrefix + page.Id;
                 drawn = page.Id;
+                shownRowPage = page as IStudioRowPage;
+                if (pendingRow is { } wanted && wanted.Page == page.Id)
+                {
+                    shownRowPage?.ShowRow(wanted.Row);
+                    pendingRow = null; linkedRow = true;
+                }
                 page.Draw(context);
                 ImGui.EndTabItem();
             }
@@ -778,11 +807,31 @@ public sealed partial class StudioForm : Form
         return open;
     }
 
-    /** Background progress first, then the notice, then the error or status text. */
+    /** The status text and, while an installation is open, the game's investment link on the right, which opens Live. */
     private void DrawStatus(Vector2 position, Vector2 size)
     {
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(12, 5) * scale);
         BeginPanel("Status", position, size, ImGuiWindowFlags.NoScrollbar);
+        var line = ImGui.GetCursorPos();
+        bool link = workspace.Catalog is not null;
+        float linkStart = line.X + ImGui.GetContentRegionAvail().X - (link ? liveTab.StatusWidth() : 0);
+        var corner = ImGui.GetWindowPos();
+        float end = link ? linkStart - 24 * scale : size.X;
+        // A long status is clipped before the link, so it never runs under it.
+        ImGui.PushClipRect(corner, corner + new Vector2(end, size.Y), true);
+        DrawStatusText(end - line.X);
+        ImGui.PopClipRect();
+        if (link)
+        {
+            ImGui.SetCursorPos(line with { X = linkStart });
+            if (liveTab.DrawStatus()) focusLive = true;
+        }
+        ImGui.End(); ImGui.PopStyleVar();
+    }
+
+    /** Background progress first, then the notice, then the error or status text, in a line this wide. */
+    private void DrawStatusText(float width)
+    {
         if (workspace.IsBusy && !workspace.IsBlocking)
         {
             // A background command shows its stage and a moving bar in place of the status text.
@@ -790,22 +839,29 @@ public sealed partial class StudioForm : Form
             ImGui.TextColored(StudioTheme.Accent, $"{workspace.Status}: {progress.Stage}");
             ImGui.SameLine();
             DrawProgressBar(progress, 160 * scale, ImGui.GetTextLineHeight() * .5f);
-            ImGui.End(); ImGui.PopStyleVar();
             return;
         }
         if (workspace.Notice is { } notice)
         {
-            ImGui.TextColored(notice.Failed ? new Vector4(1, .45f, .35f, 1) : StudioTheme.Accent, notice.Text);
+            // A long notice is shortened, so its buttons stay in the line.
+            bool hasFolder = notice.Folder is { } shown && Directory.Exists(shown);
+            var style = ImGui.GetStyle();
+            float buttons = style.ItemSpacing.X + ImGui.CalcTextSize("Dismiss").X + 2 * style.FramePadding.X
+                + (hasFolder ? style.ItemSpacing.X + ImGui.GetTextLineHeight() : 0);
+            ImGui.TextColored(notice.Failed ? new Vector4(1, .45f, .35f, 1) : StudioTheme.Accent,
+                StudioUi.Fit(notice.Text, width - buttons));
             StudioUi.Tip(notice.Details ?? notice.Text);
-            if (notice.Folder is { } folder && Directory.Exists(folder))
+            if (hasFolder && notice.Folder is { } folder)
             {
                 ImGui.SameLine();
                 if (ImGuiIcons.Button("status-folder", StudioIcon.Folder, "Open folder", size: ImGui.GetTextLineHeight()))
                     Process.Start(new ProcessStartInfo(folder) { UseShellExecute = true });
             }
             ImGui.SameLine();
-            if (ImGui.SmallButton("Dismiss")) workspace.DismissNotice();
-            ImGui.End(); ImGui.PopStyleVar();
+            // Without vertical frame padding the button keeps the line's top and lines up with the folder button.
+            ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, style.FramePadding with { Y = 0 });
+            if (ImGui.Button("Dismiss")) workspace.DismissNotice();
+            ImGui.PopStyleVar();
             return;
         }
         string message = workspace.Error.Length != 0 ? workspace.Error : workspace.Status;
@@ -814,7 +870,6 @@ public sealed partial class StudioForm : Form
         ImGui.TextColored(workspace.Error.Length != 0 ? new Vector4(1, .45f, .35f, 1)
             : StudioTheme.Muted, message);
         StudioUi.Tip(message);
-        ImGui.End(); ImGui.PopStyleVar();
     }
 
     /** Closing a tool cannot silently discard an unsaved Lua draft. */
@@ -836,7 +891,8 @@ public sealed partial class StudioForm : Form
         RememberPopouts();
         foreach (var popout in popouts) popout.Dispose();
         popouts.Clear();
-        livePage.Dispose();
+        liveTab.Dispose();
+        icons.Dispose();
         foreach (var page in pages.Pages.OfType<IDisposable>()) page.Dispose();
         assetViewport?.Dispose(); viewport?.Dispose(); workspace.Dispose();
         loadingLogo?.Dispose(); toolbarLogo?.Dispose(); gui?.Dispose(); renderer?.Dispose(); studioIcon.Dispose();
