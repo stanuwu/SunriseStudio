@@ -26,10 +26,15 @@ public static class InvestmentItemKinds
         Artifacts, Mods, Currencies, Engrams, Consumables, Bounties, Quests, Other
     ];
 
+    /** The inventory bucket of shader items. */
+    public const byte ShaderBucket = 14;
+    /** Assumed: tier 4 is Legendary. */
+    public const byte LegendaryTier = 4;
+
     // Buckets with one fixed category, by inventory bucket id.
     private static readonly Dictionary<byte, string> BucketCategories = new()
     {
-        [8] = Ghosts, [9] = Vehicles, [10] = Ships, [12] = Emotes, [14] = Shaders, [16] = Subclasses,
+        [8] = Ghosts, [9] = Vehicles, [10] = Ships, [12] = Emotes, [ShaderBucket] = Shaders, [16] = Subclasses,
         [17] = ClanBanners, [27] = Emblems, [41] = Emotes, [47] = Finishers, [49] = Artifacts
     };
 
@@ -72,7 +77,7 @@ public static class InvestmentItemKinds
     /** Rarity name of a tier byte; 255 means unset. */
     public static string TierName(byte tier) => tier switch
     {
-        0 => "None", 1 => "Common", 2 => "Uncommon", 3 => "Rare", 4 => "Legendary", 5 => "Exotic", 255 => "Unset",
+        0 => "None", 1 => "Common", 2 => "Uncommon", 3 => "Rare", LegendaryTier => "Legendary", 5 => "Exotic", 255 => "Unset",
         _ => $"Tier {tier}"
     };
 }

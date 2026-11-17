@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using SunriseStudio.Packages;
 using SunriseStudio.Tags.Generated;
@@ -5,11 +6,82 @@ using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Scene;
 
-/** Art entities of armor and weapon items, read from the item's translation block. */
+/** Art entities of armor and weapon items, the shader an item starts with, and armor to show a shader on. */
 public static class GuardianArt
 {
-    private const ushort NoGearRow = 0xFFFF;
+    private const ushort NoGearRow = 0xFFFF, NoPlug = 0xFFFF;
+    // Assumed: a set's five pieces sit within four rows of each other in the item index.
+    private const int SetRun = 4, ClassItemSlot = 4;
     private static readonly ConditionalWeakTable<PackageCatalog, GuardianArtTables> SharedTables = new();
+    /** Shown with a shader preview, since ShowcaseArmor rests on assumptions. */
+    public const string ShowcaseNote = "Showcase armor: Legendary (assumed tier 4) pieces within four item index rows"
+        + " of a class item, assumed to be one set. May be inaccurate.";
+
+    /**
+     * Armor to show a shader on, helmet to class item, all Legendary with a model for this gender.
+     * Assumed: class items of one class share their display word; the set is the armor near the class item.
+     * @param placeholder The class's gear-preview class item.
+     * @return Every slot 0 when no complete set is found.
+     */
+    public static uint[] ShowcaseArmor(PackageCatalog catalog, byte classByte, bool female, uint placeholder)
+    {
+        var tables = TablesFor(catalog);
+        return tables.Showcase.GetOrAdd((classByte, female), _ =>
+        {
+            var empty = new uint[GuardianAppearance.ArmorSlots];
+            if (tables.IndexOf(placeholder) is not { } own || tables.DisplayWord(own) is not { } type) return empty;
+            bool Fits(int index, out int slot, out uint tag)
+            {
+                slot = -1; tag = 0;
+                if (tables.ItemTag(index) is not { } found) return false;
+                byte[] definition = catalog.Read(found);
+                slot = GuardianAppearance.ArmorSlot(definition);
+                if (slot < 0 || Tier(definition) != InvestmentItemKinds.LegendaryTier) return false;
+                try { if (ItemEntities(tables, definition, classByte, female).Count == 0) return false; }
+                catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or ArgumentException) { return false; }
+                tag = found;
+                return true;
+            }
+            for (int index = 0; index < tables.ItemCount; index++)
+            {
+                if (!Fits(index, out int slot, out uint classItem) || slot != ClassItemSlot
+                    || tables.DisplayWord(index) != type) continue;
+                var armor = new uint[GuardianAppearance.ArmorSlots];
+                armor[ClassItemSlot] = classItem;
+                for (int near = Math.Max(0, index - SetRun); near <= index + SetRun && near < tables.ItemCount; near++)
+                    if (near != index && Fits(near, out int piece, out uint tag) && piece != ClassItemSlot && armor[piece] == 0)
+                        armor[piece] = tag;
+                if (!armor.Contains(0u)) return armor;
+            }
+            return empty;
+        });
+    }
+
+    /** The first shader plug the item's sockets start with, as its item definition tag; 0 when none does. */
+    public static uint EquippedShader(PackageCatalog catalog, byte[] itemDefinition)
+    {
+        if (!TagView.FitsThrough<ItemDefinition>(itemDefinition, 0, nameof(ItemDefinition.SocketsItemBlock))) return 0;
+        if (TagView.TargetOffset(itemDefinition, in TagView.At<ItemDefinition>(itemDefinition).SocketsItemBlock) is not { } block)
+            return 0;
+        var tables = TablesFor(catalog);
+        ref readonly var sockets = ref TagView.At<SItemSocketBlock>(itemDefinition, block).Sockets;
+        foreach (ref readonly var socket in TagView.Rows(itemDefinition, in sockets, ItemOrdinarySocketEntry.Class))
+        {
+            ushort plug = socket.InitialPlugItem;
+            if (plug == NoPlug || tables.ItemTag(plug) is not { } tag) continue;
+            if (Bucket(catalog.Read(tag)) == InvestmentItemKinds.ShaderBucket) return tag;
+        }
+        return 0;
+    }
+
+    /** The definition's inventory bucket; -1 when the definition is too short for it. */
+    private static int Bucket(byte[] definition) => InventoryByte(definition, "InventoryItemBlock.InventoryBucket");
+
+    /** The definition's tier; -1 when the definition is too short for it. */
+    private static int Tier(byte[] definition) => InventoryByte(definition, "InventoryItemBlock.Tier");
+
+    private static int InventoryByte(byte[] definition, string member) => TagView.FitsThrough<ItemDefinition>(definition, 0, member)
+        ? TagRead.U8(definition, TagView.FieldOffset<ItemDefinition>(member)) : -1;
 
     /** Art entities of an armor or weapon item for one class byte and gender. Empty when the item has no art block. */
     public static IReadOnlyList<uint> ItemEntities(PackageCatalog catalog, byte[] itemDefinition, byte classByte, bool female) =>
@@ -80,19 +152,9 @@ public static class GuardianArt
      */
     internal static IReadOnlyList<uint> ItemEntities(GuardianArtTables tables, byte[] itemDefinition, byte classByte, bool female)
     {
-        int art = ArtBlock(itemDefinition);
-        if (art < 0) return [];
-        int arrangement = -1;
-        ref readonly var artRows = ref TagView.At<TagArray<ItemArtRow>>(itemDefinition,
-            art + TagView.FieldOffset<ItemTranslationBlock>(nameof(ItemTranslationBlock.ArtRows)));
-        foreach (ref readonly var artRow in TagView.Rows(itemDefinition, in artRows, ItemArtRow.Class))
-        {
-            sbyte rowClass = artRow.ClassValue;
-            if (rowClass != -1 && rowClass != classByte) continue;
-            arrangement = artRow.ArrangementRow;
-            break;
-        }
-        if (arrangement < 0) throw new InvalidDataException($"No art row matches class {classByte}.");
+        int arrangement = ItemArrangement(itemDefinition, classByte);
+        if (arrangement < 0)
+            return ArtBlock(itemDefinition) < 0 ? [] : throw new InvalidDataException($"No art row matches class {classByte}.");
         int row = tables.Arrangement(arrangement);
         var table = tables.Arrangements;
         var result = new List<uint>();
@@ -103,6 +165,18 @@ public static class GuardianArt
         foreach (var (_, hashes) in Groups(table, row))
             if (hashes.Length != 0 && !IsEmpty(hashes[0])) result.Add(tables.Entity(hashes[0]));
         return result.Distinct().ToArray();
+    }
+
+    /** The art arrangement of the item's first art row whose class byte is -1 or the class byte; -1 when none is. */
+    public static int ItemArrangement(byte[] itemDefinition, byte classByte)
+    {
+        int art = ArtBlock(itemDefinition);
+        if (art < 0) return -1;
+        ref readonly var artRows = ref TagView.At<TagArray<ItemArtRow>>(itemDefinition,
+            art + TagView.FieldOffset<ItemTranslationBlock>(nameof(ItemTranslationBlock.ArtRows)));
+        foreach (ref readonly var artRow in TagView.Rows(itemDefinition, in artRows, ItemArtRow.Class))
+            if (artRow.ClassValue == -1 || artRow.ClassValue == classByte) return artRow.ArrangementRow;
+        return -1;
     }
 
     /** Selector and art hashes of each group of one arrangement row, in row order; a selector may repeat. */
@@ -140,6 +214,7 @@ internal sealed class GuardianArtTables
     private readonly int[] arrangementRows;
     private readonly Lazy<Dictionary<uint, uint>> artMap, runtimeMap;
     private readonly Lazy<(byte[] Data, int[] Rows)> gear;
+    private readonly Lazy<uint[]> items, displays;
 
     public GuardianArtTables(PackageCatalog catalog)
     {
@@ -150,6 +225,16 @@ internal sealed class GuardianArtTables
         arrangementRows = TagView.RowOffsets(Arrangements, TagView.Rows(Arrangements, in arrangements, SArrangementRow.Class));
         artMap = new(() => PackageHashMap.Read(catalog, GuardianAppearance.ArtMap, SArtNameRow.Class));
         runtimeMap = new(() => PackageHashMap.Read(catalog, GuardianAppearance.RuntimeMap, SRuntimeNameRow.Class));
+        items = new(() =>
+        {
+            var data = PackageHashMap.ReadStructured(catalog, InvestmentTags.ItemIndex);
+            return TagView.Rows(data, in TagView.At<ItemIndexTable>(data).Table).ToArray().Select(row => row.ItemDefinition).ToArray();
+        });
+        displays = new(() =>
+        {
+            var data = PackageHashMap.ReadStructured(catalog, InvestmentTags.ItemDisplayIndex);
+            return TagView.Rows(data, in TagView.At<C80805cdb>(data).Table).ToArray().Select(row => row.ItemDisplay).ToArray();
+        });
         gear = new(() =>
         {
             var data = PackageHashMap.ReadStructured(catalog, GuardianAppearance.GearTable);
@@ -165,6 +250,33 @@ internal sealed class GuardianArtTables
     /** Offset of arrangement row index in Arrangements. */
     public int Arrangement(int index) => (uint)index < (uint)arrangementRows.Length ? arrangementRows[index]
         : throw new InvalidDataException($"Arrangement {index} is outside its table.");
+
+    /** Showcase armor by class byte and gender; see GuardianArt.ShowcaseArmor. */
+    public ConcurrentDictionary<(byte ClassByte, bool Female), uint[]> Showcase { get; } = new();
+
+    /** The item index of an item definition; null when the index does not name it. */
+    public int? IndexOf(uint tag) => Array.IndexOf(items.Value, tag) is >= 0 and var index ? index : null;
+
+    /** The number of rows in the item index. */
+    public int ItemCount => items.Value.Length;
+
+    /** The item definition at an item index; null outside the index or for a row naming no item definition. */
+    public uint? ItemTag(int index)
+    {
+        var tags = items.Value;
+        return (uint)index < (uint)tags.Length && IsClass(tags[index], InvestmentTags.ItemClass) ? tags[index] : null;
+    }
+
+    /** The unnamed display word at DisplayProperties +0x38 of the display at this index; null when it does not read. */
+    public uint? DisplayWord(int index)
+    {
+        const string word = "DisplayProperties.Unk38";
+        var tags = displays.Value;
+        if ((uint)index >= (uint)tags.Length || !IsClass(tags[index], InvestmentTags.ItemDisplayClass)) return null;
+        byte[] display = catalog.Read(tags[index]);
+        return TagView.FitsThrough<ItemDisplayStrings>(display, 0, word)
+            ? TagRead.U32(display, TagView.FieldOffset<ItemDisplayStrings>(word)) : null;
+    }
 
     /** Art hash -> map 0x80EC3F61 -> art wrapper -> the wrapper's entity. */
     public uint Entity(uint hash) => TryEntity(hash, out uint entity) ? entity

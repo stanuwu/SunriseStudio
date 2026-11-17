@@ -53,7 +53,8 @@ public sealed partial class StudioForm
     {
         var kind = popout.Panel;
         ClosePopout(kind);
-        if (layout.Find(kind) is null) layout.Show(kind);
+        // The preview returns to its document's model pane.
+        if (kind != StudioPanelKind.Preview && layout.Find(kind) is null) layout.Show(kind);
         layoutDirty = true;
     }
 
@@ -79,7 +80,8 @@ public sealed partial class StudioForm
         return true;
     }
 
-    private void RememberPopouts() => settings.Popouts = popouts.Select(popout =>
+    // The preview shows the open document's model, and none is open at launch, so its window is not saved.
+    private void RememberPopouts() => settings.Popouts = popouts.Where(popout => popout.Panel != StudioPanelKind.Preview).Select(popout =>
     {
         var bounds = popout.WindowState == FormWindowState.Normal ? popout.Bounds : popout.RestoreBounds;
         return new StudioPopoutState(popout.Panel, bounds.X, bounds.Y, bounds.Width, bounds.Height);
@@ -124,12 +126,16 @@ public sealed partial class StudioForm
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted(PanelTitle(popout.Panel));
         float titleEnd = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + ImGui.GetStyle().ItemSpacing.X;
-        string label = "Pop in";
-        float width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2;
-        float buttons = 3 * 46 * scale;
-        ImGui.SameLine(MathF.Max(titleEnd, size.X - buttons - width - 8 * scale));
-        if (ImGui.Button(label)) popout.RequestPopIn();
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Put this editor back into the main window");
+        // Closing Preview returns it to the document's model pane.
+        if (popout.Panel != StudioPanelKind.Preview)
+        {
+            string label = "Pop in";
+            float width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2;
+            float buttons = 3 * 46 * scale;
+            ImGui.SameLine(MathF.Max(titleEnd, size.X - buttons - width - 8 * scale));
+            if (ImGui.Button(label)) popout.RequestPopIn();
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Put this editor back into the main window");
+        }
         popout.Chrome.DrawButtons(header, popout.RequestPopIn);
         ImGui.End();
         ImGui.PopStyleVar(2);

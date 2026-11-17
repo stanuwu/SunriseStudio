@@ -115,23 +115,26 @@ public sealed partial class NativeSceneRenderer
     {
         SunActive = false; ShadowsActive = false; LastShadowDraws = 0;
         Array.Clear(cascadeParts);
-        // The viewer has no sun outside atmosphere lighting; an orthographic view has no linear depth.
-        if (!SunEnabled || LightingMode != NativeLightingMode.Atmosphere || !AtmosphereActive || TimeOfDayFallback
-            || camera.Orthographic || cameraScope is null) return null;
+        // The sun needs atmosphere lighting, or an asset's studio key. An orthographic view draws the key unshadowed.
+        bool keyed = StudioKeyActive;
+        if (!SunEnabled || cameraScope is null || !keyed && (LightingMode != NativeLightingMode.Atmosphere || !AtmosphereActive
+            || TimeOfDayFallback || camera.Orthographic)) return null;
+        var toLight = keyed ? studioKey : LightDirection;
         try
         {
             sunLighting ??= new NativeAmbientLighting(renderer, Plan.Reader,
                 Plan.Reader.ReadTfxParameterDefaults(NativeScenePlan.RenderGlobalsTag), states,
                 parameterOverrides: ambientOverrides, sun: true);
+            sunLighting.SunColorOverride = keyed ? StudioKeyColor : null;
             shadowMask ??= new NativeShadowMask(renderer, Plan.Reader, states);
             depthDownsample ??= new NativeDepthDownsample(renderer, Plan.Reader, states);
             depthDownsample.Render(gbufferInputs.Depth, targets.Width, targets.Height,
                 NativeDepthReconstruction.Create(lighting.Depth), cameraProjection.M22);
             cascades = [];
             var depthMaps = new List<ID3D11ShaderResourceView>();
-            if (ShadowsEnabled && shadowGroups.Count != 0)
+            if (ShadowsEnabled && shadowGroups.Count != 0 && !camera.Orthographic)
             {
-                cascades = NativeShadowCascades.Fit(cameraView, cameraProjection, camera.NearPlane, camera.Position, LightDirection);
+                cascades = NativeShadowCascades.Fit(cameraView, cameraProjection, camera.NearPlane, camera.Position, toLight);
                 RenderCascades();
                 foreach (var map in cascadeTargets!) depthMaps.Add(map.DepthShaderView!);
                 ShadowsActive = true;
@@ -140,7 +143,7 @@ public sealed partial class NativeSceneRenderer
                 cameraScope, cameraView, cameraProjection, lighting.Depth);
             SunActive = true;
             ShadowError = null;
-            return new(mask, depthDownsample.MinMax!.Texture, SkyDirection);
+            return new(mask, depthDownsample.MinMax!.Texture, keyed ? studioKey : SkyDirection);
         }
         catch (Exception error) when (Recoverable(error) || error is InvalidOperationException)
         {

@@ -9,7 +9,11 @@ using SunriseStudio.Tags.Views;
 namespace SunriseStudio.Authoring;
 
 public sealed record WeaponArtVariant(int Selector, uint WrapperTag, uint EntityTag,
-    IReadOnlyList<uint> ArtHashes);
+    IReadOnlyList<uint> ArtHashes)
+{
+    /** The variant's index among the arrangement row's art regions. */
+    public int HolderIndex { get; init; }
+}
 public sealed record WeaponArchetypeSource(ushort GearIndex, ushort ArtIndex, uint EntityTag,
     IReadOnlyList<WeaponArtVariant> Variants);
 public sealed record PreparedWeaponArchetype(byte[] ItemDefinition,
@@ -66,13 +70,19 @@ public static class WeaponArchetypeAuthoring
             if (group < 0) throw new InvalidDataException("An art variant has no group.");
             int selector = table.Field<ArrangementArtGroup, byte>(group, nameof(ArrangementArtGroup.Selector));
             var hashes = table.Rows<ArrangementArtGroup, SArtHash>(group, nameof(ArrangementArtGroup.H3265b065), ArtHashClass);
-            if (hashes.Count == 0) throw new InvalidDataException("An art variant has no model.");
+            // A region with no hashes, an unnamed empty first name, or no model adds nothing.
+            if (hashes.Count == 0) continue;
             uint[] values = Column<SArtHash>(table, hashes, value => value.ArtName);
-            uint wrapper = Resolve(artMap, ArtMapRowClass, values[0]);
+            if (!TryResolve(artMap, ArtMapRowClass, values[0], out uint wrapper))
+            {
+                if (values[0] is 0 or uint.MaxValue or StringHash.Empty) continue;
+                throw new InvalidDataException($"Weapon art name {values[0]:X8} does not resolve.");
+            }
             var wrapperBytes = Read(catalog, wrapper, WrapperClass);
             uint modelEntity = wrapperBytes.Field<SArtWrapper, uint>(0, nameof(SArtWrapper.ArtTag));
+            if (modelEntity is 0 or uint.MaxValue) continue;
             Read(catalog, modelEntity, EntityClass);
-            variants.Add(new(selector, wrapper, modelEntity, values));
+            variants.Add(new(selector, wrapper, modelEntity, values) { HolderIndex = i });
         }
         if (variants.Count == 0 || variants.Select(value => value.Selector).Distinct().Count()
             != variants.Count)
@@ -196,9 +206,8 @@ public static class WeaponArchetypeAuthoring
         // The new row's holders, groups and hashes form one block of self-relative pointers.
         var output = new List<byte>();
         int newHolders = AppendArray(output, -1, HolderClass, oldHolders.Count, Unsafe.SizeOf<SArrangementHolder>());
-        for (int i = 0; i < source.Variants.Count; i++)
+        for (int i = 0, v = 0; i < oldHolders.Count; i++)
         {
-            var variant = source.Variants[i];
             int originalGroup = Group(arrangement, oldHolders, i);
             Align(output, ArrangementArtGroup.Align);
             int group = output.Count;
@@ -206,15 +215,27 @@ public static class WeaponArchetypeAuthoring
             var block = CollectionsMarshal.AsSpan(output);
             TagView.SetTarget(block, in TagView.At<SArrangementHolder>(block, newHolders + i * Unsafe.SizeOf<SArrangementHolder>()).Group, group);
             int hashField = TagView.OffsetOf(block, in TagView.At<ArrangementArtGroup>(block, group).H3265b065);
+            if (v == source.Variants.Count || source.Variants[v].HolderIndex != i)
+            {
+                // A region with no variant keeps the original's hashes.
+                var original = arrangement.Rows<ArrangementArtGroup, SArtHash>(originalGroup, nameof(ArrangementArtGroup.H3265b065), ArtHashClass);
+                uint[] kept = Column<SArtHash>(arrangement, original, value => value.ArtName);
+                int copy = AppendArray(output, hashField, ArtHashClass, kept.Length, Unsafe.SizeOf<SArtHash>());
+                block = CollectionsMarshal.AsSpan(output);
+                for (int j = 0; j < kept.Length; j++) TagView.Edit<SArtHash>(block, copy + j * Unsafe.SizeOf<SArtHash>()).ArtName = kept[j];
+                continue;
+            }
+            var variant = source.Variants[v];
             int hashes = AppendArray(output, hashField, ArtHashClass, variant.ArtHashes.Count, Unsafe.SizeOf<SArtHash>());
             uint hash = NewName(artMap, ArtMapRowClass,
                 $"sunrise.weapon.art.{packageId:X4}.{firstEntry}.{variant.Selector}.{name}");
-            artMap = AppendName(artMap, ArtMapRowClass, hash, Tag(i + wrapperStart));
+            artMap = AppendName(artMap, ArtMapRowClass, hash, Tag(v + wrapperStart));
             block = CollectionsMarshal.AsSpan(output);
             for (int j = 0; j < variant.ArtHashes.Count; j++) TagView.Edit<SArtHash>(block, hashes + j * Unsafe.SizeOf<SArtHash>()).ArtName = hash;
             byte[] wrapper = Read(catalog, variant.WrapperTag, WrapperClass).Data.ToArray();
             EditField<SArtWrapper, uint>(wrapper, 0, nameof(SArtWrapper.ArtTag)) = variantEntities[variant.Selector];
-            Add(variant.WrapperTag, wrapper, i + wrapperStart, $"art-{variant.Selector}");
+            Add(variant.WrapperTag, wrapper, v + wrapperStart, $"art-{variant.Selector}");
+            v++;
         }
         // Block before rows: the rows stay last, so the next weapon reuses their bytes and leaves no dead copy.
         var (changedArt, blocks) = InvestmentItemClone.AppendRows(arrangement.Data,
@@ -348,15 +369,19 @@ public static class WeaponArchetypeAuthoring
         return StringHash.NewDefinitionHash(key, NameHashes(reader, type, NameRows(reader, type)).ToHashSet());
     }
 
-    private static uint Resolve(Bytes reader, uint type, uint hash)
+    private static uint Resolve(Bytes reader, uint type, uint hash) => TryResolve(reader, type, hash, out uint value)
+        ? value : throw new InvalidDataException($"Weapon art name {hash:X8} does not resolve.");
+
+    private static bool TryResolve(Bytes reader, uint type, uint hash, out uint value)
     {
         var rows = NameRows(reader, type);
         for (int i = 0; i < rows.Count; i++)
         {
             var (name, tag) = Name(reader, type, rows.Data + i * NameStride(type));
-            if (name == hash) return tag;
+            if (name == hash) { value = tag; return true; }
         }
-        throw new InvalidDataException($"Weapon art name {hash:X8} does not resolve.");
+        value = 0;
+        return false;
     }
 
     private static void RequireUnusedHash(uint[] hashes, uint hash)

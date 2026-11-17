@@ -245,7 +245,7 @@ public sealed partial class AssetViewport
         foreach (int index in visibleCollision)
         {
             var placement = scene.Placements[index];
-            var (min, max) = placement.Bone < 0 ? (placement.BoundsMin, placement.BoundsMax)
+            var (min, max) = placement.Bone < 0 && itemPose.IsIdentity ? (placement.BoundsMin, placement.BoundsMax)
                 : CollisionScene.WorldBounds(scene.Pieces[placement.Piece].Shape, CollisionWorld(scene, index));
             if (SceneSelection.RayBox(origin, direction, new(min, max), float.PositiveInfinity, out float entry))
                 candidates.Add((entry, index));

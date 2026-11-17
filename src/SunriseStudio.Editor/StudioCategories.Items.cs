@@ -54,12 +54,11 @@ public static partial class StudioCategories
         {
             if (name == InvestmentItemKinds.Weapons) continue;
             var (icon, tooltip) = ItemLooks.TryGetValue(name, out var look) ? look : (StudioIcon.Cube, name);
-            bool model = name is InvestmentItemKinds.Armor or InvestmentItemKinds.Ghosts
-                or InvestmentItemKinds.Vehicles or InvestmentItemKinds.Ships;
             bool pursuits = name is InvestmentItemKinds.Quests or InvestmentItemKinds.Bounties;
             var sections = name == InvestmentItemKinds.Quests ? QuestSections : name == InvestmentItemKinds.Bounties ? BountySections : ItemSections;
-            categories.Add(new(name, name, ItemsGroup, icon, tooltip, sections, ModelPane: model,
-                Views: pursuits ? PursuitViews : 1));
+            // Any item with art opens with its model; one without shows its pages alone.
+            categories.Add(new(name, name, ItemsGroup, icon, tooltip, sections, ModelPane: true,
+                OpenContext: tag => new AssetOpenContext { ItemModelTag = tag }, Views: pursuits ? PursuitViews : 1));
         }
         categories.Add(new(VendorsName, VendorsName, ItemsGroup, StudioIcon.Group, "Vendors and what they sell", ItemSections));
         categories.Add(new(PerksName, PerksName, ItemsGroup, StudioIcon.Build, "Perk gameplay programs",

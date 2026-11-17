@@ -59,7 +59,7 @@ public sealed partial class AssetViewport
         QueryLivePose(planes, pickTransient, pickCandidates);
         pickCandidates.Sort();
         return selection.Pick(Camera, viewportPixel, size, pickFaces ??= DrawnFaces, out distance, pickCandidates,
-            selectedMemberSet, OccludeOverlays);
+            selectedMemberSet, OccludeOverlays, itemPose);
     }
 
     /** Native decal and transparent parts write no depth, so the surface behind them is what shows. */
@@ -121,7 +121,11 @@ public sealed partial class AssetViewport
     private void EnsureSceneGrid()
     {
         if (!gridDirty && sceneGrid is not null && gridBoundsRevision == selection.AuthoredBoundsRevision) return;
-        var bounds = selection.Objects.Select(selection.GetAuthoredBounds).ToArray();
+        var bounds = selection.Objects.Select(item =>
+        {
+            var box = selection.GetAuthoredBounds(item);
+            return !itemPose.IsIdentity && SceneVisibility.IsOverlay(item) ? box.Transform(itemPose) : box;
+        }).ToArray();
         sceneGrid = new SceneGrid(bounds.Select(x => x.Center).ToArray(), bounds.Select(x => x.Radius).ToArray());
         SceneGridBuildCount++;
         gridBoundsRevision = selection.AuthoredBoundsRevision;

@@ -76,9 +76,11 @@ public sealed class NativeScenePlan
     public const long DefaultTextureBudgetBytes = 512L * 1024 * 1024;
     // The installed render-globals launch record.
     public const uint RenderGlobalsTag = NativeInspectionMaterialInputs.RenderGlobalsTag;
-    public const string PassPolicy = "Inspection forward-Z. Each stage takes its native pass states for blend, depth and culling; authored state overrides replace them. Stage 0 writes depth; decal, additive-decal and transparent stages test it without writing. The viewer keeps no stencil, so the stencil test the pass word adds is dropped. Frame flags 0x425B8/0x425B9 are inactive, matching their native constructor. TFX uses authored defaults after native normalization; runtime keyed overrides are not supplied. Decal stages read the normals from before those stages as extern 44 resource 1, and extern 44 vector 2 holds the image values (0.03, 0); resource 0 and vector 1 are not supplied. Other unavailable frame values stay unknown. Native lighting remains unverified. Object channels (TFX 0x4D) read each entity model's rest values from its value provider; the opened entity reads the values set in the entity view; a channel with no settled rest value reads (1,1,1,1). Transparents read scope 13 CB2: height fog at the camera and hemisphere irradiance from the authored render globals. Scope 14 CB8 supplies centre and endpoint fog from each part's bounding sphere; caller values in row 3 W and row 4 X/Z/W stay unknown.";
+    public const string PassPolicy = "Inspection forward-Z. Each stage takes its native pass states for blend, depth and culling; authored state overrides replace them. Stage 0 writes depth; decal, additive-decal and transparent stages test it without writing. The viewer keeps no stencil, so the stencil test the pass word adds is dropped. Frame flags 0x425B8/0x425B9 are inactive, matching their native constructor. TFX uses authored defaults after native normalization; runtime keyed overrides are not supplied. Decal stages read the normals from before those stages as extern 44 resource 1, and extern 44 vector 2 holds the image values (0.03, 0); resource 0 and vector 1 are not supplied. Other unavailable frame values stay unknown. Native lighting remains unverified. Object channels (TFX 0x4D) read each entity model's rest values from its value provider; the opened entity reads the values set in the entity view; a channel with no settled rest value reads (1,1,1,1) in maps and (0,0,0,0) in asset previews; the preview value is assumed. May be inaccurate. Transparents read scope 13 CB2: height fog at the camera and hemisphere irradiance from the authored render globals. Scope 14 CB8 supplies centre and endpoint fog from each part's bounding sphere; caller values in row 3 W and row 4 X/Z/W stay unknown.";
     // Viewer value of an object channel with no table or no settled rest value.
     public static readonly Vector4 ObjectChannelDefault = NativeInspectionMaterialInputs.ObjectChannelDefault;
+    /** Assumed: an asset preview reads unbound object channels as zero, so gameplay state shows as off. */
+    public static readonly Vector4 AssetChannelDefault = Vector4.Zero;
     // Colour stages the viewer draws: generate_gbuffer, decals, investment_decals, decals_additive, transparents.
     public static readonly IReadOnlySet<int> DrawnStages = new HashSet<int> { 0, 1, 2, 6, 7 };
     // These stages write the G-buffer before lighting; the others draw into the lit color after it.
@@ -188,12 +190,15 @@ public sealed class NativeScenePlan
      * @param lookupSize Extern 7 vector 5, the screen lookup size; null uses one pixel.
      * @param exposureEv Extern 1 float 8; float 7 is 2^EV. 0x7FF742EEC420 writes both.
      * @param timeOfDay Extern 1 float 4; preparation keeps the viewer default.
+     * @param assetPreview Object channels with no table read AssetChannelDefault.
      */
     internal static TfxInputs MaterialInputs(double simulationSeconds, TfxParameterLookup parameters,
         TfxInputs? camera = null, IReadOnlyList<Vector4>? atmosphereSlots = null, float cameraHeight = 0,
-        Vector4? lookupSize = null, float exposureEv = 0, float timeOfDay = NativeFrameInputs.ViewerTimeOfDay)
+        Vector4? lookupSize = null, float exposureEv = 0, float timeOfDay = NativeFrameInputs.ViewerTimeOfDay,
+        bool assetPreview = false)
     {
         var inputs = NativeInspectionMaterialInputs.Create(simulationSeconds, parameters, camera, timeOfDay);
+        if (assetPreview) inputs.ObjectChannelDefault = AssetChannelDefault;
         NativeWater.Apply(inputs, atmosphereSlots, cameraHeight, lookupSize ?? Vector4.One);
         NativeOcean.ApplyRegistered(inputs, parameters);
         inputs.Resources[new(44, 1)] = PreDecalNormals;
@@ -295,7 +300,8 @@ public sealed class NativeScenePlan
         NativeGearScope GearScope(uint record)
         {
             if (!gearScopes.TryGetValue(record, out var scope))
-                gearScopes.Add(record, scope = NativeGearPlating.Evaluate(reader, record, MaterialInputs(0, parameters, null, atmosphereSlots)));
+                gearScopes.Add(record, scope = NativeGearPlating.Evaluate(reader, record,
+                    MaterialInputs(0, parameters, null, atmosphereSlots, assetPreview: assetPreview)));
             return scope;
         }
         var skipped = new Dictionary<string, int>();
@@ -614,6 +620,8 @@ public sealed class NativeScenePlan
             .SelectMany(group => group.Parts).Select(part => NativeGearPlating.DyesFor(scene, part.Instance).Source).Distinct().ToArray();
         if (dyeSources.Length != 0)
             details.Add($"Gear dye scopes use {string.Join(", ", dyeSources)}; the slot of each dye follows its record's scope index.");
+        if (dyeSources.Contains(NativeGearPlating.WithShader))
+            details.Add("The shader's dyes replace the item's in an assumed order. May be inaccurate.");
         if (groups.Any(group => group.Material.Gear is { PlateTextures.Count: > 0 }))
             details.Add("Gear plate atlases are composed from their descriptor rows at the game's size for the gear kind and set; "
                 + "the kind comes from the item's bucket, fitted to the installed rectangles, and the formats and smaller mips are unverified.");

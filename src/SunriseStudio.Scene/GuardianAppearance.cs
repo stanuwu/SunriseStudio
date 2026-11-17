@@ -62,7 +62,9 @@ public sealed class GuardianAppearance
     /** Gear-preview placeholders: one row per class byte; each row lists item indices. */
     public const uint ClassDefaultsTable = 0x81327CE3;
     // Buckets 3 to 7 are armor slots 0 to 4.
-    private const int FirstArmorBucket = 3, ArmorSlots = 5;
+    private const int FirstArmorBucket = 3;
+    /** Armor slots, helmet to class item, in GuardianLoadout.Armor order. */
+    public const int ArmorSlots = 5;
     private const string Bucket = "InventoryItemBlock.InventoryBucket";
     // The world draws the first selector of each pair. The part names are assumed.
     public const int HeadSelector = 13, HairSelector = 15, ThirdSelector = 17, MarkingSelector = 19;
@@ -87,6 +89,15 @@ public sealed class GuardianAppearance
         this.groups = groups;
         this.tables = tables;
         (previewDefaults, previewDefaultsError) = previews;
+    }
+
+    /** The armor slot 0..4 of an item definition, in GuardianLoadout.Armor order; -1 for any other item. */
+    public static int ArmorSlot(byte[] definition)
+    {
+        // A definition too short for its bucket names no slot.
+        if (!TagView.FitsThrough<ItemDefinition>(definition, 0, Bucket)) return -1;
+        int slot = TagRead.U8(definition, TagView.FieldOffset<ItemDefinition>(Bucket)) - FirstArmorBucket;
+        return (uint)slot < ArmorSlots ? slot : -1;
     }
 
     /** The class's gear-preview placeholder for armor slot 0..4, in GuardianLoadout.Armor order; 0 when there is none. */
@@ -165,11 +176,8 @@ public sealed class GuardianAppearance
                     uint tag = items[item].ItemDefinition;
                     if (!catalog.TryGetEntry(tag, out var entry) || entry.Reference != InvestmentTags.ItemClass)
                         throw new InvalidDataException($"Item index {item} does not name an item definition.");
-                    byte[] definition = catalog.Read(tag);
-                    // A definition too short for its bucket names no slot.
-                    if (!TagView.FitsThrough<ItemDefinition>(definition, 0, Bucket)) continue;
-                    int slot = TagRead.U8(definition, TagView.FieldOffset<ItemDefinition>(Bucket)) - FirstArmorBucket;
-                    if ((uint)slot < ArmorSlots && slots[slot] == 0) slots[slot] = tag;
+                    int slot = ArmorSlot(catalog.Read(tag));
+                    if (slot >= 0 && slots[slot] == 0) slots[slot] = tag;
                 }
             }
             return (result, error);

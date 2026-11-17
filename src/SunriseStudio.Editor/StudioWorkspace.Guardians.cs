@@ -39,6 +39,48 @@ public sealed partial class StudioWorkspace
         }
     }
 
+    /** Armor previews draw their wearer, not only the piece, and weapons open in a guardian's hands; reopen to apply. */
+    public bool ShowGuardian { get; set; }
+
+    /**
+     * Runs on a worker. An item opens on the wearer the context names, else the first. Armor draws the piece alone
+     * unless ShowGuardian is set; a shader colors showcase armor, and a weapon is held in its hold pose.
+     * A failed assembly keeps the item open with the reason as a preview note.
+     * @param dyes The shader's dyes; null keeps each armor piece's own.
+     * @param weapon The weapon item the guardian holds; 0 holds none.
+     */
+    private StudioDocument ReadGuardianItemDocument(PackageCatalog catalog, StudioDocument document,
+        AssetOpenContext context, NativeGearDyes? dyes = null, uint weapon = 0)
+    {
+        bool armor = GuardianAppearance.ArmorSlot(document.Bytes) >= 0;
+        PreparedGuardian prepared;
+        IReadOnlyList<ItemWearer> wearers;
+        try
+        {
+            ReportProgress("Assembling guardian");
+            var assembler = GuardianAssemblerFor(catalog);
+            wearers = armor ? assembler.Wearers(document.Entry.TagHash) : GuardianAssembler.AllWearers;
+            var wearer = wearers.FirstOrDefault(value => value.Class.BodyTag == context.EntityTag
+                && value.Female == context.WearerFemale) ?? wearers.FirstOrDefault()
+                ?? throw new InvalidDataException("The item has no art for any class.");
+            prepared = armor ? assembler.PrepareItem(document.Entry.TagHash, wearer, OperationToken, ShowGuardian)
+                : assembler.PrepareWearer(wearer, dyes, OperationToken, weapon);
+        }
+        catch (Exception error) when (error is not (OperationCanceledException or OutOfMemoryException))
+        {
+            string failure = armor ? "No armor model" : "No guardian";
+            return document with { OpenContext = context, PreviewError = $"{failure}: {error.Message}" };
+        }
+        var scene = prepared.Scene;
+        scene.Diagnostics.AddRange(prepared.Diagnostics.Except(scene.Diagnostics));
+        return PrepareModelDocument(catalog, document with
+        {
+            Animation = prepared.Animation, Wearers = wearers,
+            OpenContext = context, PoseClipTag = prepared.PoseClipTag,
+            SourceTags = (document.SourceTags ?? new HashSet<uint>()).Concat(prepared.SourceTags).ToHashSet()
+        }, scene);
+    }
+
     /** Runs on a worker. A failed assembly keeps the body open with the reason as a preview note. */
     private StudioDocument ReadGuardianDocument(PackageCatalog catalog, PackageEntry entry, string name, AssetOpenContext context)
     {
@@ -60,20 +102,14 @@ public sealed partial class StudioWorkspace
         {
             return document with { OpenContext = context, PreviewError = $"Guardian assembly failed: {error.Message}" };
         }
-        var scene = prepared.Scene;
-        Names?.NameScene(scene);
-        scene.Name = name;
-        var native = PrepareScene(scene, out string nativeError, assetPreview: true);
-        ReportProgress("Reading materials and shaders");
+        document = PrepareModelDocument(catalog, document, prepared.Scene);
         return document with
         {
-            Scene = scene, Animation = prepared.Animation, NativePlan = native, NativeError = nativeError,
-            OpenContext = context, Guardian = prepared,
+            Animation = prepared.Animation,
+            OpenContext = context, Guardian = prepared, PoseClipTag = prepared.PoseClipTag,
             // The guardian's notes show once, on the Guardian page.
             Connections = new(entry.TagHash, entry.TagHash, entry.TagHash, 0, GuardianRelated(document, prepared),
                 [entry.TagHash], []),
-            Surface = AssetSurface.Read(catalog, entry.TagHash, scene: scene, nameResolver: ResolveName,
-                token: OperationToken, decodedTextures: native?.Textures),
             SourceTags = (document.SourceTags ?? new HashSet<uint>()).Concat(prepared.SourceTags).Append(entry.TagHash).ToHashSet()
         };
     }
