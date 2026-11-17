@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 namespace SunriseStudio.Scene;
 
 /** Collision is drawn by its own overlay from decoded Havok shapes; no scene item carries it. */
-public enum SceneLayer { Geometry, Terrain, Skybox, Distant, Objects, Volumes, Transitions, Spawns, Squads, Effects, Lights, Collision }
+public enum SceneLayer { Geometry, Terrain, Skybox, Distant, Objects, Volumes, Transitions, Spawns, Squads, Effects, Lights, Collision, NavMesh }
 
 [StructLayout(LayoutKind.Sequential)]
 public struct SceneVertex(Vector3 position, Vector3 normal, Vector2 texCoord, Vector4 color)
@@ -200,6 +200,7 @@ public sealed class SceneDocument
     public List<NativeOcclusionOwner> OcclusionOwners { get; } = [];
     public List<PlacedAtmosphere> Atmospheres { get; } = [];
     public List<PlacedTimeOfDay> TimesOfDay { get; } = [];
+    public List<PlacedNavMesh> NavMeshes { get; } = [];
     public List<PlacedLightTable> LightTables { get; } = [];
     public List<PlacedCubemap> Cubemaps { get; } = [];
     public List<MapLayerInfo> MapLayers { get; } = [];

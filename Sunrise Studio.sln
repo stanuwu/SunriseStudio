@@ -105,6 +105,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SunriseStudio.World", "src\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SunriseStudio.WorldAuthoring.Tests", "tests\SunriseStudio.WorldAuthoring.Tests\SunriseStudio.WorldAuthoring.Tests.csproj", "{B58598DD-F04E-45B8-B373-D48B08FD5792}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SunriseStudio.Navigation.Tests", "tests\SunriseStudio.Navigation.Tests\SunriseStudio.Navigation.Tests.csproj", "{19782212-F914-4034-A205-B6184E7CB71C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -703,6 +705,18 @@ Global
 		{B58598DD-F04E-45B8-B373-D48B08FD5792}.Release|x64.Build.0 = Release|Any CPU
 		{B58598DD-F04E-45B8-B373-D48B08FD5792}.Release|x86.ActiveCfg = Release|Any CPU
 		{B58598DD-F04E-45B8-B373-D48B08FD5792}.Release|x86.Build.0 = Release|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Debug|x64.Build.0 = Debug|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Debug|x86.Build.0 = Debug|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Release|x64.ActiveCfg = Release|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Release|x64.Build.0 = Release|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Release|x86.ActiveCfg = Release|Any CPU
+		{19782212-F914-4034-A205-B6184E7CB71C}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -757,5 +771,6 @@ Global
 		{3A5AC8DB-BAC7-4C76-A36F-A65F7604CD82} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{787695FC-2C0C-4763-A20D-E4CA9E724BE9} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{B58598DD-F04E-45B8-B373-D48B08FD5792} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{19782212-F914-4034-A205-B6184E7CB71C} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

@@ -19,8 +19,8 @@ public static partial class WorldBundleImport
     private const int HolderSize = 48, HolderMeshAt = 8, HolderSecondAt = 12, HolderMinimumAt = 16, HolderMaximumAt = 32;
 
     /**
-     * Bakes a nav mesh from collision triangles and places it in a bubble: the nav mesh, an empty
-     * second tag, the holder that names both, and a placement list joined to the bubble's own
+     * Bakes a nav mesh from collision triangles and places it in a bubble: the nav mesh with its links,
+     * its firing point tag, the holder that names both, and a placement list joined to the bubble's own
      * container. The nav mesh is in map space; its placement has no offset.
      * @param meshes The walkable world as triangles; each mesh's transform puts it in map space.
      * @param packageId The project package that takes the three tags.
@@ -41,7 +41,11 @@ public static partial class WorldBundleImport
             positions.AddRange(mesh.Vertices.Select(point => Vector3.Transform(point, world)));
             indices.AddRange(mesh.Indices.Select(index => first + index));
         }
-        var baked = NavMeshBaker.BakeMesh(positions, indices, settings);
+        // The empty second tag carries the agent floats each layer's links and firing points use.
+        byte[] emptySecond = catalog.Read(NavEmptySecond);
+        var agents = NavFiringPointTag.Agents(emptySecond);
+        var baked = NavLinkBaker.AddLinks(NavMeshBaker.BakeMesh(positions, indices, settings), positions, indices, agents);
+        baked = new(baked.Layers.Select(layer => layer.Polygons.Length > 0 ? NavMeshWriter.Complete(layer) : layer).ToArray());
         var used = baked.Layers.Where(layer => layer.Polygons.Length > 0).ToArray();
         if (used.Length == 0) return null;
 
@@ -57,7 +61,8 @@ public static partial class WorldBundleImport
         project.AddAssets(
         [
             Asset(catalog, $"{name}.nav_mesh", NavMeshWriter.Write(baked, schema), NavMeshTemplate, packageId, entry),
-            Asset(catalog, $"{name}.nav_second", catalog.Read(NavEmptySecond), NavEmptySecond, packageId, entry + 1),
+            Asset(catalog, $"{name}.nav_second", NavFiringPointTag.Write(NavFiringPointBaker.Bake(baked, agents), emptySecond, schema),
+                NavEmptySecond, packageId, entry + 1),
             Asset(catalog, $"{name}.nav_holder", holder, NavHolderTemplate, packageId, entry + 2),
         ], catalog);
         var files = WorldFiles.Load(project.ContentDirectory, destination);

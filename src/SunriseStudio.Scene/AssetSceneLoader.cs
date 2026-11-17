@@ -187,6 +187,9 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
             var data = ReadBytes(tag);
             switch (entry.Reference)
             {
+                case C80808cb6.Class:
+                    PlaceNavMesh(tag, data, bubble, transform);
+                    break;
                 case SMapRoot.Class:
                 {
                     var entries = SceneReads.Rows<SMapRoot, MapBubbleRef>(data, 0, nameof(SMapRoot.MapEntries), MapBubbleRef.Class);
@@ -369,6 +372,7 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
     /** A row whose resource names decoded content visits it; any other row becomes a marker. */
     internal bool VisitsChild(byte[] data, int resource, uint resourceClass) => resourceClass switch
     {
+        C80808c76.Class => TagView.FitsThrough<C80808c76>(data, resource, nameof(C80808c76.Unk18)),
         SStaticInstancesPayload.Class => TagView.FitsThrough<SStaticInstancesPayload>(data, resource,
             nameof(SStaticInstancesPayload.StaticOwner)),
         SSpawnPointsPayload.Class => TagView.FitsThrough<SSpawnPointsPayload>(data, resource, nameof(SSpawnPointsPayload.SpawnPoints)),
@@ -382,13 +386,14 @@ public sealed partial class AssetSceneLoader(PackageCatalog catalog)
         _ => false
     };
 
-    /** The child tag of a spawn, sky or placed-model payload that VisitsChild accepted. */
+    /** The child tag of a spawn, sky, placed-model or nav payload that VisitsChild accepted. */
     private static uint PayloadChild(byte[] data, int resource, uint resourceClass) => resourceClass switch
     {
         SSpawnPointsPayload.Class => TagView.Member<SSpawnPointsPayload, uint>(data, resource, nameof(SSpawnPointsPayload.SpawnPoints)),
         SSkyPayload.Class => TagView.Member<SSkyPayload, uint>(data, resource, nameof(SSkyPayload.SkyObjects)),
         UnknownPlacedModelPayload.Class => TagView.Member<UnknownPlacedModelPayload, uint>(data, resource,
             nameof(UnknownPlacedModelPayload.Model)),
+        C80808c76.Class => TagView.Member<C80808c76, uint>(data, resource, nameof(C80808c76.Unk18)),
         _ => throw new InvalidDataException($"Payload class 0x{resourceClass:X8} names no child.")
     };
 
