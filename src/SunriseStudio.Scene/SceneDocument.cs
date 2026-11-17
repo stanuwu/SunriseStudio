@@ -201,6 +201,8 @@ public sealed class SceneDocument
     public List<PlacedAtmosphere> Atmospheres { get; } = [];
     public List<PlacedTimeOfDay> TimesOfDay { get; } = [];
     public List<PlacedNavMesh> NavMeshes { get; } = [];
+    /** Placed visibility maps; the Transitions layer draws their cells. */
+    public List<PlacedVisibility> Visibility { get; } = [];
     public List<PlacedLightTable> LightTables { get; } = [];
     public List<PlacedCubemap> Cubemaps { get; } = [];
     public List<MapLayerInfo> MapLayers { get; } = [];

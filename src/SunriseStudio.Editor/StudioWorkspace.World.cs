@@ -1,3 +1,4 @@
+using SunriseStudio.Authoring;
 using SunriseStudio.Packages;
 using SunriseStudio.Scene;
 using SunriseStudio.Tags.Generated;
@@ -175,6 +176,7 @@ public sealed partial class StudioWorkspace
             var world = missionTag is uint mission
                 ? loader.LoadMission(mapTag, mission, options, OperationToken)
                 : loader.LoadMap(mapTag, options, OperationToken);
+            TransitionCells.Read(catalog, world.Scene);
             uint documentTag = priorDocument?.AddedAssetId is null && priorDocument is not null
                 ? priorDocument.Entry.TagHash : missionTag ?? mapTag;
             StudioDocument? document = keptDocument;
