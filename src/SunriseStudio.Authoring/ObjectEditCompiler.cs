@@ -85,7 +85,7 @@ public sealed class ObjectEditCompiler : IObjectEditCompiler
     /** Rules run in this order. Add a rule for a new kind of derived data here. */
     public static IReadOnlyList<IObjectEditRule> DefaultRules { get; } =
         [new InstanceBoundsRule(), new OcclusionTomeRule(), new InstanceCullRule(), new StaticAdditionRule(), new StaticCollisionRule(),
-            new DecoratorInstanceRule()];
+            new DecoratorInstanceRule(), new SpawnPointAdditionRule()];
 
     public static ObjectEditCompiler Default { get; } = new(DefaultRules);
 

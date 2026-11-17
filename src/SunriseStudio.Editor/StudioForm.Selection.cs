@@ -82,6 +82,7 @@ public sealed partial class StudioForm
                 or SceneMarker { PreviewPose: not null });
             DrawObservedPlacement(observed, holding); ImGui.SeparatorText("Authored placement");
         }
+        DrawSpawnPointActions(selectedObject as SceneMarker);
         DrawPlacementEditor();
         if (selectedObject is SceneMarker { Effect: not null } effectMarker && workspace.World?.Scene is { } effectScene)
             DrawEffectControls(effectScene, effectMarker);
@@ -140,7 +141,8 @@ public sealed partial class StudioForm
         {
             // The catalog shows compiled project bytes, so these start from the current edited state.
             editTarget = selectedObject;
-            sceneEditInfo = SceneEdits.Describe(catalog, selectedObject, inspectionWorld, workspace.IsProjectContent);
+            sceneEditInfo = SceneEdits.Describe(catalog, selectedObject, inspectionWorld, workspace.IsProjectContent,
+                workspace.Project?.ObjectEdits);
             editPosition = sceneEditInfo.Position;
             editRotation = editRotationBase = QuaternionToDegrees(sceneEditInfo.Rotation);
             editScale = sceneEditInfo.Scale;
@@ -172,7 +174,7 @@ public sealed partial class StudioForm
                 else
                     workspace.ApplyObjectEdit(SceneEdits.CreateTransformEdit(catalog, selectedObject, editPosition,
                         editRotation == editRotationBase ? null : DegreesToQuaternion(editRotation), editScale, inspectionWorld,
-                        objectInspection?.Object.Name));
+                        objectInspection?.Object.Name, workspace.Project?.ObjectEdits));
             });
             if (!content && info.Target?.Layout == ObjectEditLayout.StaticInstance && workspace.Project is { } project)
             {
@@ -198,6 +200,11 @@ public sealed partial class StudioForm
             ImGui.TextColored(StudioTheme.Accent, $"Edited: {saved.Summary()}");
             if (ImGui.Button("Revert object", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(saved.Key));
         }
+        if (info.Addition is { } addition)
+        {
+            ImGui.TextColored(StudioTheme.Accent, "Added in this project");
+            if (ImGui.Button("Remove spawn point", new(-1, 0))) workspace.Run(() => workspace.RevertObjectEdit(addition.Key));
+        }
         if (info.Target is { Layout: ObjectEditLayout.StaticInstance } removable
             && workspace.Project?.FindObjectEdit(new ObjectEdit(ObjectEditKind.RemoveInstance, removable).Key) is { } removal)
         {
@@ -211,13 +218,24 @@ public sealed partial class StudioForm
     /** A Changes row selects its object in the open world; with no world, or no match, it opens the source asset. */
     private void SelectEditedObject(ObjectEdit edit)
     {
-        if (FindEditedSource(edit.Target) is { } source && inspectionWorld?.Find(source) is { } row)
+        object? found = edit.Kind == ObjectEditKind.AddSpawnPoint ? FindAddedSpawnPoint(edit) : FindEditedSource(edit.Target);
+        if (found is { } source && inspectionWorld?.Find(source) is { } row)
         {
             SelectWorldObject(row);
             focusWorldScene = true;
             return;
         }
         workspace.Open(edit.Target.SourceTag);
+    }
+
+    /** The marker of an added spawn point's row in the compiled bank; null without a world or a match. */
+    private SceneMarker? FindAddedSpawnPoint(ObjectEdit addition)
+    {
+        if (workspace.World is not { } world || workspace.Catalog is not { } catalog || workspace.Project is not { } project)
+            return null;
+        int offset = SpawnPointAdditions.Offset(catalog, catalog.Read(addition.Target.SourceTag), addition, project.ObjectEdits);
+        return world.Scene.Markers.FirstOrDefault(marker => marker.SourceTag == addition.Target.SourceTag
+            && marker.SourceOffset == offset);
     }
 
     /** The open world's scene object for an edit target; null without a world or a match. */

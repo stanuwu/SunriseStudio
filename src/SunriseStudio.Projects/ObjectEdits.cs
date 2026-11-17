@@ -7,9 +7,13 @@ namespace SunriseStudio.Projects;
 
 /**
  * AddInstance draws one more copy of a static row; RemoveInstance hides one; AddPlacement places a
- * static model in a map container. AddVolume and AddEntity are declared and refused.
+ * static model in a map container; AddSpawnPoint appends a copy of a spawn row to its bank.
+ * AddVolume and AddEntity are declared and refused.
  */
-public enum ObjectEditKind { PlacementTransform, TriggerBounds, AddInstance, RemoveInstance, AddPlacement, AddVolume, AddEntity }
+public enum ObjectEditKind
+{
+    PlacementTransform, TriggerBounds, AddInstance, RemoveInstance, AddPlacement, AddSpawnPoint, AddVolume, AddEntity
+}
 
 /** The typed row an object edit targets. */
 public enum ObjectEditLayout
@@ -42,7 +46,8 @@ public enum ObjectEditLayout
 
 /**
  * One edited object. Offset and Length bound its row in the installed tag.
- * Index is the array row for instances and lights; Identity is the placement identity or spawn name.
+ * Index is the array row for instances and lights, and the copy number of an added spawn point.
+ * Identity is the placement identity or spawn name.
  */
 public sealed record ObjectEditTarget(uint SourceTag, ObjectEditLayout Layout, int Offset, int Length,
     int Index, ulong Identity, string OriginalSha256)
@@ -76,6 +81,7 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
     [JsonIgnore] public string Key => Kind switch
     {
         ObjectEditKind.AddInstance or ObjectEditKind.AddPlacement => $"{Target.Key}/{Kind}/{Target.Identity:X16}",
+        ObjectEditKind.AddSpawnPoint => $"{Target.Key}/{Kind}/{Target.Index:X8}",
         ObjectEditKind.RemoveInstance => $"{Target.Key}/{Kind}",
         _ => Target.Key,
     };
@@ -85,7 +91,7 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
 
     /** An edit that adds or removes an object; it stands even with no value set. */
     [JsonIgnore] public bool Structural => Kind is ObjectEditKind.AddInstance or ObjectEditKind.RemoveInstance
-        or ObjectEditKind.AddPlacement;
+        or ObjectEditKind.AddPlacement or ObjectEditKind.AddSpawnPoint;
 
     /** Values set in the later edit win; the rest keep the earlier edit's values. */
     public static ObjectEdit Merge(ObjectEdit? earlier, ObjectEdit later)
@@ -112,6 +118,7 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
         if (Kind == ObjectEditKind.RemoveInstance) parts.Add("removed");
         if (Kind == ObjectEditKind.AddInstance) parts.Add("added copy");
         if (Kind == ObjectEditKind.AddPlacement) parts.Add($"placed {Model:X8}");
+        if (Kind == ObjectEditKind.AddSpawnPoint) parts.Add("added spawn point");
         if (Position is not null) parts.Add("position " + Join(Position));
         if (Rotation is not null) parts.Add("rotation");
         if (Scale is float scale) parts.Add("scale " + scale.ToString("0.####", CultureInfo.InvariantCulture));
@@ -152,7 +159,12 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
     /** A removal sets nothing; an addition needs its place, and an added placement its model. */
     private void ValidateStructural()
     {
-        var layout = Kind == ObjectEditKind.AddPlacement ? ObjectEditLayout.Container : ObjectEditLayout.StaticInstance;
+        var layout = Kind switch
+        {
+            ObjectEditKind.AddPlacement => ObjectEditLayout.Container,
+            ObjectEditKind.AddSpawnPoint => ObjectEditLayout.SpawnPoint,
+            _ => ObjectEditLayout.StaticInstance
+        };
         if (Target.Layout != layout) throw new InvalidDataException("Object edit kind does not match its layout.");
         if (Minimum is not null || Maximum is not null) throw new InvalidDataException("Placement edits cannot set bounds.");
         if (Kind == ObjectEditKind.RemoveInstance)
@@ -160,7 +172,13 @@ public sealed record ObjectEdit(ObjectEditKind Kind, ObjectEditTarget Target,
             if (HasValues || Model is not null) throw new InvalidDataException("A removal sets no value.");
             return;
         }
-        if (Target.Identity == 0) throw new InvalidDataException("An added object needs a nonzero identity.");
+        // A spawn row's Identity is its name, so its copy number is Index.
+        if (Kind == ObjectEditKind.AddSpawnPoint)
+        {
+            if (Target.Index < 0) throw new InvalidDataException("An added spawn point needs a copy number.");
+            if (Scale is not null) throw new InvalidDataException("A spawn point has no scale.");
+        }
+        else if (Target.Identity == 0) throw new InvalidDataException("An added object needs a nonzero identity.");
         if (Position is null) throw new InvalidDataException("An added object needs a position.");
         if ((Kind == ObjectEditKind.AddPlacement) != (Model is { } and not 0))
             throw new InvalidDataException("Only an added placement names a model, and it must name one.");

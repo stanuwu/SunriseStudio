@@ -8,26 +8,32 @@ using SunriseStudio.Tags.Views;
 
 namespace SunriseStudio.Authoring;
 
-/** Target is null when the object is read only. */
+/**
+ * Target is null when the object is read only or added by the project.
+ * Addition is the edit that adds the object, if any.
+ */
 public sealed record SceneEditInfo(bool CanTransform, bool CanScale, bool CanBounds,
     Vector3 Position, Quaternion Rotation, float Scale, Vector3 Minimum, Vector3 Maximum,
-    uint SourceTag, int SourceOffset, string CoordinateSpace, string Reason, ObjectEditTarget? Target = null);
+    uint SourceTag, int SourceOffset, string CoordinateSpace, string Reason, ObjectEditTarget? Target = null,
+    ObjectEdit? Addition = null);
 
 /** Scene edits target only rows reached through the same typed rows as the scene decoder. */
 public static class SceneEdits
 {
-    private sealed record Binding(ObjectEditTarget Target, byte[] Bytes, ObjectRow Row, string Space);
+    /** Addition is set for an added row; Target then names that row in the compiled bytes. */
+    private sealed record Binding(ObjectEditTarget Target, byte[] Bytes, ObjectRow Row, string Space, ObjectEdit? Addition = null);
 
     /**
      * Values come from the current project bytes, so they show every saved edit.
      * @param authored True for a tag the project's own content holds; it has no installed original.
+     * @param edits The project's edits; without them an added spawn point reads as read only.
      */
     public static SceneEditInfo Describe(PackageCatalog catalog, object target, WorldDocument? world = null,
-        Func<uint, bool>? authored = null)
+        Func<uint, bool>? authored = null, IReadOnlyList<ObjectEdit>? edits = null)
     {
         try
         {
-            var binding = Resolve(catalog, target, world, authored);
+            var binding = Resolve(catalog, target, world, authored, edits);
             var key = binding.Target;
             if (key.Layout == ObjectEditLayout.TriggerVolume)
             {
@@ -46,7 +52,7 @@ public static class SceneEdits
             var stored = ObjectRows.ReadTransform(key.Layout, binding.Bytes, key.Offset);
             return new(true, binding.Row.Scale, false, stored.Position, ObjectRows.Rotation(stored.Rotation),
                 binding.Row.Scale ? stored.Scale : 1, default, default,
-                key.SourceTag, key.Offset, binding.Space, "", key);
+                key.SourceTag, key.Offset, binding.Space, "", binding.Addition is null ? key : null, binding.Addition);
         }
         catch (Exception error) when (error is NotSupportedException or InvalidDataException or ArgumentException)
         {
@@ -57,12 +63,14 @@ public static class SceneEdits
     /**
      * Records only the fields that differ from the current row. A null rotation keeps the stored bytes.
      * Position and rotation use native local coordinates unless the decoder proves world coordinates.
+     * @param edits The project's edits; an added spawn point then moves by its own edit.
      * @return Null when nothing changed.
      */
     public static ObjectEdit? CreateTransformEdit(PackageCatalog catalog, object target, Vector3 position,
-        Quaternion? rotation, float scale, WorldDocument? world = null, string? name = null)
+        Quaternion? rotation, float scale, WorldDocument? world = null, string? name = null,
+        IReadOnlyList<ObjectEdit>? edits = null)
     {
-        var binding = Resolve(catalog, target, world);
+        var binding = Resolve(catalog, target, world, edits: edits);
         if (!Finite(position) || rotation is { } turn && (!float.IsFinite(turn.LengthSquared()) || turn.LengthSquared() < 0.000001f)
             || !float.IsFinite(scale) || scale == 0)
             throw new InvalidDataException("Placement needs finite values, a rotation direction and nonzero scale.");
@@ -94,7 +102,26 @@ public static class SceneEdits
             ? ObjectEditCompiler.Floats(unit) : null;
         float? scaled = binding.Row.Scale && scale != stored.Scale ? scale : null;
         if (moved is null && turned is null && scaled is null) return null;
+        if (binding.Addition is { } added)
+            return added with { Name = name ?? added.Name, Position = moved ?? added.Position, Rotation = turned ?? added.Rotation };
         return new(ObjectEditKind.PlacementTransform, binding.Target, name, moved, turned, scaled);
+    }
+
+    /**
+     * A new spawn point that copies the selected spawn row, or the source row of a selected added point.
+     * @param existing The project's edits; the copy takes the next free copy number of its source row.
+     */
+    public static ObjectEdit CreateSpawnPointEdit(PackageCatalog catalog, object target, IReadOnlyList<ObjectEdit> existing,
+        Vector3 position, Quaternion rotation, WorldDocument? world = null, string? name = null)
+    {
+        var binding = Resolve(catalog, target, world, edits: existing);
+        var source = binding.Addition?.Target ?? (binding.Target.Layout == ObjectEditLayout.SpawnPoint ? binding.Target
+            : throw new NotSupportedException("Only a spawn point can be copied as a spawn point."));
+        if (!Finite(position)) throw new InvalidDataException("A spawn point needs a finite position.");
+        int index = existing.Where(edit => edit.Kind == ObjectEditKind.AddSpawnPoint && edit.Target.Key == source.Key)
+            .Select(edit => edit.Target.Index).DefaultIfEmpty(-1).Max() + 1;
+        return new(ObjectEditKind.AddSpawnPoint, source with { Index = index }, name,
+            ObjectEditCompiler.Floats(position), ObjectEditCompiler.Floats(Quaternion.Normalize(rotation)));
     }
 
     /**
@@ -164,7 +191,7 @@ public static class SceneEdits
     }
 
     private static Binding Resolve(PackageCatalog catalog, object target, WorldDocument? world,
-        Func<uint, bool>? authored = null)
+        Func<uint, bool>? authored = null, IReadOnlyList<ObjectEdit>? edits = null)
     {
         if (target is ISceneSelectionProxy proxy) target = proxy.Key;
         if (target is string id && world?.Find(id) is { } byId) target = byId.Source;
@@ -172,6 +199,10 @@ public static class SceneEdits
         var (key, space) = Select(catalog, target, world);
         byte[] bytes = catalog.Read(key.SourceTag);
         var row = ObjectRows.Locate(catalog, key, bytes);
+        // An added spawn row has no installed original; its edit stands in for it.
+        if (key.Layout == ObjectEditLayout.SpawnPoint && edits is not null
+            && SpawnPointAdditions.At(catalog, bytes, key.SourceTag, key.Offset, edits) is { } addition)
+            return new(key, bytes, row, space, addition);
         byte[] original;
         if (authored?.Invoke(key.SourceTag) == true) original = bytes;
         else

@@ -168,6 +168,11 @@ public sealed partial class StudioForm
                     { viewport.FocusSelection(); focusWorldScene = true; }
                 }
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip($"{row.BubbleName}\n{row.AssetTag:X8}");
+                if (row.Source is SceneMarker { Layer: SceneLayer.Spawns } spawn && ImGui.BeginPopupContextItem("spawn-actions"))
+                {
+                    DrawSpawnPointActions(spawn);
+                    ImGui.EndPopup();
+                }
                 ImGui.PopID();
             }
         clipper.End(); clipper.Destroy();

@@ -14,10 +14,12 @@ public static class TransformHandles
     /**
      * The pivot is the edit position mapped through its parent; it must land on the drawn position.
      * @param reason Why the selection gets no handles; empty when it gets them.
+     * @param edits The project's edits; an added spawn point gets handles only with them.
      */
-    public static TransformHandleFrame? Read(PackageCatalog catalog, object target, WorldDocument? world, out string reason)
+    public static TransformHandleFrame? Read(PackageCatalog catalog, object target, WorldDocument? world, out string reason,
+        IReadOnlyList<ObjectEdit>? edits = null)
     {
-        var info = SceneEdits.Describe(catalog, target, world);
+        var info = SceneEdits.Describe(catalog, target, world, edits: edits);
         if (!info.CanTransform)
         {
             reason = info.Reason.Length > 0 ? info.Reason : "This selection has no editable transform.";
@@ -49,10 +51,11 @@ public static class TransformHandles
      * Maps a world change about a pivot into the row's own parent space.
      * Size follows only a uniform scale on a row that stores one; else only the position moves.
      * @param pivot World point to turn and scale about; the frame's own pivot for one object.
+     * @param edits The project's edits; an added spawn point then moves by its own edit.
      * @return Null when nothing changed.
      */
     public static ObjectEdit? CreateEdit(PackageCatalog catalog, object target, TransformHandleFrame frame, Vector3 pivot,
-        TransformChange change, WorldDocument? world, string? name)
+        TransformChange change, WorldDocument? world, string? name, IReadOnlyList<ObjectEdit>? edits = null)
     {
         if (!Matrix4x4.Invert(frame.Parent, out var inverse)) throw new InvalidDataException("The edit space has no inverse.");
         var moved = change.Apply(frame.Pivot, pivot);
@@ -60,7 +63,7 @@ public static class TransformHandles
         var position = moved == frame.Pivot ? frame.Info.Position : Vector3.Transform(moved, inverse);
         Quaternion? rotation = change.Turn == Quaternion.Identity ? null : Turned(frame, change.Turn, inverse);
         float scale = frame.Info.CanScale && change.UniformScale ? frame.Info.Scale * change.Scale.X : frame.Info.Scale;
-        return SceneEdits.CreateTransformEdit(catalog, target, position, rotation, scale, world, name);
+        return SceneEdits.CreateTransformEdit(catalog, target, position, rotation, scale, world, name, edits);
     }
 
     /** The row's local rotation after a world turn; the parent must not shear it. */

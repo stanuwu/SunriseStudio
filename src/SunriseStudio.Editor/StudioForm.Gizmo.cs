@@ -40,7 +40,8 @@ public sealed partial class StudioForm
             gizmoCollision = view.Collision;
             gizmoFrame = null; groupFrame = null;
             if (group is not null) groupFrame = ReadGroupFrame(catalog, group, out gizmoReason);
-            else gizmoFrame = TransformHandles.Read(catalog, selectedObject, inspectionWorld, out gizmoReason);
+            else gizmoFrame = TransformHandles.Read(catalog, selectedObject, inspectionWorld, out gizmoReason,
+                workspace.Project?.ObjectEdits);
         }
         // A group member without a scale field still moves, so only one object is refused here.
         string reason = !workspace.CanEdit ? "Create a project to edit"
@@ -61,7 +62,8 @@ public sealed partial class StudioForm
             || !ReferenceEquals(gizmoTarget, target)) return;
         var world = inspectionWorld;
         string? name = objectInspection?.Object.Name;
+        var edits = workspace.Project?.ObjectEdits;
         workspace.Run(() => workspace.ApplyObjectEdit(
-            TransformHandles.CreateEdit(catalog, target, frame, frame.Pivot, change, world, name)));
+            TransformHandles.CreateEdit(catalog, target, frame, frame.Pivot, change, world, name, edits)));
     }
 }
