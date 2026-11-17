@@ -329,6 +329,8 @@ public sealed partial class StudioForm
         CreationMenuItem("Director entry", CreationTypes.Director, () => StartCreation(CreationTypes.Director));
         CreationMenuItem("Door from model", CreationTypes.Door, () => StartCreation(CreationTypes.Door));
         ImGui.Separator();
+        var activity = CreationTypes.For(CreationTypes.ActivityKey, CreationMode.New);
+        CreationMenuItem("Register activity", activity, () => StartCreation(activity));
         foreach (var type in CreationTypes.Blocked) CreationMenuItem(type.Name, type, () => { });
         ImGui.EndPopup();
     }

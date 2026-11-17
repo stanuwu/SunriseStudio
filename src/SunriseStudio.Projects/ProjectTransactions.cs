@@ -97,10 +97,13 @@ public sealed partial class StudioProject
             assets[index] = next.Asset; writes.Add(next.Asset.Path, next.Stored); obsolete.Add(current.Path);
         }
         var objects = objectStates is null ? ObjectEdits : MergeObjectStates(objectStates);
+        var activities = edits.AddedActivities ?? AddedActivities;
+        ValidateActivities(activities, assets);
         RequireConfigBindingEdits(edits, states, catalog);
         RequireObjectEditsCompile(objects, edits.Assets, catalog, restoring: objectStates is not null, assets.ToArray());
         PublishTransaction(baseline with { Changes = changes.Values.OrderBy(value => value.TagHash).ToArray(),
-            AddedAssets = assets.ToArray(), ObjectEdits = objectStates is null ? baseline.ObjectEdits : objects },
+            AddedAssets = assets.ToArray(), ObjectEdits = objectStates is null ? baseline.ObjectEdits : objects,
+            AddedActivities = activities.Count == 0 ? null : Array.AsReadOnly(activities.ToArray()) },
             writes, obsolete);
         return created.AsReadOnly();
     }

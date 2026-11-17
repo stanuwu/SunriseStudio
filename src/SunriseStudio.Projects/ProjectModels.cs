@@ -23,26 +23,49 @@ public sealed record ProjectAssetAddition(string Name, byte[] Data,
     NativeAssetMetadata? Native = null, uint? BaseTagHash = null);
 
 public sealed record ProjectAssetEdits(IReadOnlyDictionary<uint, byte[]> Assets,
-    IReadOnlyDictionary<string, byte[]>? AddedAssets = null);
+    IReadOnlyDictionary<string, byte[]>? AddedAssets = null)
+{
+    /** Null keeps registrations; a list replaces them in the same transaction as their assets. */
+    public IReadOnlyList<AddedActivity>? AddedActivities { get; init; }
+}
 
 /** Undo holds reconstructed data in memory; derived assets still save only base-relative deltas. */
 public sealed record AddedAssetSnapshot(AddedProjectAsset Asset, byte[] Data);
 
 /**
  * Mod stays null and unwritten until set, so older Studio builds still open the file. Versions:
- * object edits 2, wide hashes 3, config bindings 4, names 5, groups 6, group collision parts 7.
+ * object edits 2, wide hashes 3, config bindings 4, names 5, groups 6, group collision parts 7,
+ * named features 8: Features lists each ProjectFeatures name the manifest holds.
  */
 public sealed record ProjectManifest(int Version, string Name,
     IReadOnlyList<ProjectAssetChange> Changes, IReadOnlyList<AddedProjectAsset> AddedAssets,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ModMetadata? Mod = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<ObjectEdit>? ObjectEdits = null)
 {
+    /** Version 8 feature names in ordinal order; null below version 8. */
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Features { get; init; }
+    /** True when the manifest names the version 8 feature. */
+    public bool HasFeature(string name) => Features?.Contains(name, StringComparer.Ordinal) == true;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ProjectConfigBinding>? ConfigBindings { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ProjectObjectName>? ObjectNames { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ProjectObjectGroup>? ObjectGroups { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<AddedActivity>? AddedActivities { get; init; }
+}
+
+/**
+ * Version 8 names each feature a manifest holds instead of taking a number per feature, so features merge in any
+ * order. A build refuses a manifest naming a feature it does not know, because saving would drop its data.
+ */
+public static class ProjectFeatures
+{
+    public const string AddedActivities = "added-activities";
+    /** Every feature this build reads and writes. */
+    public static IReadOnlyList<string> Known { get; } = [AddedActivities];
 }
 
 /**
